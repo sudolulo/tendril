@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bootable USB installer.** New `scripts/build-installer.sh` turns the bootc host image into a
+  USB-flashable installer ISO (or a raw disk image) via `bootc-image-builder` — the easy "flash a
+  stick and go" install path. Documented in `docs/INSTALL.md`.
 - **Automated Windows media fetch.** New `scripts/fetch-windows-media.sh` grabs both ISOs a Windows
   station needs: the virtio-win driver ISO, and a genuine Windows 11 ISO assembled from Microsoft's
   Windows Update CDN via UUP dump (the consumer download page is anti-bot gated; this is the

@@ -1,0 +1,5 @@
+# Pinned Rust toolchain — reproducible builds. Bump via Renovate PRs only.
+[toolchain]
+channel = "1.84.0"
+components = ["rustfmt", "clippy"]
+profile = "default"

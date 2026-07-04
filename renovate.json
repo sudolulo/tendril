@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "rangeStrategy": "pin",
+  "lockFileMaintenance": { "enabled": true },
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "packageRules": [
+    {
+      "description": "Group all Cargo crate updates into one PR",
+      "matchManagers": ["cargo"],
+      "groupName": "cargo dependencies"
+    },
+    {
+      "description": "Never auto-merge; every bump goes through review + CI",
+      "matchUpdateTypes": ["major", "minor", "patch", "digest", "pin"],
+      "automerge": false
+    },
+    {
+      "description": "Keep the Fedora bootc base pinned by digest",
+      "matchPackageNames": ["quay.io/fedora/fedora-bootc"],
+      "pinDigests": true
+    }
+  ]
+}

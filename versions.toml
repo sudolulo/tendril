@@ -1,0 +1,25 @@
+# versions.toml — single source of truth for Tendril's pinned versions.
+#
+# Everything that affects a reproducible host image is pinned here and bumped ONLY via Renovate PRs
+# (see renovate.json) or a deliberate manual PR. Do not edit casually. Rationale: docs/VERSIONING.md.
+
+[toolchain]
+rust = "1.84.0"
+
+[host]
+# Pin the Fedora bootc base by digest before the first tagged release for full reproducibility.
+fedora_bootc_base = "quay.io/fedora/fedora-bootc:42"
+# fedora_bootc_digest = "sha256:__PIN_BEFORE_RELEASE__"
+
+[hypervisor]
+# These come from the pinned Fedora base image; recorded here for visibility once the image is built.
+# libvirt = ""
+# qemu    = ""
+# ovmf    = ""
+# swtpm   = ""
+
+[drivers]
+# Pinned per image-variant. Fill in as driver-layer variants are built (Phase 1+).
+# nvidia       = ""
+# nvidia_vgpu  = ""
+# amdgpu       = ""

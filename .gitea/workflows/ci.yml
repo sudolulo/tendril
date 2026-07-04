@@ -1,0 +1,49 @@
+name: ci
+
+# Runs on PRs into main and on pushes to main.
+# NOTE: requires a registered Gitea Actions runner. Until one exists these checks queue but do not
+# run — so branch protection does NOT require them yet (flip on once a runner is registered; see
+# scripts/setup-branch-protection.sh, ENABLE_STATUS_CHECK).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Rust workspace
+        id: detect
+        run: |
+          if [ -f Cargo.toml ]; then echo "rust=true" >> "$GITHUB_OUTPUT"; else echo "rust=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Install toolchain (pinned)
+        if: steps.detect.outputs.rust == 'true'
+        run: |
+          rustup show || true
+          rustup component add rustfmt clippy
+
+      - name: Format
+        if: steps.detect.outputs.rust == 'true'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: steps.detect.outputs.rust == 'true'
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        if: steps.detect.outputs.rust == 'true'
+        run: cargo build --all-targets --locked
+
+      - name: Test
+        if: steps.detect.outputs.rust == 'true'
+        run: cargo test --all --locked
+
+      - name: Repo hygiene (always)
+        run: |
+          test -f README.md && test -f NOTICE && test -f versions.toml
+          echo "ok"

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-04
+
 ### Changed
 - Development workflow now uses a long-lived `dev` integration branch (the repo default); `main` is
   release-only. Feature branches merge into `dev`; releases are PRs from `dev` into `main`, tagged on
@@ -38,5 +40,6 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.1.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.2.0...HEAD
+[0.2.0]: https://git.onetick.ninja/flan/tendril/compare/v0.1.0...v0.2.0
 [0.1.0]: https://git.onetick.ninja/flan/tendril/src/tag/v0.1.0

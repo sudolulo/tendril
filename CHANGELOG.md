@@ -24,8 +24,7 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
   - `tendril-orchestrator` — controller/agent `Role`, the `StationSpec` model, and the `tendrild`
     binary.
 - **Pinned Rust toolchain** (1.84.0) via `rust-toolchain.toml`; committed `Cargo.lock`.
-- **Development workflow** (`CONTRIBUTING.md`): trunk-based branching, Conventional Commits, and no
-  AI attribution in commit messages.
+- **Development workflow** (`CONTRIBUTING.md`): trunk-based branching and Conventional Commits.
 - **Version pinning policy** (`docs/VERSIONING.md`) with a central pin manifest (`versions.toml`).
 - **Renovate** configuration for dependency pin bumps via PRs.
 - **CI** via Gitea Actions (`fmt`, `clippy -D warnings`, `build`, `test`).

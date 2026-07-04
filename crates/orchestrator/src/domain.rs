@@ -50,6 +50,8 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("  <features>\n");
     xml.push_str("    <acpi/>\n");
     xml.push_str("    <apic/>\n");
+    // Secure Boot requires SMM; libvirt can't match a secure-boot firmware without it.
+    xml.push_str("    <smm state='on'/>\n");
     if s.native_hardware {
         xml.push_str("    <kvm>\n      <hidden state='on'/>\n    </kvm>\n");
         xml.push_str(
@@ -140,6 +142,7 @@ mod tests {
         assert!(xml.contains("<name>s1</name>"));
         assert!(xml.contains("<memory unit='MiB'>16384</memory>"));
         assert!(xml.contains("secure-boot"));
+        assert!(xml.contains("<smm state='on'/>")); // required for Secure Boot
         assert!(xml.contains("<tpm"));
         assert!(xml.contains("offset='localtime'")); // Windows
         assert!(xml.contains("bus='0x83' slot='0x00' function='0x0'"));

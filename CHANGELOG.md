@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **VM lifecycle.** New `orchestrator::lifecycle::Libvirt` drives station VMs through `virsh`
+  (`define`/`start`/`shutdown`/`destroy`/`undefine`/`state`). New `tendril-vm` binary renders a
+  station's domain and, with `--define`, registers it with libvirt (validated, not started).
+
+### Fixed
+- Domain XML now emits `<smm state='on'/>`, which libvirt requires to match a Secure Boot firmware —
+  without it, `virsh define` fails with "Unable to find 'efi' firmware". Verified against libvirt.
+
 ## [0.4.0] - 2026-07-04
 
 First installable milestone: a bootc host image plus the full host-side pipeline

@@ -84,6 +84,22 @@ CI runs the same checks; running them locally saves a round-trip.
   change between minor versions; roadmap phases (see [docs/PLAN.md](docs/PLAN.md)) map roughly to
   minor milestones.
 
+## Changelog & versioning
+
+Every change updates [CHANGELOG.md](CHANGELOG.md), which follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Add a bullet under `## [Unreleased]` in the
+right category (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`).
+
+**Big changes cut a new version.** When a change is significant, roll `[Unreleased]` into a new
+`## [X.Y.Z] - YYYY-MM-DD` section, bump `version` in the workspace `Cargo.toml`, and tag `vX.Y.Z`
+(see *Releases* above). What counts as "big":
+
+- a new crate, provisioning strategy, or output backend;
+- a roadmap-phase milestone (see [docs/PLAN.md](docs/PLAN.md));
+- any user-facing behavior, on-disk layout, or config-schema change.
+
+Small fixes and chores just accumulate under `[Unreleased]` until the next version is cut.
+
 ## Version pinning
 
 Reproducible images demand pinned inputs. The rules and the pin manifest (`versions.toml`) are

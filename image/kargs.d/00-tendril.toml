@@ -1,0 +1,10 @@
+# Kernel arguments applied by bootc for the Tendril host.
+# Enable the IOMMU on both vendors (the irrelevant one is ignored) and use passthrough mode so
+# devices are only translated when actually assigned. `rd.driver.pre=vfio-pci` loads vfio-pci early
+# in the initramfs so it can claim assigned GPUs before their native driver does.
+kargs = [
+    "intel_iommu=on",
+    "amd_iommu=on",
+    "iommu=pt",
+    "rd.driver.pre=vfio-pci",
+]

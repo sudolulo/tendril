@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-04
+
+First installable milestone: a bootc host image plus the full host-side pipeline
+(detect → plan → apply) and libvirt domain templating.
+
+### Added
+- **Provisioning apply.** New `apply` module renders a `ProvisioningPlan` into ordered sysfs actions
+  (unbind → `driver_override` → probe) that bind a GPU's IOMMU group to `vfio-pci`, with `DryRun` and
+  `Execute` modes. New `tendril-apply` binary is dry-run by default (shows the exact writes and each
+  device's current driver) and only mutates the host with `--execute`.
+- **Bootc host image.** `image/Containerfile` builds a Fedora bootc host with the passthrough
+  virtualization stack (`libvirt`, `qemu-kvm`, OVMF, `swtpm`), IOMMU kernel args + early `vfio-pci`,
+  the VFIO modules, and the `tendril-*` binaries baked in — the first step toward an installable OS.
+- **Install & roadmap docs.** `docs/INSTALL.md` (build the image + deploy with `bootc`) and an
+  expanded `README.md` with a roadmap table and what-it's-for overview.
+- **VM domain templating.** New `orchestrator::domain` renders a `StationSpec` into libvirt domain
+  XML — OVMF Secure Boot + emulated TPM (Windows 11), `host-passthrough` CPU, virtio disk/net, and
+  `<hostdev>` entries for the GPU's whole IOMMU group, plus the opt-in native-hardware fingerprint
+  overlay. New `tendril-domain` binary renders a domain for a detected passthrough GPU.
+
+### Changed
+- Versioning now batches to user-meaningful milestones (first installable image, roadmap phases,
+  `1.0.0` = production) instead of cutting a release per feature; changes accumulate under
+  `[Unreleased]` between milestones.
+
 ## [0.3.0] - 2026-07-04
 
 ### Added
@@ -52,7 +77,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...HEAD
+[0.4.0]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.onetick.ninja/flan/tendril/compare/v0.2.0...v0.3.0
 [0.2.0]: https://git.onetick.ninja/flan/tendril/compare/v0.1.0...v0.2.0
 [0.1.0]: https://git.onetick.ninja/flan/tendril/src/tag/v0.1.0

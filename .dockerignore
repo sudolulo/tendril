@@ -1,0 +1,5 @@
+.git
+/target
+**/*.qcow2
+**/*.img
+**/*.iso

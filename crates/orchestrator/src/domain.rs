@@ -1,0 +1,175 @@
+//! Render a [`StationSpec`] into a libvirt domain XML.
+//!
+//! Base domain plus composable overlays: GPU passthrough (the station's whole IOMMU group), OVMF
+//! Secure Boot + an emulated TPM (both required by Windows 11), and the opt-in "native-hardware"
+//! fingerprint reducer. CPU pinning and hugepages are TODO.
+
+use std::fmt::Write as _;
+
+use crate::station::{GuestOs, StationSpec};
+
+/// A station's VM resources, paired with its [`StationSpec`], ready to render.
+#[derive(Debug, Clone)]
+pub struct DomainSpec<'a> {
+    pub station: &'a StationSpec,
+    /// Number of vCPUs.
+    pub vcpus: u32,
+    /// Guest memory in MiB.
+    pub memory_mib: u64,
+    /// Path to the VM's disk image (qcow2).
+    pub disk_path: String,
+    /// PCI addresses to pass through — the GPU's whole IOMMU group.
+    pub passthrough_addresses: Vec<String>,
+}
+
+/// Render `spec` into a libvirt domain XML document.
+pub fn render(spec: &DomainSpec) -> String {
+    let s = spec.station;
+    // Windows expects the RTC in local time; Linux/SteamOS expects UTC.
+    let clock = match s.guest {
+        GuestOs::Windows => "localtime",
+        GuestOs::SteamOs => "utc",
+    };
+
+    let mut xml = String::new();
+    let _ = writeln!(xml, "<domain type='kvm'>");
+    let _ = writeln!(xml, "  <name>{}</name>", s.name);
+    let _ = writeln!(xml, "  <memory unit='MiB'>{}</memory>", spec.memory_mib);
+    let _ = writeln!(xml, "  <vcpu>{}</vcpu>", spec.vcpus);
+
+    // Firmware: OVMF with Secure Boot (Windows 11 requires it).
+    xml.push_str("  <os firmware='efi'>\n");
+    xml.push_str("    <type arch='x86_64' machine='q35'>hvm</type>\n");
+    xml.push_str("    <firmware>\n");
+    xml.push_str("      <feature enabled='yes' name='secure-boot'/>\n");
+    xml.push_str("    </firmware>\n");
+    xml.push_str("    <boot dev='hd'/>\n");
+    xml.push_str("  </os>\n");
+
+    // Features (+ native-hardware fingerprint reduction).
+    xml.push_str("  <features>\n");
+    xml.push_str("    <acpi/>\n");
+    xml.push_str("    <apic/>\n");
+    if s.native_hardware {
+        xml.push_str("    <kvm>\n      <hidden state='on'/>\n    </kvm>\n");
+        xml.push_str(
+            "    <hyperv>\n      <vendor_id state='on' value='0123456789ab'/>\n    </hyperv>\n",
+        );
+    }
+    xml.push_str("  </features>\n");
+
+    // CPU: host-passthrough for gaming; hide the hypervisor flag under native-hardware.
+    if s.native_hardware {
+        xml.push_str("  <cpu mode='host-passthrough' check='none' migratable='off'>\n");
+        xml.push_str("    <feature policy='disable' name='hypervisor'/>\n");
+        xml.push_str("  </cpu>\n");
+    } else {
+        xml.push_str("  <cpu mode='host-passthrough' check='none' migratable='off'/>\n");
+    }
+
+    let _ = writeln!(xml, "  <clock offset='{clock}'/>");
+
+    xml.push_str("  <devices>\n");
+    // Boot disk.
+    xml.push_str("    <disk type='file' device='disk'>\n");
+    xml.push_str("      <driver name='qemu' type='qcow2'/>\n");
+    let _ = writeln!(xml, "      <source file='{}'/>", spec.disk_path);
+    xml.push_str("      <target dev='vda' bus='virtio'/>\n");
+    xml.push_str("    </disk>\n");
+    // Network.
+    xml.push_str("    <interface type='network'>\n");
+    xml.push_str("      <source network='default'/>\n");
+    xml.push_str("      <model type='virtio'/>\n");
+    xml.push_str("    </interface>\n");
+    // TPM 2.0 (Windows 11).
+    xml.push_str("    <tpm model='tpm-crb'>\n");
+    xml.push_str("      <backend type='emulator' version='2.0'/>\n");
+    xml.push_str("    </tpm>\n");
+    // A console for setup, before the passed-through GPU drives the real monitor.
+    xml.push_str("    <graphics type='vnc' port='-1'/>\n");
+    xml.push_str("    <video>\n      <model type='virtio'/>\n    </video>\n");
+    // GPU passthrough: the whole IOMMU group as one unit.
+    for addr in &spec.passthrough_addresses {
+        if let Some(src) = pci_address_xml(addr) {
+            xml.push_str("    <hostdev mode='subsystem' type='pci' managed='yes'>\n");
+            let _ = writeln!(xml, "      <source>\n        {src}\n      </source>");
+            xml.push_str("    </hostdev>\n");
+        }
+    }
+    xml.push_str("  </devices>\n");
+    xml.push_str("</domain>\n");
+    xml
+}
+
+/// Convert a PCI address like `0000:83:00.0` into a libvirt `<address .../>` element.
+fn pci_address_xml(address: &str) -> Option<String> {
+    let (bdf, function) = address.rsplit_once('.')?;
+    let [domain, bus, slot] = bdf.split(':').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    Some(format!(
+        "<address domain='0x{domain}' bus='0x{bus}' slot='0x{slot}' function='0x{function}'/>"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::station::{GuestOs, StationSpec};
+
+    fn station(native_hardware: bool, guest: GuestOs) -> StationSpec {
+        StationSpec {
+            name: "s1".to_string(),
+            guest,
+            gpu_address: "0000:83:00.0".to_string(),
+            native_hardware,
+        }
+    }
+
+    #[test]
+    fn renders_core_domain_with_passthrough_group() {
+        let st = station(false, GuestOs::Windows);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 8,
+            memory_mib: 16384,
+            disk_path: "/var/lib/tendril/s1.qcow2".to_string(),
+            passthrough_addresses: vec!["0000:83:00.0".to_string(), "0000:83:00.1".to_string()],
+        };
+        let xml = render(&spec);
+        assert!(xml.contains("<name>s1</name>"));
+        assert!(xml.contains("<memory unit='MiB'>16384</memory>"));
+        assert!(xml.contains("secure-boot"));
+        assert!(xml.contains("<tpm"));
+        assert!(xml.contains("offset='localtime'")); // Windows
+        assert!(xml.contains("bus='0x83' slot='0x00' function='0x0'"));
+        assert!(xml.contains("function='0x1'"));
+        assert_eq!(xml.matches("<hostdev").count(), 2);
+        assert!(!xml.contains("<hidden state='on'")); // native-hardware off
+    }
+
+    #[test]
+    fn native_hardware_overlay_hides_the_hypervisor() {
+        let st = station(true, GuestOs::SteamOs);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+        };
+        let xml = render(&spec);
+        assert!(xml.contains("<hidden state='on'/>"));
+        assert!(xml.contains("policy='disable' name='hypervisor'"));
+        assert!(xml.contains("offset='utc'")); // SteamOS
+    }
+
+    #[test]
+    fn parses_pci_address() {
+        assert_eq!(
+            pci_address_xml("0000:83:00.0").unwrap(),
+            "<address domain='0x0000' bus='0x83' slot='0x00' function='0x0'/>"
+        );
+        assert!(pci_address_xml("nonsense").is_none());
+    }
+}

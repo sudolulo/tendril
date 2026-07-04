@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **VM lifecycle.** New `orchestrator::lifecycle::Libvirt` drives station VMs through `virsh`
   (`define`/`start`/`shutdown`/`destroy`/`undefine`/`state`). New `tendril-vm` binary renders a
   station's domain and, with `--define`, registers it with libvirt (validated, not started).
+- **Guest disks & install media.** New `orchestrator::guest` creates a station's qcow2 disk via
+  `qemu-img` and models `InstallMedia` (OS ISO + virtio-win). The domain renderer attaches install
+  ISOs as cdroms with the right boot order, and the new `tendril-guest` binary creates the disk and
+  renders the OS-install domain (`--steamos` for SteamOS, `--iso`/`--virtio-iso` for media).
 
 ### Fixed
 - Domain XML now emits `<smm state='on'/>`, which libvirt requires to match a Secure Boot firmware —

@@ -9,8 +9,6 @@ This is the **literal development workflow**. Follow it for every change.
 2. **Feature work happens on a branch and lands via a Pull Request** into `dev` that passes CI (and
    review, once the project has more than one maintainer).
 3. **Pinned versions change only through a PR** (usually a Renovate PR). See [docs/VERSIONING.md](docs/VERSIONING.md).
-4. **No AI attribution in commit messages.** AI assistance is disclosed once, in the repo
-   (`README.md` + `NOTICE`) — not in git history.
 
 ## Branching model
 

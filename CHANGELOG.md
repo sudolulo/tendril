@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Provisioning plan (passthrough).** `PassthroughStrategy::plan` consumes a GPU's IOMMU group and
+  emits the full set of PCI addresses to bind to `vfio-pci` — the GPU plus its audio/USB companion
+  functions, since the IOMMU group is the smallest passable unit — with a caveat when no group is
+  present. New `tendril-plan` binary prints the plan for each passthrough-capable GPU.
+
 ### Changed
 - CI now runs on PRs into (and pushes to) `dev` as well as `main`, and installs the pinned Rust
   toolchain per run so it works on a sandboxed (Docker-mode) Gitea Actions runner.

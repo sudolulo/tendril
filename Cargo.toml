@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/capability-engine",
+    "crates/provisioning",
+    "crates/orchestrator",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+repository = "https://git.onetick.ninja/flan/tendril"
+authors = ["Tendril contributors"]
+
+[workspace.dependencies]
+tendril-capability-engine = { path = "crates/capability-engine" }
+tendril-provisioning = { path = "crates/provisioning" }

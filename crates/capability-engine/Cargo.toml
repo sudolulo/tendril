@@ -1,0 +1,9 @@
+[package]
+name = "tendril-capability-engine"
+description = "Enumerates GPUs and IOMMU groups; produces the host capability matrix."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

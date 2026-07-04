@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Provisioning apply.** New `apply` module renders a `ProvisioningPlan` into ordered sysfs actions
+  (unbind → `driver_override` → probe) that bind a GPU's IOMMU group to `vfio-pci`, with `DryRun` and
+  `Execute` modes. New `tendril-apply` binary is dry-run by default (shows the exact writes and each
+  device's current driver) and only mutates the host with `--execute`.
+
 ### Changed
 - Versioning now batches to user-meaningful milestones (first installable image, roadmap phases,
   `1.0.0` = production) instead of cutting a release per feature; changes accumulate under

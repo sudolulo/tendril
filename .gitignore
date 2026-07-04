@@ -1,0 +1,16 @@
+# Build artifacts
+/target/
+/build/
+*.qcow2
+*.img
+*.iso
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local secrets / env
+.env
+*.local

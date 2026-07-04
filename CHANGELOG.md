@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Automated Windows media fetch.** New `scripts/fetch-windows-media.sh` grabs both ISOs a Windows
+  station needs: the virtio-win driver ISO, and a genuine Windows 11 ISO assembled from Microsoft's
+  Windows Update CDN via UUP dump (the consumer download page is anti-bot gated; this is the
+  automatable path).
 - **USB detection & passthrough (multi-seat).** New `capability-engine::usb` enumerates USB host
   controllers (with IOMMU group + passthrough viability, for assigning a whole controller to a seat)
   and connected USB devices; the `tendril-usb` binary lists both. Domains can now pass through

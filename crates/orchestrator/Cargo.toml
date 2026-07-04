@@ -1,0 +1,19 @@
+[package]
+name = "tendril-orchestrator"
+description = "Controller/agent that manages gaming-station VMs via libvirt."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "tendril_orchestrator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tendrild"
+path = "src/main.rs"
+
+[dependencies]
+tendril-capability-engine = { workspace = true }
+tendril-provisioning = { workspace = true }

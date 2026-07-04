@@ -1,0 +1,10 @@
+[package]
+name = "tendril-provisioning"
+description = "Host provisioning strategies (VFIO passthrough now; vGPU later)."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tendril-capability-engine = { workspace = true }

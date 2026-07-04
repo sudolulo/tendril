@@ -96,15 +96,19 @@ Every change updates [CHANGELOG.md](CHANGELOG.md), which follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Add a bullet under `## [Unreleased]` in the
 right category (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`).
 
-**Big changes cut a new version.** When a change is significant, roll `[Unreleased]` into a new
-`## [X.Y.Z] - YYYY-MM-DD` section, bump `version` in the workspace `Cargo.toml`, and tag `vX.Y.Z`
-(see *Releases* above). What counts as "big":
+**Cut a version only at user-meaningful milestones — not per feature.** Features accumulate on `dev`
+under `## [Unreleased]`; the changelog and git history track granular progress. A tagged release is
+reserved for something a user can actually get value from:
 
-- a new crate, provisioning strategy, or output backend;
-- a roadmap-phase milestone (see [docs/PLAN.md](docs/PLAN.md));
-- any user-facing behavior, on-disk layout, or config-schema change.
+- the **first installable** milestone — a bootc image that boots and detects hardware; this is the
+  next version we cut;
+- subsequent roadmap-phase milestones (multi-seat, vGPU, clustering — see [docs/PLAN.md](docs/PLAN.md));
+- **`1.0.0`** = production / stable.
 
-Small fixes and chores just accumulate under `[Unreleased]` until the next version is cut.
+Everything below the next milestone just accumulates under `[Unreleased]`. Pre-1.0 tags are
+development previews; nothing is installable until the first-installable milestone. To cut a release:
+roll `[Unreleased]` into a new `## [X.Y.Z] - YYYY-MM-DD` section, bump `version` in the workspace
+`Cargo.toml`, and tag (see *Releases* above).
 
 ## Version pinning
 

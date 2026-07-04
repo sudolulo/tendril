@@ -15,8 +15,10 @@ Tendril releases follow [Semantic Versioning](https://semver.org): `MAJOR.MINOR.
 Pre-1.0, minor releases may break; roadmap phases in [PLAN.md](PLAN.md) map to minor milestones.
 
 Releases are annotated, signed git tags: `vMAJOR.MINOR.PATCH`. Every release corresponds to a section
-in [CHANGELOG.md](../CHANGELOG.md) ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format);
-**big changes always cut a new version** (see the changelog rules in
+in [CHANGELOG.md](../CHANGELOG.md) ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format).
+**Versions are cut only at user-meaningful milestones** — the first installable image, subsequent
+roadmap-phase milestones, and `1.0.0` for production — **not per feature**. Between milestones,
+changes accumulate under `[Unreleased]` (see the changelog rules in
 [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 ## What is pinned, and where

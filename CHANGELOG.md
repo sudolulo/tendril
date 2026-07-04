@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Versioning now batches to user-meaningful milestones (first installable image, roadmap phases,
+  `1.0.0` = production) instead of cutting a release per feature; changes accumulate under
+  `[Unreleased]` between milestones.
+
 ## [0.3.0] - 2026-07-04
 
 ### Added

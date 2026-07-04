@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Development workflow now uses a long-lived `dev` integration branch (the repo default); `main` is
+  release-only. Feature branches merge into `dev`; releases are PRs from `dev` into `main`, tagged on
+  `main`. `scripts/setup-branch-protection.sh` now configures both branches.
+
 ## [0.1.0] - 2026-07-04
 
 Inaugural release: project foundation, development workflow, and the Rust workspace scaffold.

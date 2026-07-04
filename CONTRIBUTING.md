@@ -4,22 +4,29 @@ This is the **literal development workflow**. Follow it for every change.
 
 ## Golden rules
 
-1. **`main` is always releasable and protected.** Never push to it directly — it rejects direct pushes.
-2. **All work happens on a branch and lands via a Pull Request** that passes CI (and review, once the
-   project has more than one maintainer).
+1. **Work targets `dev`; releases target `main`.** `dev` is the default integration branch; `main`
+   is release-only and rejects direct pushes.
+2. **Feature work happens on a branch and lands via a Pull Request** into `dev` that passes CI (and
+   review, once the project has more than one maintainer).
 3. **Pinned versions change only through a PR** (usually a Renovate PR). See [docs/VERSIONING.md](docs/VERSIONING.md).
 4. **No AI attribution in commit messages.** AI assistance is disclosed once, in the repo
    (`README.md` + `NOTICE`) — not in git history.
 
-## Branching model — trunk-based
+## Branching model
 
-- `main` — protected trunk, always in a releasable state.
-- Short-lived working branches off `main`, named by type:
+Two long-lived branches:
+
+- **`dev`** — the default integration branch; day-to-day work lands here. Protected (no force-push,
+  no deletion); direct pushes are allowed for small changes, but feature work should still go through
+  a PR.
+- **`main`** — release/stable. Strictly protected: no direct pushes; changes arrive only via PR from
+  `dev`. Every merge to `main` is a release and gets a `vX.Y.Z` tag.
+
+Short-lived working branches off `dev`, named by type, deleted after merge:
   - `feat/<slug>` — a new feature
   - `fix/<slug>` — a bug fix
   - `chore/<slug>` — tooling, deps, docs, CI
   - `spike/<slug>` — throwaway experiment (e.g. `spike/single-gpu-passthrough`)
-- Delete the branch after merge. Keep branches small and short-lived.
 
 ## Commit messages — Conventional Commits
 
@@ -43,8 +50,8 @@ chore(deps): pin cargo dependencies (renovate)
 ## The step-by-step loop
 
 ```bash
-# 1. Start from an up-to-date main
-git checkout main && git pull
+# 1. Start from an up-to-date dev
+git checkout dev && git pull
 
 # 2. Branch
 git checkout -b feat/gpu-capability-matrix
@@ -56,15 +63,15 @@ git commit -m "feat(capability-engine): emit per-GPU capability matrix"
 # 4. Push the branch
 git push -u origin feat/gpu-capability-matrix
 
-# 5. Open a PR against main (Gitea web UI or `tea pr create`).
+# 5. Open a PR against dev (Gitea web UI or `tea pr create`).
 #    CI runs automatically. Address review comments with follow-up commits.
 
 # 6. Merge when green (+ approved): SQUASH merge, then delete the branch.
 ```
 
-Rebase your branch on `main` (don't merge `main` into it) to keep history linear:
+Rebase your branch on `dev` (don't merge `dev` into it) to keep history linear:
 ```bash
-git fetch origin && git rebase origin/main
+git fetch origin && git rebase origin/dev
 ```
 
 ## Local checks before you push
@@ -79,7 +86,8 @@ CI runs the same checks; running them locally saves a round-trip.
 ## Releases — SemVer
 
 - Versions follow [SemVer](https://semver.org): `MAJOR.MINOR.PATCH`.
-- Release = an annotated, signed tag on `main`: `git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
+- **Cutting a release:** open a PR from `dev` into `main`, merge it, then tag the merge on `main`:
+  `git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
 - Tagging triggers the release pipeline (build + publish the bootc image). Pre-1.0 the API/layout may
   change between minor versions; roadmap phases (see [docs/PLAN.md](docs/PLAN.md)) map roughly to
   minor milestones.

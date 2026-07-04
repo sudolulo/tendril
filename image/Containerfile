@@ -1,0 +1,45 @@
+# Tendril host image — a Fedora bootc OS with the GPU-passthrough virtualization stack and the
+# tendril host binaries baked in. Build from the repo root:
+#
+#   podman build -f image/Containerfile -t tendril:dev .
+#
+# Then it can be deployed with `bootc` (bootc install / bootc switch). Base pinned in versions.toml.
+
+# ---- build stage: compile the tendril binaries with the pinned toolchain ----
+FROM docker.io/library/rust:1.84.0 AS build
+WORKDIR /src
+COPY . .
+# Release binaries, locked to Cargo.lock. Built on Debian glibc (older) so they run on Fedora (newer).
+RUN cargo build --release --locked
+
+# ---- host image: Fedora bootc + virtualization stack ----
+FROM quay.io/fedora/fedora-bootc:42
+
+# Virtualization + passthrough userspace. VFIO itself is in the kernel; OVMF + swtpm cover the
+# Secure Boot + TPM that Windows 11 guests require.
+RUN dnf -y install \
+        libvirt \
+        libvirt-daemon-driver-qemu \
+        qemu-kvm \
+        edk2-ovmf \
+        swtpm swtpm-tools \
+        virt-install \
+    && dnf clean all \
+    && systemctl enable libvirtd.service
+
+# IOMMU on + reserve vfio-pci early, via a bootc kernel-argument drop-in.
+COPY image/kargs.d/00-tendril.toml /usr/lib/bootc/kargs.d/00-tendril.toml
+
+# Load the VFIO modules at boot.
+COPY image/vfio.conf /etc/modules-load.d/tendril-vfio.conf
+
+# Tendril host binaries: detect -> plan -> apply.
+COPY --from=build /src/target/release/tendril-detect /usr/bin/tendril-detect
+COPY --from=build /src/target/release/tendril-plan   /usr/bin/tendril-plan
+COPY --from=build /src/target/release/tendril-apply  /usr/bin/tendril-apply
+
+LABEL org.opencontainers.image.source="https://git.onetick.ninja/flan/tendril"
+LABEL org.opencontainers.image.description="Tendril — Fedora bootc host for GPU-passthrough gaming VMs"
+
+# Sanity-check the bootc image at build time.
+RUN bootc container lint

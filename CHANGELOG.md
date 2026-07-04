@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (unbind → `driver_override` → probe) that bind a GPU's IOMMU group to `vfio-pci`, with `DryRun` and
   `Execute` modes. New `tendril-apply` binary is dry-run by default (shows the exact writes and each
   device's current driver) and only mutates the host with `--execute`.
+- **Bootc host image.** `image/Containerfile` builds a Fedora bootc host with the passthrough
+  virtualization stack (`libvirt`, `qemu-kvm`, OVMF, `swtpm`), IOMMU kernel args + early `vfio-pci`,
+  the VFIO modules, and the `tendril-*` binaries baked in — the first step toward an installable OS.
+- **Install & roadmap docs.** `docs/INSTALL.md` (build the image + deploy with `bootc`) and an
+  expanded `README.md` with a roadmap table and what-it's-for overview.
 
 ### Changed
 - Versioning now batches to user-meaningful milestones (first installable image, roadmap phases,

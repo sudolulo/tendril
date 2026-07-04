@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-04
+
+First installable milestone: a bootc host image plus the full host-side pipeline
+(detect → plan → apply) and libvirt domain templating.
+
 ### Added
 - **Provisioning apply.** New `apply` module renders a `ProvisioningPlan` into ordered sysfs actions
   (unbind → `driver_override` → probe) that bind a GPU's IOMMU group to `vfio-pci`, with `DryRun` and
@@ -72,7 +77,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...HEAD
+[0.4.0]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.onetick.ninja/flan/tendril/compare/v0.2.0...v0.3.0
 [0.2.0]: https://git.onetick.ninja/flan/tendril/compare/v0.1.0...v0.2.0
 [0.1.0]: https://git.onetick.ninja/flan/tendril/src/tag/v0.1.0

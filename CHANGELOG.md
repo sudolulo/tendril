@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the VFIO modules, and the `tendril-*` binaries baked in — the first step toward an installable OS.
 - **Install & roadmap docs.** `docs/INSTALL.md` (build the image + deploy with `bootc`) and an
   expanded `README.md` with a roadmap table and what-it's-for overview.
+- **VM domain templating.** New `orchestrator::domain` renders a `StationSpec` into libvirt domain
+  XML — OVMF Secure Boot + emulated TPM (Windows 11), `host-passthrough` CPU, virtio disk/net, and
+  `<hostdev>` entries for the GPU's whole IOMMU group, plus the opt-in native-hardware fingerprint
+  overlay. New `tendril-domain` binary renders a domain for a detected passthrough GPU.
 
 ### Changed
 - Versioning now batches to user-meaningful milestones (first installable image, roadmap phases,

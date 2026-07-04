@@ -1,14 +1,13 @@
 name: ci
 
-# Runs on PRs into main and on pushes to main.
-# NOTE: requires a registered Gitea Actions runner. Until one exists these checks queue but do not
-# run — so branch protection does NOT require them yet (flip on once a runner is registered; see
-# scripts/setup-branch-protection.sh, ENABLE_STATUS_CHECK).
+# Runs on PRs into (and pushes to) dev and main, on a Docker-mode Gitea Actions runner.
+# The runner maps `ubuntu-latest` to a container image; Rust is installed per-run and pinned by
+# rust-toolchain.toml (1.84.0), so runs are reproducible regardless of the base image.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   ci:
@@ -21,10 +20,14 @@ jobs:
         run: |
           if [ -f Cargo.toml ]; then echo "rust=true" >> "$GITHUB_OUTPUT"; else echo "rust=false" >> "$GITHUB_OUTPUT"; fi
 
-      - name: Install toolchain (pinned)
+      - name: Install Rust (pinned via rust-toolchain.toml)
         if: steps.detect.outputs.rust == 'true'
         run: |
-          rustup show || true
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
           rustup component add rustfmt clippy
 
       - name: Format

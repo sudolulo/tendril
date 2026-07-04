@@ -4,11 +4,11 @@ version = 4
 
 [[package]]
 name = "tendril-capability-engine"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "tendril-orchestrator"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tendril-capability-engine",
  "tendril-provisioning",
@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "tendril-provisioning"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tendril-capability-engine",
 ]

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Apply Tendril's branch-protection ruleset to `main` on Gitea via the API.
+# Apply Tendril's branch-protection rulesets via the Gitea API.
+#
+# Two long-lived branches (see CONTRIBUTING.md):
+#   main — release/stable. No direct pushes; changes only via PR from dev. Strict.
+#   dev  — default integration branch. Direct pushes allowed; force-push and deletion blocked.
 #
 # Branch protection can't be set over SSH — it needs an API token. Create one in Gitea:
 #   User Settings -> Applications -> Generate New Token  (scope: repository read+write)
@@ -8,8 +12,8 @@
 #   GITEA_TOKEN=xxxxx ./scripts/setup-branch-protection.sh
 #
 # Optional env overrides:
-#   GITEA_HOST (default git.onetick.ninja)  OWNER (flan)  REPO (tendril)  BRANCH (main)
-#   REQUIRED_APPROVALS (default 1 — set 0 for a solo maintainer who can't approve their own PRs)
+#   GITEA_HOST (default git.onetick.ninja)  OWNER (flan)  REPO (tendril)
+#   MAIN_REQUIRED_APPROVALS (default 0 — set 1 once there's more than one maintainer)
 #   ENABLE_STATUS_CHECK (default false — set true once a Gitea Actions runner is registered)
 set -euo pipefail
 
@@ -17,18 +21,35 @@ set -euo pipefail
 HOST="${GITEA_HOST:-git.onetick.ninja}"
 OWNER="${OWNER:-flan}"
 REPO="${REPO:-tendril}"
-BRANCH="${BRANCH:-main}"
-REQUIRED_APPROVALS="${REQUIRED_APPROVALS:-1}"
+MAIN_REQUIRED_APPROVALS="${MAIN_REQUIRED_APPROVALS:-0}"
 ENABLE_STATUS_CHECK="${ENABLE_STATUS_CHECK:-false}"
 
 API="https://${HOST}/api/v1/repos/${OWNER}/${REPO}/branch_protections"
 
-read -r -d '' BODY <<JSON || true
+# apply_rule <branch> <json-body>: POST, and PATCH if the rule already exists.
+apply_rule() {
+  local branch="$1" body="$2"
+  echo "Applying protection to ${OWNER}/${REPO}@${branch}"
+  local code
+  code=$(curl -s -o /tmp/bp.out -w '%{http_code}' -X POST "${API}" \
+    -H "Authorization: token ${GITEA_TOKEN}" \
+    -H "Content-Type: application/json" -d "${body}")
+  if [ "${code}" = "409" ] || [ "${code}" = "422" ]; then
+    echo "  rule exists — updating (PATCH)"
+    curl -s -o /tmp/bp.out -w '  PATCH %{http_code}\n' -X PATCH "${API}/${branch}" \
+      -H "Authorization: token ${GITEA_TOKEN}" \
+      -H "Content-Type: application/json" -d "${body}"
+  else
+    echo "  POST ${code}"
+  fi
+}
+
+# main — strict: no direct push, PR-only, up-to-date required.
+apply_rule main "$(cat <<JSON
 {
-  "rule_name": "${BRANCH}",
+  "rule_name": "main",
   "enable_push": false,
-  "enable_push_whitelist": false,
-  "required_approvals": ${REQUIRED_APPROVALS},
+  "required_approvals": ${MAIN_REQUIRED_APPROVALS},
   "dismiss_stale_approvals": true,
   "block_on_rejected_reviews": true,
   "block_on_official_review_requests": true,
@@ -38,21 +59,21 @@ read -r -d '' BODY <<JSON || true
   "status_check_contexts": ["ci"]
 }
 JSON
+)"
 
-echo "Applying protection to ${OWNER}/${REPO}@${BRANCH} (approvals=${REQUIRED_APPROVALS}, status_check=${ENABLE_STATUS_CHECK})"
+# dev — integration: direct pushes allowed, force-push and deletion blocked.
+apply_rule dev "$(cat <<JSON
+{
+  "rule_name": "dev",
+  "enable_push": true,
+  "required_approvals": 0,
+  "dismiss_stale_approvals": true,
+  "block_on_rejected_reviews": true,
+  "block_on_outdated_branch": false,
+  "enable_status_check": ${ENABLE_STATUS_CHECK},
+  "status_check_contexts": ["ci"]
+}
+JSON
+)"
 
-# Try to create; if a rule already exists, patch it.
-code=$(curl -s -o /tmp/bp.out -w '%{http_code}' -X POST "${API}" \
-  -H "Authorization: token ${GITEA_TOKEN}" \
-  -H "Content-Type: application/json" -d "${BODY}")
-
-if [ "${code}" = "409" ] || [ "${code}" = "422" ]; then
-  echo "Rule exists — updating."
-  curl -s -o /tmp/bp.out -w 'PATCH %{http_code}\n' -X PATCH "${API}/${BRANCH}" \
-    -H "Authorization: token ${GITEA_TOKEN}" \
-    -H "Content-Type: application/json" -d "${BODY}"
-else
-  echo "POST ${code}"
-fi
-
-echo "--- response ---"; cat /tmp/bp.out; echo
+echo "Done. Default branch should be 'dev' (set via: PATCH /repos/${OWNER}/${REPO} {\"default_branch\":\"dev\"})."

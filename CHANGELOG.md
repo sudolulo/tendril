@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- CI now runs on PRs into (and pushes to) `dev` as well as `main`, and installs the pinned Rust
+  toolchain per run so it works on a sandboxed (Docker-mode) Gitea Actions runner.
+
 ## [0.2.0] - 2026-07-04
 
 ### Changed

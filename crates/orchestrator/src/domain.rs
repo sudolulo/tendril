@@ -9,6 +9,13 @@ use std::fmt::Write as _;
 use crate::guest::InstallMedia;
 use crate::station::{GuestOs, StationSpec};
 
+/// A USB device to pass through by vendor/product id (a seat's keyboard/mouse).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsbPassthrough {
+    pub vendor_id: u16,
+    pub product_id: u16,
+}
+
 /// A station's VM resources, paired with its [`StationSpec`], ready to render.
 #[derive(Debug, Clone)]
 pub struct DomainSpec<'a> {
@@ -23,6 +30,8 @@ pub struct DomainSpec<'a> {
     pub passthrough_addresses: Vec<String>,
     /// Install media (OS ISO, plus virtio-win for Windows); empty once the disk is installed.
     pub media: InstallMedia,
+    /// USB devices to pass through by id (per-seat keyboard/mouse); may be empty.
+    pub usb_devices: Vec<UsbPassthrough>,
 }
 
 /// Render `spec` into a libvirt domain XML document.
@@ -125,6 +134,16 @@ pub fn render(spec: &DomainSpec) -> String {
             xml.push_str("    </hostdev>\n");
         }
     }
+    // Per-device USB passthrough (a seat's keyboard/mouse), by vendor/product id.
+    for usb in &spec.usb_devices {
+        xml.push_str("    <hostdev mode='subsystem' type='usb' managed='yes'>\n");
+        let _ = writeln!(
+            xml,
+            "      <source>\n        <vendor id='0x{:04x}'/>\n        <product id='0x{:04x}'/>\n      </source>",
+            usb.vendor_id, usb.product_id
+        );
+        xml.push_str("    </hostdev>\n");
+    }
     xml.push_str("  </devices>\n");
     xml.push_str("</domain>\n");
     xml
@@ -165,6 +184,7 @@ mod tests {
             disk_path: "/var/lib/tendril/s1.qcow2".to_string(),
             passthrough_addresses: vec!["0000:83:00.0".to_string(), "0000:83:00.1".to_string()],
             media: InstallMedia::none(),
+            usb_devices: vec![],
         };
         let xml = render(&spec);
         assert!(xml.contains("<name>s1</name>"));
@@ -190,6 +210,7 @@ mod tests {
             disk_path: "/d.qcow2".to_string(),
             passthrough_addresses: vec![],
             media: InstallMedia::none(),
+            usb_devices: vec![],
         };
         let xml = render(&spec);
         assert!(xml.contains("<hidden state='on'/>"));
@@ -210,6 +231,7 @@ mod tests {
                 install_iso: Some("/isos/win11.iso".to_string()),
                 virtio_iso: Some("/isos/virtio-win.iso".to_string()),
             },
+            usb_devices: vec![],
         };
         let xml = render(&spec);
         assert_eq!(xml.matches("device='cdrom'").count(), 2);
@@ -217,6 +239,27 @@ mod tests {
         assert!(xml.contains("/isos/virtio-win.iso"));
         assert!(xml.contains("<boot order='1'/>")); // cdrom first
         assert!(xml.contains("<boot order='2'/>")); // disk second
+    }
+
+    #[test]
+    fn usb_devices_render_as_usb_hostdevs() {
+        let st = station(false, GuestOs::Windows);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+            media: InstallMedia::none(),
+            usb_devices: vec![UsbPassthrough {
+                vendor_id: 0x046d,
+                product_id: 0xc52b,
+            }],
+        };
+        let xml = render(&spec);
+        assert!(xml.contains("type='usb'"));
+        assert!(xml.contains("<vendor id='0x046d'/>"));
+        assert!(xml.contains("<product id='0xc52b'/>"));
     }
 
     #[test]

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **USB detection & passthrough (multi-seat).** New `capability-engine::usb` enumerates USB host
+  controllers (with IOMMU group + passthrough viability, for assigning a whole controller to a seat)
+  and connected USB devices; the `tendril-usb` binary lists both. Domains can now pass through
+  individual USB devices by id (`<hostdev type='usb'>`) for a seat's keyboard/mouse.
 - **VM lifecycle.** New `orchestrator::lifecycle::Libvirt` drives station VMs through `virsh`
   (`define`/`start`/`shutdown`/`destroy`/`undefine`/`state`). New `tendril-vm` binary renders a
   station's domain and, with `--define`, registers it with libvirt (validated, not started).

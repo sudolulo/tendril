@@ -82,8 +82,9 @@ pub fn enumerate_from(devices_dir: &Path) -> Vec<GpuDevice> {
     gpus
 }
 
-/// Read a sysfs file containing a `0x`-prefixed hex value (e.g. `class`, `vendor`, `device`).
-fn read_hex(path: &Path) -> Option<u32> {
+/// Read a sysfs file containing a hex value, with or without a `0x` prefix
+/// (e.g. PCI `class`/`vendor`, or USB `idVendor`).
+pub(crate) fn read_hex(path: &Path) -> Option<u32> {
     let raw = fs::read_to_string(path).ok()?;
     let trimmed = raw.trim();
     let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);

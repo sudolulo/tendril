@@ -72,6 +72,7 @@ fn main() {
             install_iso: arg_value("--iso"),
             virtio_iso: arg_value("--virtio-iso"),
         },
+        usb_devices: Vec::new(),
     };
     print!("{}", render(&spec));
 }

@@ -20,10 +20,9 @@
 use std::path::{Path, PathBuf};
 
 use tendril_capability_engine::{iommu, matrix, pci};
-use tendril_orchestrator::domain::{render, DomainSpec};
-use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso, create_disk};
+use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso};
 use tendril_orchestrator::{
-    GuestOs, InstallMedia, KickstartSpec, Libvirt, StationSpec, UnattendSpec,
+    provision, GuestOs, InstallMedia, KickstartSpec, Libvirt, StationRequest, UnattendSpec,
 };
 use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
@@ -64,15 +63,7 @@ fn main() {
     let define = has_flag("--define") || has_flag("--start");
     let start = has_flag("--start");
 
-    // 1. Disk.
-    if has_flag("--create-disk") {
-        match create_disk(Path::new(&disk), size_gib) {
-            Ok(()) => eprintln!("created {size_gib} GiB disk at {disk}"),
-            Err(e) => die(format!("create disk failed: {e}")),
-        }
-    }
-
-    // 2. Install media. Skipped entirely when finalizing (post-install boot from disk).
+    // Install media. Skipped entirely when finalizing (post-install boot from disk).
     let media = if finalize {
         InstallMedia::none()
     } else {
@@ -91,72 +82,61 @@ fn main() {
         }
     };
 
-    let installing = !finalize && media.install_iso.is_some();
-    // Only the Windows ISO shows the firmware "press any key to boot from CD" prompt that skips the
-    // CD on timeout; the Bazzite installer's boot menu auto-selects, so leave it alone.
-    let clear_prompt = installing && matches!(guest, GuestOs::Windows);
-
-    // 3. GPU passthrough group (unless installing headless via VNC first).
+    // GPU passthrough group (unless installing headless via VNC first).
     let passthrough_addresses = if has_flag("--no-gpu") {
         Vec::new()
     } else {
         resolve_passthrough_group()
     };
-    let gpu_address = passthrough_addresses
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "0000:00:00.0".to_string());
 
-    // 4. Render.
-    let station = StationSpec {
+    // Hand the resolved request to the shared provisioning service.
+    let req = StationRequest {
         name: name.clone(),
         guest,
-        gpu_address,
-        native_hardware: has_flag("--native-hardware"),
-    };
-    let spec = DomainSpec {
-        station: &station,
+        disk_path: disk.clone(),
+        size_gib,
+        create_disk: has_flag("--create-disk"),
         vcpus,
         memory_mib,
-        disk_path: disk.clone(),
+        native_hardware: has_flag("--native-hardware"),
         passthrough_addresses,
         media,
-        usb_devices: Vec::new(),
+        define,
+        start,
     };
-    let xml = render(&spec);
+    let lv = Libvirt::system();
+    let report = match provision(&req, &lv) {
+        Ok(r) => r,
+        Err(e) => die(format!("provision failed: {e}")),
+    };
+    if report.disk_created {
+        eprintln!("created {size_gib} GiB disk at {disk}");
+    }
 
-    // 5. Define / start, or just print.
     if !define {
-        print!("{xml}");
+        print!("{}", report.xml);
         eprintln!("(dry-run — pass --define to register, or --start to install/boot it)");
         return;
     }
-    let lv = Libvirt::system();
-    match lv.define(&name, &xml) {
-        Ok(()) => eprintln!(
-            "defined domain '{name}'{}",
-            if finalize {
-                " (finalized: boots from disk, no install media)"
+    eprintln!(
+        "defined domain '{name}'{}",
+        if finalize {
+            " (finalized: boots from disk, no install media)"
+        } else {
+            ""
+        }
+    );
+    if report.started {
+        eprintln!(
+            "started '{name}' — connect a viewer to the VNC console to watch{}",
+            if req.is_installing() {
+                "; the OS will install itself unattended"
             } else {
                 ""
             }
-        ),
-        Err(e) => die(format!("define failed: {e}")),
-    }
-    if start {
-        match lv.start(&name) {
-            Ok(()) => eprintln!(
-                "started '{name}' — connect a viewer to the VNC console to watch{}",
-                if installing {
-                    "; the OS will install itself unattended"
-                } else {
-                    ""
-                }
-            ),
-            Err(e) => die(format!("start failed: {e}")),
-        }
-        if clear_prompt {
-            eprintln!("clearing the boot-from-CD prompt (~{}s)...", 18);
+        );
+        if req.needs_boot_prompt_clear() {
+            eprintln!("clearing the boot-from-CD prompt (~18s)...");
             lv.clear_boot_prompt(&name);
         }
     }

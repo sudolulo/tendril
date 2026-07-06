@@ -94,7 +94,10 @@ automatically (greenboot).
 
 ## 4. Verify
 
-After reboot:
+After reboot, the primary display auto-logs in and drops you into the **`tendril` console** — a menu
+covering hardware, GPU binding, station creation/management, media, networking, and power. (Other
+VTs and SSH give a normal shell; run `tendril` there to open the menu manually.) Its "Hardware &
+capabilities" entry is the same as:
 
 ```bash
 tendril-detect

@@ -22,14 +22,17 @@ driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get 
 
 ## What works today
 
-**v0.6.0 — hands-off guest install.** There's a flashable installer ISO (built from the bootc
-image), the full host-side provisioning pipeline, libvirt orchestration, and a station that installs
-its guest OS **unattended** — Windows 11 (past the virtio "no drives" and Microsoft-account walls) or
-a SteamOS-style Bazzite image (Anaconda kickstart, boots to Steam gaming mode) — then boots from
-disk. No graphical VM wizard yet; you create stations with the CLIs:
+**v0.7.0 — interactive console.** Boot the Tendril OS to a monitor and you land in the **`tendril`
+console** — a TrueNAS-style menu that fronts every function (hardware, GPU binding, create/manage
+stations, media, network, shell, power). Under it: a flashable installer ISO, the full host-side
+provisioning pipeline, libvirt orchestration, and a station that installs its guest OS **unattended**
+— Windows 11 (past the virtio "no drives" and Microsoft-account walls) or a SteamOS-style Bazzite
+image (Anaconda kickstart, boots to Steam gaming mode) — then boots from disk. No web UI yet; drive
+it from the console or the CLIs:
 
 | Tool | What it does |
 |---|---|
+| `tendril` | Interactive console — a menu over every function below (the OS launches it on the primary display) |
 | `tendril-detect` | Enumerates GPUs + IOMMU groups, classifies each as passthrough / host-only |
 | `tendril-plan` | Computes the exact `vfio-pci` bind set for a GPU (its whole IOMMU group) |
 | `tendril-apply` | Binds a GPU to `vfio-pci` — **dry-run by default**, `--execute` to enact |
@@ -93,7 +96,8 @@ cargo run --bin tendril-detect
 | Guest disks & media | qcow2 disks, install ISOs, Win11 + virtio fetch | ✅ Done |
 | Multi-seat USB | USB controller + per-device passthrough | ✅ Done |
 | Guest OS install | Unattended Windows (virtio + no-OOBE) **and** SteamOS/Bazzite (kickstart), boot from disk | ✅ Done |
-| Control plane | Web UI + "create gaming station" wizard | 🔨 Next |
+| Console menu | Interactive `tendril` console over every function (OS boots into it) | ✅ Done |
+| Control plane | Web UI + "create gaming station" wizard (console is the stepping stone) | 🔨 Next |
 | vGPU | >1 VM per GPU (official + `vgpu_unlock`) | 🔭 Future |
 | Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |
 | Streaming | Sunshine/Moonlight for headless / remote play | 🔭 Future |

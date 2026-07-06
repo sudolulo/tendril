@@ -32,6 +32,8 @@ RUN dnf -y install \
         edk2-ovmf \
         swtpm swtpm-tools \
         virt-install \
+        genisoimage \
+        NetworkManager-tui \
     && dnf clean all \
     && systemctl enable libvirtd.service
 
@@ -41,8 +43,10 @@ COPY image/kargs.d/00-tendril.toml /usr/lib/bootc/kargs.d/00-tendril.toml
 # Load the VFIO modules at boot.
 COPY image/vfio.conf /etc/modules-load.d/tendril-vfio.conf
 
-# Tendril host binaries: detect -> plan -> apply, plus the station tooling (domain/vm/guest/usb).
+# Tendril host binaries: the `tendril` console, detect -> plan -> apply, and the station tooling
+# (domain/vm/guest/usb).
 COPY --from=build \
+     /src/target/release/tendril \
      /src/target/release/tendril-detect \
      /src/target/release/tendril-plan \
      /src/target/release/tendril-apply \
@@ -51,6 +55,14 @@ COPY --from=build \
      /src/target/release/tendril-guest \
      /src/target/release/tendril-usb \
      /usr/bin/
+
+# Helper scripts the console can invoke (media fetch, installer build).
+COPY scripts/ /usr/libexec/tendril/
+RUN chmod +x /usr/libexec/tendril/*.sh
+
+# Land in the Tendril console on the primary VT (appliance UX); other VTs / SSH get a normal shell.
+COPY image/console/getty-autologin.conf /usr/lib/systemd/system/getty@tty1.service.d/autologin.conf
+COPY image/console/tendril-console.sh /etc/profile.d/tendril-console.sh
 
 LABEL org.opencontainers.image.source="https://git.onetick.ninja/flan/tendril"
 LABEL org.opencontainers.image.description="Tendril — Fedora bootc host for GPU-passthrough gaming VMs"

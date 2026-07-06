@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-06
+
+An interactive console for the whole host — the stepping stone to the web UI. Boot the Tendril OS to
+a monitor and you land in a menu that fronts every function.
+
+### Added
+- **`tendril` console.** A dependency-free, TrueNAS-style numbered menu covering everything: inspect
+  hardware & capabilities, bind a GPU to `vfio-pci`, create a gaming station (guided: OS, GPU, disk,
+  unattended account), manage stations (start/stop/force-off/delete), fetch install media, list USB
+  devices, configure networking (`nmtui` + routes/DNS), open a shell, and reboot/shut down. The
+  header shows the host name/address and where the web UI will live.
+- **The OS boots into it.** The image auto-logs in the primary console (`tty1`) and launches the
+  menu (appliance UX); other VTs and SSH still get a normal shell. Ships `NetworkManager-tui`,
+  `genisoimage`, and the media-fetch scripts (`/usr/libexec/tendril`).
+- **`orchestrator::provision` service layer.** A single `provision(StationRequest)` entry point that
+  turns a resolved request into a running/defined station. `tendril-guest` (CLI), the console menu,
+  and a future web UI all call it, so a station is created identically everywhere. Adds
+  `Libvirt::list` for station enumeration.
+
+### Changed
+- `tendril-guest` now delegates to `orchestrator::provision` (no behavioural change; one code path).
+- `InstallMedia.unattend_iso` was renamed to `seed_iso` in 0.6.0's API.
+
 ## [0.6.0] - 2026-07-06
 
 Hands-off guest install for both station types: a station boots a stock Windows 11 ISO (or a

@@ -130,6 +130,19 @@ impl Libvirt {
         Self::ok(self.run(&["undefine", name, "--nvram"])?).map(|_| ())
     }
 
+    /// Names of all defined domains (running or not); empty if virsh is unreachable.
+    pub fn list(&self) -> Vec<String> {
+        match self.run(&["list", "--all", "--name"]) {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Current state of a domain (`Absent` if it doesn't exist or virsh is unreachable).
     pub fn state(&self, name: &str) -> DomainState {
         match self.run(&["domstate", name]) {

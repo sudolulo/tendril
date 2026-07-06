@@ -6,10 +6,18 @@
 # Then it can be deployed with `bootc` (bootc install / bootc switch). Base pinned in versions.toml.
 
 # ---- build stage: compile the tendril binaries with the pinned toolchain ----
-FROM docker.io/library/rust:1.84.0 AS build
+# Build on the same Fedora base as the runtime (matching glibc) and off Docker Hub (which rate-limits
+# anonymous pulls). rust-toolchain.toml pins the version, so rustup installs exactly 1.84.0.
+FROM quay.io/fedora/fedora-bootc:42 AS build
+# In bootc images /root is a symlink to /var/roothome, which trips rustup's home-dir setup — install
+# the toolchain under /usr/local instead (same layout the official rust image uses).
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:${PATH}
+RUN dnf install -y --setopt=install_weak_deps=False gcc curl \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+       | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
 WORKDIR /src
 COPY . .
-# Release binaries, locked to Cargo.lock. Built on Debian glibc (older) so they run on Fedora (newer).
+# Release binaries, locked to Cargo.lock.
 RUN cargo build --release --locked
 
 # ---- host image: Fedora bootc + virtualization stack ----
@@ -33,10 +41,16 @@ COPY image/kargs.d/00-tendril.toml /usr/lib/bootc/kargs.d/00-tendril.toml
 # Load the VFIO modules at boot.
 COPY image/vfio.conf /etc/modules-load.d/tendril-vfio.conf
 
-# Tendril host binaries: detect -> plan -> apply.
-COPY --from=build /src/target/release/tendril-detect /usr/bin/tendril-detect
-COPY --from=build /src/target/release/tendril-plan   /usr/bin/tendril-plan
-COPY --from=build /src/target/release/tendril-apply  /usr/bin/tendril-apply
+# Tendril host binaries: detect -> plan -> apply, plus the station tooling (domain/vm/guest/usb).
+COPY --from=build \
+     /src/target/release/tendril-detect \
+     /src/target/release/tendril-plan \
+     /src/target/release/tendril-apply \
+     /src/target/release/tendril-domain \
+     /src/target/release/tendril-vm \
+     /src/target/release/tendril-guest \
+     /src/target/release/tendril-usb \
+     /usr/bin/
 
 LABEL org.opencontainers.image.source="https://git.onetick.ninja/flan/tendril"
 LABEL org.opencontainers.image.description="Tendril — Fedora bootc host for GPU-passthrough gaming VMs"

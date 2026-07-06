@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders the OS-install domain (`--steamos` for SteamOS, `--iso`/`--virtio-iso` for media).
 
 ### Fixed
+- **Image build.** The host `Containerfile` now compiles the Rust binaries on the Fedora base (off
+  Docker Hub, which rate-limits anonymous pulls) with the toolchain under `/usr/local` (bootc's
+  `/root`→`/var/roothome` symlink tripped rustup's home/rc setup), and copies all seven `tendril-*`
+  binaries into the image. `build-installer.sh` sets `--rootfs xfs` (bootc-image-builder needs it).
 - Domain XML now emits `<smm state='on'/>`, which libvirt requires to match a Secure Boot firmware —
   without it, `virsh define` fails with "Unable to find 'efi' firmware". Verified against libvirt.
 

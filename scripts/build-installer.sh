@@ -41,7 +41,7 @@ sudo podman run --rm --privileged \
   --security-opt label=type:unconfined_t \
   -v "$(realpath "$OUTPUT")":/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
-  "$BIB" --type "$TYPE" --local "$IMAGE"
+  "$BIB" --type "$TYPE" --rootfs xfs "$IMAGE"
 
 echo "==> Done. Artifacts:"
 find "$OUTPUT" -type f \( -iname '*.iso' -o -iname '*.raw' \) -print

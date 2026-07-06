@@ -59,7 +59,9 @@ print(retail[0]['uuid'])
 ")
 echo "    build: $uuid"
 
-work="$(mktemp -d)"
+# Stage on the destination disk, not the default $TMPDIR — /tmp is often tmpfs (RAM-backed) and far
+# too small for the multi-GB UUP download.
+work="$(mktemp -d "${DEST%/}/uup-work.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 echo "==> Fetching the download+convert package"

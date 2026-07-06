@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Automated release pipeline.** New `.gitea/workflows/release.yml` — on every push to `main` (image,
+  crate, or installer-script change) the self-hosted runner builds the bootc image, pushes it to the
+  Gitea registry (`:<version>` and `:latest`), builds the installer ISO, and publishes it to
+  dl.onetick.ninja (with `tendril-latest-installer-x86_64.iso` always pointing at the newest). No
+  stored credentials — checkout and registry login use the built-in Actions token.
+
 ## [0.8.0] - 2026-07-06
 
 The web control plane — a full browser UI for the host, shipped in the image and served on `:80`.

@@ -1,0 +1,73 @@
+name: release
+
+# Automatically build and publish a Tendril release whenever the image, code, or installer script
+# changes on `main`:
+#   1. build the bootc host image
+#   2. push it to the Gitea container registry (git.onetick.ninja/flan/tendril:<version> and :latest)
+#   3. build the installer ISO with bootc-image-builder
+#   4. publish the ISO to dl.onetick.ninja (/srv/tendril-dl + SHA256SUMS)
+#
+# Runs on the self-hosted `host` runner (root) — image builds and bootc-image-builder need podman and
+# loopback devices, which the Docker-mode runner can't provide. No JS actions (the host has no node)
+# and no stored credentials: the checkout and the registry login both use the built-in Actions token.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'image/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/build-installer.sh'
+  workflow_dispatch: {}
+
+jobs:
+  release:
+    runs-on: host
+    steps:
+      - name: Build image + ISO and publish
+        env:
+          REG: git.onetick.ninja
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          DL_DIR: /srv/tendril-dl
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+
+          # Checkout (private repo → clone with the built-in token; masked in logs).
+          git clone "https://oauth2:${TOKEN}@${REG}/${REPO}.git" "$work/repo"
+          cd "$work/repo"
+          git checkout "$SHA"
+
+          V="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "Releasing Tendril $V"
+
+          # 1. Build the bootc host image.
+          podman build -f image/Containerfile -t localhost/tendril:dev .
+
+          # 2. Push to the Gitea container registry.
+          echo "$TOKEN" | podman login "$REG" -u "$OWNER" --password-stdin
+          podman tag localhost/tendril:dev "$REG/$OWNER/tendril:$V"
+          podman tag localhost/tendril:dev "$REG/$OWNER/tendril:latest"
+          podman push "$REG/$OWNER/tendril:$V"
+          podman push "$REG/$OWNER/tendril:latest"
+
+          # 3. Build the installer ISO.
+          rm -rf out
+          bash scripts/build-installer.sh --type iso --output ./out
+          iso="$(find ./out -iname '*.iso' | head -1)"
+          [ -n "$iso" ] || { echo "no ISO produced" >&2; exit 1; }
+
+          # 4. Publish it to dl.onetick.ninja (served by nginx from /srv/tendril-dl).
+          name="tendril-$V-installer-x86_64.iso"
+          install -d "$DL_DIR"
+          cp -f "$iso" "$DL_DIR/$name"
+          ( cd "$DL_DIR" && sha256sum "$name" > SHA256SUMS )
+          ln -sfn "$name" "$DL_DIR/tendril-latest-installer-x86_64.iso"
+          chcon -R -t httpd_sys_content_t "$DL_DIR" 2>/dev/null || true
+
+          echo "Published $name → https://dl.onetick.ninja/$name"

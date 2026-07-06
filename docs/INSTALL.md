@@ -5,19 +5,18 @@
 
 ## 0. Install from the release ISO (easiest)
 
-Download the single-file installer, verify it, and flash it:
+Download the single-file installer, verify it, and flash it. `tendril-latest-installer-x86_64.iso`
+always points at the newest release (CI rebuilds and republishes it on every push to `main`):
 
 ```bash
-curl -LO https://dl.onetick.ninja/tendril-0.5.0-installer-x86_64.iso
+curl -LO https://dl.onetick.ninja/tendril-latest-installer-x86_64.iso
 curl -LO https://dl.onetick.ninja/SHA256SUMS
 sha256sum -c SHA256SUMS
-sudo dd if=tendril-0.5.0-installer-x86_64.iso of=/dev/sdX bs=4M status=progress
+sudo dd if=tendril-latest-installer-x86_64.iso of=/dev/sdX bs=4M status=progress
 ```
 
-The download supports resume (`curl -C -`), so a dropped connection isn't fatal. The ISO is also
-mirrored in the [Gitea release](https://git.onetick.ninja/flan/tendril/releases), split into `.part`
-files to fit the 2 GiB asset cap — reassemble with `cat tendril-*-installer-x86_64.iso.part* >
-tendril-installer.iso` if you use that copy instead.
+The download supports resume (`curl -C -`), so a dropped connection isn't fatal. A specific version is
+also available as `tendril-<version>-installer-x86_64.iso` (e.g. `tendril-0.8.0-...`).
 
 Boot the target from the USB stick, follow the installer, then jump to **step 4 (Verify)**. Prefer
 to build it yourself? Continue below.

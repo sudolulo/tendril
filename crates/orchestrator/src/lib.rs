@@ -5,9 +5,13 @@
 //! roles in one process; cluster mode elects one controller.
 
 pub mod domain;
+pub mod guest;
+pub mod lifecycle;
 pub mod role;
 pub mod station;
 
 pub use domain::DomainSpec;
+pub use guest::InstallMedia;
+pub use lifecycle::{DomainState, Libvirt};
 pub use role::Role;
 pub use station::{GuestOs, StationSpec};

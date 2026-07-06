@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-05
+
+First bootable release: a flashable installer ISO built from the bootc host image, plus VM lifecycle,
+guest disks/install-media, USB multi-seat, and automated Windows-media fetching.
+
+### Added
+- **Bootable USB installer.** New `scripts/build-installer.sh` turns the bootc host image into a
+  USB-flashable installer ISO (or a raw disk image) via `bootc-image-builder` — the easy "flash a
+  stick and go" install path. Documented in `docs/INSTALL.md`.
+- **Automated Windows media fetch.** New `scripts/fetch-windows-media.sh` grabs both ISOs a Windows
+  station needs: the virtio-win driver ISO, and a genuine Windows 11 ISO assembled from Microsoft's
+  Windows Update CDN via UUP dump (the consumer download page is anti-bot gated; this is the
+  automatable path).
+- **USB detection & passthrough (multi-seat).** New `capability-engine::usb` enumerates USB host
+  controllers (with IOMMU group + passthrough viability, for assigning a whole controller to a seat)
+  and connected USB devices; the `tendril-usb` binary lists both. Domains can now pass through
+  individual USB devices by id (`<hostdev type='usb'>`) for a seat's keyboard/mouse.
+- **VM lifecycle.** New `orchestrator::lifecycle::Libvirt` drives station VMs through `virsh`
+  (`define`/`start`/`shutdown`/`destroy`/`undefine`/`state`). New `tendril-vm` binary renders a
+  station's domain and, with `--define`, registers it with libvirt (validated, not started).
+- **Guest disks & install media.** New `orchestrator::guest` creates a station's qcow2 disk via
+  `qemu-img` and models `InstallMedia` (OS ISO + virtio-win). The domain renderer attaches install
+  ISOs as cdroms with the right boot order, and the new `tendril-guest` binary creates the disk and
+  renders the OS-install domain (`--steamos` for SteamOS, `--iso`/`--virtio-iso` for media).
+
+### Fixed
+- **Image build.** The host `Containerfile` now compiles the Rust binaries on the Fedora base (off
+  Docker Hub, which rate-limits anonymous pulls) with the toolchain under `/usr/local` (bootc's
+  `/root`→`/var/roothome` symlink tripped rustup's home/rc setup), and copies all seven `tendril-*`
+  binaries into the image. `build-installer.sh` sets `--rootfs xfs` (bootc-image-builder needs it).
+- Domain XML now emits `<smm state='on'/>`, which libvirt requires to match a Secure Boot firmware —
+  without it, `virsh define` fails with "Unable to find 'efi' firmware". Verified against libvirt.
+
 ## [0.4.0] - 2026-07-04
 
 First installable milestone: a bootc host image plus the full host-side pipeline
@@ -77,7 +110,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.5.0...HEAD
+[0.5.0]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...v0.5.0
 [0.4.0]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.onetick.ninja/flan/tendril/compare/v0.2.0...v0.3.0
 [0.2.0]: https://git.onetick.ninja/flan/tendril/compare/v0.1.0...v0.2.0

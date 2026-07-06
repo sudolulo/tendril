@@ -35,6 +35,24 @@ Push it to a registry your target can reach if you're not building on the target
 podman push tendril:dev registry.example/you/tendril:dev
 ```
 
+## 2b. Build a bootable USB installer (easiest for end users)
+
+Turn the image into a USB-flashable installer with `bootc-image-builder`:
+
+```bash
+scripts/build-installer.sh --type iso     # installer ISO -> flash to USB, boot the target, install
+scripts/build-installer.sh --type raw     # raw disk image -> dd straight onto the target's disk
+```
+
+Then flash the ISO and boot the target machine from it:
+
+```bash
+sudo dd if=out/*.iso of=/dev/sdX bs=4M status=progress
+```
+
+> Building the installer needs a host with loopback devices and a privileged container (bare metal or
+> a full VM) — it will not run inside an unprivileged LXC.
+
 ## 3. Deploy with bootc
 
 **Switch an existing Fedora bootc host:**

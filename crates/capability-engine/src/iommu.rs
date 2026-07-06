@@ -59,33 +59,37 @@ pub fn read_groups_from(groups_dir: &Path) -> Vec<IommuGroup> {
     groups
 }
 
-/// Assess passthrough viability for a GPU given the discovered IOMMU groups.
+/// Look up the IOMMU group containing `address`, if any.
+pub fn group_of<'a>(address: &str, groups: &'a [IommuGroup]) -> Option<&'a IommuGroup> {
+    groups
+        .iter()
+        .find(|g| g.device_addresses.iter().any(|a| a == address))
+}
+
+/// Assess passthrough viability for a PCI `address` given the discovered IOMMU groups.
 ///
-/// A group is [`PassthroughViability::Isolated`] when every device in it belongs to the GPU's own
-/// PCI slot (its functions, e.g. `0000:83:00.{0,1,2,3}`). Any foreign device makes it a
+/// A group is [`PassthroughViability::Isolated`] when every device in it belongs to the same PCI slot
+/// (its functions, e.g. `0000:83:00.{0,1,2,3}`). Any foreign device makes it a
 /// [`PassthroughViability::SharedGroup`] (passthrough still possible, but only with an ACS override
 /// and its security caveat). No group / no IOMMU is [`PassthroughViability::NoIommu`].
 ///
 /// TODO(phase-1+): treat PCIe root ports/bridges in the group specially rather than as foreign.
-pub fn assess(gpu: &GpuDevice, groups: &[IommuGroup]) -> PassthroughViability {
-    let Some(group) = groups
-        .iter()
-        .find(|g| g.device_addresses.iter().any(|a| a == &gpu.address))
-    else {
+pub fn viability_for(address: &str, groups: &[IommuGroup]) -> PassthroughViability {
+    let Some(group) = group_of(address, groups) else {
         return PassthroughViability::NoIommu;
     };
-
-    let gpu_slot = slot_of(&gpu.address);
-    let isolated = group
-        .device_addresses
-        .iter()
-        .all(|addr| slot_of(addr) == gpu_slot);
-
+    let slot = slot_of(address);
+    let isolated = group.device_addresses.iter().all(|a| slot_of(a) == slot);
     if isolated {
         PassthroughViability::Isolated
     } else {
         PassthroughViability::SharedGroup
     }
+}
+
+/// Assess passthrough viability for a GPU (convenience over [`viability_for`]).
+pub fn assess(gpu: &GpuDevice, groups: &[IommuGroup]) -> PassthroughViability {
+    viability_for(&gpu.address, groups)
 }
 
 /// Drop the PCI function from an address: `0000:83:00.1` -> `0000:83:00`.

@@ -6,7 +6,15 @@
 
 use std::fmt::Write as _;
 
+use crate::guest::InstallMedia;
 use crate::station::{GuestOs, StationSpec};
+
+/// A USB device to pass through by vendor/product id (a seat's keyboard/mouse).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsbPassthrough {
+    pub vendor_id: u16,
+    pub product_id: u16,
+}
 
 /// A station's VM resources, paired with its [`StationSpec`], ready to render.
 #[derive(Debug, Clone)]
@@ -20,6 +28,10 @@ pub struct DomainSpec<'a> {
     pub disk_path: String,
     /// PCI addresses to pass through — the GPU's whole IOMMU group.
     pub passthrough_addresses: Vec<String>,
+    /// Install media (OS ISO, plus virtio-win for Windows); empty once the disk is installed.
+    pub media: InstallMedia,
+    /// USB devices to pass through by id (per-seat keyboard/mouse); may be empty.
+    pub usb_devices: Vec<UsbPassthrough>,
 }
 
 /// Render `spec` into a libvirt domain XML document.
@@ -43,13 +55,14 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("    <firmware>\n");
     xml.push_str("      <feature enabled='yes' name='secure-boot'/>\n");
     xml.push_str("    </firmware>\n");
-    xml.push_str("    <boot dev='hd'/>\n");
     xml.push_str("  </os>\n");
 
     // Features (+ native-hardware fingerprint reduction).
     xml.push_str("  <features>\n");
     xml.push_str("    <acpi/>\n");
     xml.push_str("    <apic/>\n");
+    // Secure Boot requires SMM; libvirt can't match a secure-boot firmware without it.
+    xml.push_str("    <smm state='on'/>\n");
     if s.native_hardware {
         xml.push_str("    <kvm>\n      <hidden state='on'/>\n    </kvm>\n");
         xml.push_str(
@@ -70,12 +83,37 @@ pub fn render(spec: &DomainSpec) -> String {
     let _ = writeln!(xml, "  <clock offset='{clock}'/>");
 
     xml.push_str("  <devices>\n");
-    // Boot disk.
+    // Boot disk. Boots first unless install media is present.
+    let disk_boot = if spec.media.install_iso.is_some() {
+        2
+    } else {
+        1
+    };
     xml.push_str("    <disk type='file' device='disk'>\n");
     xml.push_str("      <driver name='qemu' type='qcow2'/>\n");
     let _ = writeln!(xml, "      <source file='{}'/>", spec.disk_path);
     xml.push_str("      <target dev='vda' bus='virtio'/>\n");
+    let _ = writeln!(xml, "      <boot order='{disk_boot}'/>");
     xml.push_str("    </disk>\n");
+    // OS install ISO (cdrom) — boots first while present.
+    if let Some(iso) = &spec.media.install_iso {
+        xml.push_str("    <disk type='file' device='cdrom'>\n");
+        xml.push_str("      <driver name='qemu' type='raw'/>\n");
+        let _ = writeln!(xml, "      <source file='{iso}'/>");
+        xml.push_str("      <target dev='sda' bus='sata'/>\n");
+        xml.push_str("      <readonly/>\n");
+        xml.push_str("      <boot order='1'/>\n");
+        xml.push_str("    </disk>\n");
+    }
+    // virtio-win drivers (second cdrom) so Windows can see the virtio disk during setup.
+    if let Some(iso) = &spec.media.virtio_iso {
+        xml.push_str("    <disk type='file' device='cdrom'>\n");
+        xml.push_str("      <driver name='qemu' type='raw'/>\n");
+        let _ = writeln!(xml, "      <source file='{iso}'/>");
+        xml.push_str("      <target dev='sdb' bus='sata'/>\n");
+        xml.push_str("      <readonly/>\n");
+        xml.push_str("    </disk>\n");
+    }
     // Network.
     xml.push_str("    <interface type='network'>\n");
     xml.push_str("      <source network='default'/>\n");
@@ -95,6 +133,16 @@ pub fn render(spec: &DomainSpec) -> String {
             let _ = writeln!(xml, "      <source>\n        {src}\n      </source>");
             xml.push_str("    </hostdev>\n");
         }
+    }
+    // Per-device USB passthrough (a seat's keyboard/mouse), by vendor/product id.
+    for usb in &spec.usb_devices {
+        xml.push_str("    <hostdev mode='subsystem' type='usb' managed='yes'>\n");
+        let _ = writeln!(
+            xml,
+            "      <source>\n        <vendor id='0x{:04x}'/>\n        <product id='0x{:04x}'/>\n      </source>",
+            usb.vendor_id, usb.product_id
+        );
+        xml.push_str("    </hostdev>\n");
     }
     xml.push_str("  </devices>\n");
     xml.push_str("</domain>\n");
@@ -135,11 +183,15 @@ mod tests {
             memory_mib: 16384,
             disk_path: "/var/lib/tendril/s1.qcow2".to_string(),
             passthrough_addresses: vec!["0000:83:00.0".to_string(), "0000:83:00.1".to_string()],
+            media: InstallMedia::none(),
+            usb_devices: vec![],
         };
         let xml = render(&spec);
         assert!(xml.contains("<name>s1</name>"));
+        assert!(xml.contains("<boot order='1'/>")); // disk boots first (no install media)
         assert!(xml.contains("<memory unit='MiB'>16384</memory>"));
         assert!(xml.contains("secure-boot"));
+        assert!(xml.contains("<smm state='on'/>")); // required for Secure Boot
         assert!(xml.contains("<tpm"));
         assert!(xml.contains("offset='localtime'")); // Windows
         assert!(xml.contains("bus='0x83' slot='0x00' function='0x0'"));
@@ -157,11 +209,57 @@ mod tests {
             memory_mib: 8192,
             disk_path: "/d.qcow2".to_string(),
             passthrough_addresses: vec![],
+            media: InstallMedia::none(),
+            usb_devices: vec![],
         };
         let xml = render(&spec);
         assert!(xml.contains("<hidden state='on'/>"));
         assert!(xml.contains("policy='disable' name='hypervisor'"));
         assert!(xml.contains("offset='utc'")); // SteamOS
+    }
+
+    #[test]
+    fn install_media_adds_cdroms_and_boots_from_iso() {
+        let st = station(false, GuestOs::Windows);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+            media: InstallMedia {
+                install_iso: Some("/isos/win11.iso".to_string()),
+                virtio_iso: Some("/isos/virtio-win.iso".to_string()),
+            },
+            usb_devices: vec![],
+        };
+        let xml = render(&spec);
+        assert_eq!(xml.matches("device='cdrom'").count(), 2);
+        assert!(xml.contains("/isos/win11.iso"));
+        assert!(xml.contains("/isos/virtio-win.iso"));
+        assert!(xml.contains("<boot order='1'/>")); // cdrom first
+        assert!(xml.contains("<boot order='2'/>")); // disk second
+    }
+
+    #[test]
+    fn usb_devices_render_as_usb_hostdevs() {
+        let st = station(false, GuestOs::Windows);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+            media: InstallMedia::none(),
+            usb_devices: vec![UsbPassthrough {
+                vendor_id: 0x046d,
+                product_id: 0xc52b,
+            }],
+        };
+        let xml = render(&spec);
+        assert!(xml.contains("type='usb'"));
+        assert!(xml.contains("<vendor id='0x046d'/>"));
+        assert!(xml.contains("<product id='0xc52b'/>"));
     }
 
     #[test]

@@ -2,9 +2,7 @@
 
 **Tendril** is an open-source, [Fedora bootc](https://docs.fedoraproject.org/en-US/bootc/)–based
 operating system that turns a single multi-GPU machine (or a cluster of them) into multiple
-plug-and-play gaming stations — each running **Windows** or **SteamOS** in a GPU-passthrough VM. It
-auto-detects your GPUs, sets up the drivers, and aims to be "can't-break-it" reliable for non-expert
-users. Think of the DIY Proxmox passthrough build, but automated and gaming-first.
+plug-and-play gaming stations — each running **Windows** or **SteamOS** in a GPU-passthrough VM.
 
 > One machine, many tendrils.
 

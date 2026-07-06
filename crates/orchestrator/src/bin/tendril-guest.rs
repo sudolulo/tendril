@@ -1,15 +1,25 @@
-//! `tendril-guest` — create a station's disk and render its OS-install domain.
+//! `tendril-guest` — provision a station's disk and drive its OS install end-to-end.
 //!
-//! `--create-disk` makes the qcow2 (default 128 GiB). `--iso <path>` / `--virtio-iso <path>` attach
-//! install media (the domain then boots from the ISO). `--steamos` selects SteamOS (default Windows).
-//! Prints the install domain XML; it does not start anything.
+//! Composes the pieces: create the qcow2, generate an `autounattend.xml` seed ISO (Windows), render
+//! the install domain (Windows ISO + virtio + seed, booting from the installer), and — with
+//! `--define`/`--start` — register and launch it. Once Windows has installed itself, `--finalize`
+//! re-renders the domain without any install media so it boots straight from disk.
+//!
+//! Safe by default: with no `--define`/`--start`/`--finalize`, it only creates the disk (if asked)
+//! and prints the domain XML.
+//!
+//! ```text
+//! tendril-guest --create-disk --iso win11.iso --virtio-iso virtio-win.iso --unattend --start
+//! # ...Windows installs itself, reboots into the desktop...
+//! tendril-guest --finalize --start        # boot the installed station from disk (no media)
+//! ```
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tendril_capability_engine::{iommu, matrix, pci};
 use tendril_orchestrator::domain::{render, DomainSpec};
-use tendril_orchestrator::guest::create_disk;
-use tendril_orchestrator::{GuestOs, InstallMedia, StationSpec};
+use tendril_orchestrator::guest::{build_seed_iso, create_disk};
+use tendril_orchestrator::{GuestOs, InstallMedia, Libvirt, StationSpec, UnattendSpec};
 use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
 fn arg_value(flag: &str) -> Option<String> {
@@ -23,8 +33,14 @@ fn has_flag(flag: &str) -> bool {
     std::env::args().any(|a| a == flag)
 }
 
+fn die(msg: impl std::fmt::Display) -> ! {
+    eprintln!("{msg}");
+    std::process::exit(1);
+}
+
 fn main() {
-    let disk = arg_value("--disk").unwrap_or_else(|| "/var/lib/tendril/station1.qcow2".to_string());
+    let name = arg_value("--name").unwrap_or_else(|| "station1".to_string());
+    let disk = arg_value("--disk").unwrap_or_else(|| format!("/var/lib/tendril/{name}.qcow2"));
     let size_gib: u32 = arg_value("--size-gib")
         .and_then(|s| s.parse().ok())
         .unwrap_or(128);
@@ -33,46 +49,169 @@ fn main() {
     } else {
         GuestOs::Windows
     };
+    let vcpus: u32 = arg_value("--vcpus")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let memory_mib: u64 = arg_value("--memory-mib")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16384);
+    let finalize = has_flag("--finalize");
+    let define = has_flag("--define") || has_flag("--start");
+    let start = has_flag("--start");
 
+    // 1. Disk.
     if has_flag("--create-disk") {
         match create_disk(Path::new(&disk), size_gib) {
             Ok(()) => eprintln!("created {size_gib} GiB disk at {disk}"),
-            Err(e) => {
-                eprintln!("create disk failed: {e}");
-                std::process::exit(1);
-            }
+            Err(e) => die(format!("create disk failed: {e}")),
         }
     }
 
+    // 2. Install media. Skipped entirely when finalizing (post-install boot from disk).
+    let media = if finalize {
+        InstallMedia::none()
+    } else {
+        let unattend_iso = if has_flag("--unattend") {
+            match guest {
+                GuestOs::SteamOs => {
+                    eprintln!("--unattend is Windows-only; ignoring for a SteamOS station");
+                    None
+                }
+                GuestOs::Windows => Some(build_unattend_seed(&name, &disk)),
+            }
+        } else {
+            None
+        };
+        InstallMedia {
+            install_iso: arg_value("--iso"),
+            virtio_iso: arg_value("--virtio-iso"),
+            unattend_iso,
+        }
+    };
+
+    // Booting an install ISO (not a finalized boot-from-disk) means we must clear the firmware's
+    // "press any key to boot from CD" prompt ourselves.
+    let installing = !finalize && media.install_iso.is_some();
+
+    // 3. GPU passthrough group (unless installing headless via VNC first).
+    let passthrough_addresses = if has_flag("--no-gpu") {
+        Vec::new()
+    } else {
+        resolve_passthrough_group()
+    };
+    let gpu_address = passthrough_addresses
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "0000:00:00.0".to_string());
+
+    // 4. Render.
+    let station = StationSpec {
+        name: name.clone(),
+        guest,
+        gpu_address,
+        native_hardware: has_flag("--native-hardware"),
+    };
+    let spec = DomainSpec {
+        station: &station,
+        vcpus,
+        memory_mib,
+        disk_path: disk.clone(),
+        passthrough_addresses,
+        media,
+        usb_devices: Vec::new(),
+    };
+    let xml = render(&spec);
+
+    // 5. Define / start, or just print.
+    if !define {
+        print!("{xml}");
+        eprintln!("(dry-run — pass --define to register, or --start to install/boot it)");
+        return;
+    }
+    let lv = Libvirt::system();
+    match lv.define(&name, &xml) {
+        Ok(()) => eprintln!(
+            "defined domain '{name}'{}",
+            if finalize {
+                " (finalized: boots from disk, no install media)"
+            } else {
+                ""
+            }
+        ),
+        Err(e) => die(format!("define failed: {e}")),
+    }
+    if start {
+        match lv.start(&name) {
+            Ok(()) => eprintln!(
+                "started '{name}' — connect a viewer to the VNC console to watch{}",
+                if installing {
+                    "; Windows will install itself unattended"
+                } else {
+                    ""
+                }
+            ),
+            Err(e) => die(format!("start failed: {e}")),
+        }
+        if installing {
+            eprintln!("clearing the boot-from-CD prompt (~{}s)...", 18);
+            lv.clear_boot_prompt(&name);
+        }
+    }
+}
+
+/// Build the `autounattend.xml` seed ISO next to the disk, honoring account/locale overrides.
+fn build_unattend_seed(name: &str, disk: &str) -> String {
+    let mut spec = UnattendSpec {
+        computer_name: name.to_uppercase(),
+        ..UnattendSpec::default()
+    };
+    if let Some(v) = arg_value("--username") {
+        spec.username = v;
+    }
+    if let Some(v) = arg_value("--password") {
+        spec.password = v;
+    }
+    if let Some(v) = arg_value("--computer-name") {
+        spec.computer_name = v;
+    }
+    if let Some(v) = arg_value("--locale") {
+        spec.locale = v;
+    }
+    if let Some(v) = arg_value("--timezone") {
+        spec.timezone = v;
+    }
+    if let Some(v) = arg_value("--edition") {
+        spec.edition_name = v;
+    }
+    if has_flag("--no-autologon") {
+        spec.autologon = false;
+    }
+
+    let seed = arg_value("--seed-iso")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let dir = Path::new(disk).parent().unwrap_or_else(|| Path::new("."));
+            dir.join(format!("{name}-seed.iso"))
+        });
+    match build_seed_iso(&spec, &seed) {
+        Ok(()) => {
+            eprintln!("built unattended-setup seed ISO at {}", seed.display());
+            seed.to_string_lossy().into_owned()
+        }
+        Err(e) => die(format!("build seed ISO failed: {e}")),
+    }
+}
+
+/// The first passthrough-capable GPU's whole IOMMU group, or exit if there is none.
+fn resolve_passthrough_group() -> Vec<String> {
     let gpus = pci::enumerate();
     let groups = iommu::read_groups();
     let matrix = matrix::build(gpus, &groups);
     let Some(cap) = matrix.passthrough_capable().next() else {
-        eprintln!("No passthrough-capable GPU to build a station for.");
-        std::process::exit(1);
+        die("No passthrough-capable GPU found. Pass --no-gpu to install headless via VNC first.");
     };
     let group = groups
         .iter()
         .find(|g| g.device_addresses.iter().any(|a| a == &cap.gpu.address));
-    let plan = PassthroughStrategy.plan(&cap.gpu, group);
-
-    let station = StationSpec {
-        name: "station1".to_string(),
-        guest,
-        gpu_address: cap.gpu.address.clone(),
-        native_hardware: false,
-    };
-    let spec = DomainSpec {
-        station: &station,
-        vcpus: 8,
-        memory_mib: 16384,
-        disk_path: disk,
-        passthrough_addresses: plan.bind_addresses,
-        media: InstallMedia {
-            install_iso: arg_value("--iso"),
-            virtio_iso: arg_value("--virtio-iso"),
-        },
-        usb_devices: Vec::new(),
-    };
-    print!("{}", render(&spec));
+    PassthroughStrategy.plan(&cap.gpu, group).bind_addresses
 }

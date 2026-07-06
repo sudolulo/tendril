@@ -9,9 +9,11 @@ pub mod guest;
 pub mod lifecycle;
 pub mod role;
 pub mod station;
+pub mod unattend;
 
 pub use domain::DomainSpec;
 pub use guest::InstallMedia;
 pub use lifecycle::{DomainState, Libvirt};
 pub use role::Role;
 pub use station::{GuestOs, StationSpec};
+pub use unattend::{render_autounattend, UnattendSpec};

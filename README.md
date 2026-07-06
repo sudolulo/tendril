@@ -22,9 +22,10 @@ driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get 
 
 ## What works today
 
-**v0.5.0 — first bootable release.** There's a flashable installer ISO (built from the bootc image),
-the full host-side provisioning pipeline, and libvirt orchestration — all validated on real hardware.
-No graphical VM wizard yet; you create stations with the CLIs:
+**v0.6.0 — hands-off Windows install.** There's a flashable installer ISO (built from the bootc
+image), the full host-side provisioning pipeline, libvirt orchestration, and a station that installs
+Windows 11 **unattended** (past the virtio "no drives" and Microsoft-account walls) then boots from
+disk. No graphical VM wizard yet; you create stations with the CLIs:
 
 | Tool | What it does |
 |---|---|
@@ -33,7 +34,7 @@ No graphical VM wizard yet; you create stations with the CLIs:
 | `tendril-apply` | Binds a GPU to `vfio-pci` — **dry-run by default**, `--execute` to enact |
 | `tendril-domain` | Renders a libvirt domain (Secure Boot + TPM, passthrough hostdevs) for a GPU |
 | `tendril-vm` | Renders and (with `--define`) registers a station's VM with libvirt |
-| `tendril-guest` | Creates the station disk + the OS-install domain (Windows/SteamOS) |
+| `tendril-guest` | Creates the disk, builds an `autounattend.xml` seed, and installs Windows hands-off (`--unattend --start`), then boots from disk (`--finalize`) |
 | `tendril-usb` | Lists USB controllers + devices for multi-seat assignment |
 
 Plus `scripts/build-installer.sh` (build the ISO) and `scripts/fetch-windows-media.sh` (Win11 + virtio-win ISOs).
@@ -89,8 +90,8 @@ cargo run --bin tendril-detect
 | VM orchestration | libvirt domain templating + lifecycle (`virsh`) | ✅ Done |
 | Guest disks & media | qcow2 disks, install ISOs, Win11 + virtio fetch | ✅ Done |
 | Multi-seat USB | USB controller + per-device passthrough | ✅ Done |
-| Guest OS install | Boot a Windows/SteamOS station end-to-end | 🔨 Next |
-| Control plane | Web UI + "create gaming station" wizard | 📋 Planned |
+| Guest OS install | Unattended Windows install (virtio + no-OOBE), boot from disk | ✅ Done |
+| Control plane | Web UI + "create gaming station" wizard | 🔨 Next |
 | vGPU | >1 VM per GPU (official + `vgpu_unlock`) | 🔭 Future |
 | Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |
 | Streaming | Sunshine/Moonlight for headless / remote play | 🔭 Future |

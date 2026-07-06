@@ -113,8 +113,40 @@ tendril-apply         # dry-run: the exact sysfs writes
 Only `tendril-apply --execute` actually binds a GPU to `vfio-pci` (detaching it from the host) — do
 that when you're ready to hand it to a VM.
 
+## 5. Create a Windows station (unattended)
+
+Fetch the install media (once), then let `tendril-guest` build the disk and install Windows itself —
+no clicking through Setup:
+
+```bash
+scripts/fetch-windows-media.sh --dest /var/lib/tendril/isos     # win11.iso + virtio-win.iso
+
+sudo tendril-guest \
+  --name station1 --create-disk --size-gib 128 \
+  --iso /var/lib/tendril/isos/win11.iso \
+  --virtio-iso /var/lib/tendril/isos/virtio-win.iso \
+  --unattend --username player --password changeme \
+  --start
+```
+
+`--unattend` builds a seed ISO carrying `autounattend.xml`, which injects the virtio storage driver
+(so the disk is visible), auto-partitions, skips the OOBE / Microsoft-account screens, creates the
+local account, and installs the virtio guest tools on first logon. Watch it on the VNC console
+(`virsh domdisplay station1`). By default the station's GPU (its whole IOMMU group) is passed
+through; add `--no-gpu` to install headless first and attach the GPU later.
+
+Once Windows has installed itself and rebooted to the desktop, drop the install media so it boots
+straight from disk:
+
+```bash
+sudo tendril-guest --name station1 --finalize --start
+```
+
+Add `--steamos` instead for a SteamOS station (no answer file needed); `--native-hardware` applies
+the opt-in fingerprint-reduction overlay (read the ToS warnings in the README first).
+
 ## What's not here yet
 
-Creating and running the Windows/SteamOS VMs, the setup wizard, multi-seat peripherals, vGPU, and
-clustering are on the [roadmap](../README.md#roadmap) but not implemented. For now Tendril gets the
-*host* ready for passthrough; the VM layer is next.
+The graphical "create a gaming station" wizard, multi-seat peripheral binding, vGPU (>1 VM per GPU),
+and clustering are on the [roadmap](../README.md#roadmap) but not implemented. The CLIs above already
+take a host from bare metal to a running, self-installed Windows station.

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-05
+
+First bootable release: a flashable installer ISO built from the bootc host image, plus VM lifecycle,
+guest disks/install-media, USB multi-seat, and automated Windows-media fetching.
+
 ### Added
 - **Bootable USB installer.** New `scripts/build-installer.sh` turns the bootc host image into a
   USB-flashable installer ISO (or a raw disk image) via `bootc-image-builder` — the easy "flash a
@@ -105,7 +110,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.5.0...HEAD
+[0.5.0]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...v0.5.0
 [0.4.0]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.onetick.ninja/flan/tendril/compare/v0.2.0...v0.3.0
 [0.2.0]: https://git.onetick.ninja/flan/tendril/compare/v0.1.0...v0.2.0

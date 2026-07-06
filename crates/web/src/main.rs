@@ -1,0 +1,78 @@
+//! `tendril-web` — the Tendril web control plane.
+//!
+//! Axum + HTMX over the same services the console and CLI use (`capability-engine::detect`,
+//! `orchestrator::provision`, `lifecycle::Libvirt`). Server-rendered HTML (Maud), HTMX for in-page
+//! swaps, and a WebSocket↔VNC proxy driving an embedded noVNC console. All assets — htmx and noVNC —
+//! are baked into the binary, so the appliance serves everything offline.
+
+mod hardware;
+mod pages;
+mod stations;
+mod ui;
+
+use axum::extract::Path;
+use axum::http::{header, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use axum::Router;
+
+/// htmx, embedded so the appliance needs no CDN.
+const HTMX_JS: &str = include_str!("../assets/htmx.min.js");
+/// The noVNC client (ES modules + its zlib vendor), embedded and served under /assets/novnc/.
+static NOVNC: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/assets/novnc");
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(pages::dashboard))
+        // stations
+        .route("/stations", get(stations::list_page).post(stations::create))
+        .route("/stations/fragment", get(stations::fragment_route))
+        .route("/stations/new", get(stations::new_form))
+        .route("/stations/:name", get(stations::detail))
+        .route("/stations/:name/start", post(stations::start))
+        .route("/stations/:name/stop", post(stations::stop))
+        .route("/stations/:name/forceoff", post(stations::forceoff))
+        .route("/stations/:name/delete", post(stations::delete))
+        .route("/stations/:name/vnc", get(stations::vnc_ws))
+        // hardware
+        .route("/hardware", get(hardware::page))
+        .route("/hardware/:addr/bind", post(hardware::bind))
+        // media + network
+        .route("/media", get(pages::media))
+        .route("/media/fetch/:which", post(pages::fetch))
+        .route("/network", get(pages::network))
+        // assets
+        .route("/assets/htmx.min.js", get(htmx_js))
+        .route("/assets/novnc/*path", get(novnc_asset));
+
+    let addr = std::env::var("TENDRIL_WEB_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .unwrap_or_else(|e| panic!("bind {addr}: {e}"));
+    println!("Tendril web UI listening on http://{addr}");
+    axum::serve(listener, app).await.expect("serve");
+}
+
+async fn htmx_js() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/javascript")], HTMX_JS)
+}
+
+async fn novnc_asset(Path(path): Path<String>) -> impl IntoResponse {
+    match NOVNC.get_file(&path) {
+        Some(f) => ([(header::CONTENT_TYPE, mime_for(&path))], f.contents()).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn mime_for(path: &str) -> &'static str {
+    if path.ends_with(".js") || path.ends_with(".mjs") {
+        "text/javascript"
+    } else if path.ends_with(".css") {
+        "text/css"
+    } else if path.ends_with(".json") {
+        "application/json"
+    } else {
+        "application/octet-stream"
+    }
+}

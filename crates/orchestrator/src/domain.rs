@@ -114,6 +114,15 @@ pub fn render(spec: &DomainSpec) -> String {
         xml.push_str("      <readonly/>\n");
         xml.push_str("    </disk>\n");
     }
+    // Unattended-setup seed (third cdrom): autounattend.xml (Windows) or a kickstart (Bazzite).
+    if let Some(iso) = &spec.media.seed_iso {
+        xml.push_str("    <disk type='file' device='cdrom'>\n");
+        xml.push_str("      <driver name='qemu' type='raw'/>\n");
+        let _ = writeln!(xml, "      <source file='{iso}'/>");
+        xml.push_str("      <target dev='sdc' bus='sata'/>\n");
+        xml.push_str("      <readonly/>\n");
+        xml.push_str("    </disk>\n");
+    }
     // Network.
     xml.push_str("    <interface type='network'>\n");
     xml.push_str("      <source network='default'/>\n");
@@ -230,13 +239,16 @@ mod tests {
             media: InstallMedia {
                 install_iso: Some("/isos/win11.iso".to_string()),
                 virtio_iso: Some("/isos/virtio-win.iso".to_string()),
+                seed_iso: Some("/isos/station1-seed.iso".to_string()),
             },
             usb_devices: vec![],
         };
         let xml = render(&spec);
-        assert_eq!(xml.matches("device='cdrom'").count(), 2);
+        assert_eq!(xml.matches("device='cdrom'").count(), 3);
         assert!(xml.contains("/isos/win11.iso"));
         assert!(xml.contains("/isos/virtio-win.iso"));
+        assert!(xml.contains("/isos/station1-seed.iso"));
+        assert!(xml.contains("dev='sdc'")); // seed on the third cdrom
         assert!(xml.contains("<boot order='1'/>")); // cdrom first
         assert!(xml.contains("<boot order='2'/>")); // disk second
     }

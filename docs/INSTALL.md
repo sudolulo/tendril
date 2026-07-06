@@ -1,8 +1,26 @@
 # Installing Tendril
 
-> ⚠️ **Pre-release.** Tendril does not yet ship a published image or a turnkey installer. This guide
-> covers building the host image yourself and deploying it with [`bootc`](https://bootc-dev.github.io/bootc/).
-> Expect rough edges; this is for testers and contributors.
+> ⚠️ **Pre-1.0.** There's a bootable installer ISO (below), but no graphical VM wizard yet — for
+> testers and contributors. Expect rough edges.
+
+## 0. Install from the release ISO (easiest)
+
+Download the single-file installer, verify it, and flash it:
+
+```bash
+curl -LO https://dl.onetick.ninja/tendril-0.5.0-installer-x86_64.iso
+curl -LO https://dl.onetick.ninja/SHA256SUMS
+sha256sum -c SHA256SUMS
+sudo dd if=tendril-0.5.0-installer-x86_64.iso of=/dev/sdX bs=4M status=progress
+```
+
+The download supports resume (`curl -C -`), so a dropped connection isn't fatal. The ISO is also
+mirrored in the [Gitea release](https://git.onetick.ninja/flan/tendril/releases), split into `.part`
+files to fit the 2 GiB asset cap — reassemble with `cat tendril-*-installer-x86_64.iso.part* >
+tendril-installer.iso` if you use that copy instead.
+
+Boot the target from the USB stick, follow the installer, then jump to **step 4 (Verify)**. Prefer
+to build it yourself? Continue below.
 
 ## 1. Prerequisites
 
@@ -29,10 +47,12 @@ This produces a Fedora bootc image containing:
 - the VFIO modules loaded at boot;
 - the `tendril-detect` / `tendril-plan` / `tendril-apply` binaries.
 
-Push it to a registry your target can reach if you're not building on the target itself:
+Push it to a registry your target can reach if you're not building on the target itself. The
+official image is published to Tendril's own Gitea registry:
 
 ```bash
-podman push tendril:dev registry.example/you/tendril:dev
+podman tag tendril:dev git.onetick.ninja/flan/tendril:latest
+podman push git.onetick.ninja/flan/tendril:latest
 ```
 
 ## 2b. Build a bootable USB installer (easiest for end users)
@@ -58,7 +78,7 @@ sudo dd if=out/*.iso of=/dev/sdX bs=4M status=progress
 **Switch an existing Fedora bootc host:**
 
 ```bash
-sudo bootc switch localhost/tendril:dev   # or the registry ref you pushed
+sudo bootc switch git.onetick.ninja/flan/tendril:latest   # or a ref you pushed yourself
 sudo reboot
 ```
 
@@ -74,7 +94,10 @@ automatically (greenboot).
 
 ## 4. Verify
 
-After reboot:
+After reboot, the primary display auto-logs in and drops you into the **`tendril` console** — a menu
+covering hardware, GPU binding, station creation/management, media, networking, and power. (Other
+VTs and SSH give a normal shell; run `tendril` there to open the menu manually.) Its "Hardware &
+capabilities" entry is the same as:
 
 ```bash
 tendril-detect
@@ -93,8 +116,59 @@ tendril-apply         # dry-run: the exact sysfs writes
 Only `tendril-apply --execute` actually binds a GPU to `vfio-pci` (detaching it from the host) — do
 that when you're ready to hand it to a VM.
 
+## 5. Create a Windows station (unattended)
+
+Fetch the install media (once), then let `tendril-guest` build the disk and install Windows itself —
+no clicking through Setup:
+
+```bash
+scripts/fetch-windows-media.sh --dest /var/lib/tendril/isos     # win11.iso + virtio-win.iso
+
+sudo tendril-guest \
+  --name station1 --create-disk --size-gib 128 \
+  --iso /var/lib/tendril/isos/win11.iso \
+  --virtio-iso /var/lib/tendril/isos/virtio-win.iso \
+  --unattend --username player --password changeme \
+  --start
+```
+
+`--unattend` builds a seed ISO carrying `autounattend.xml`, which injects the virtio storage driver
+(so the disk is visible), auto-partitions, skips the OOBE / Microsoft-account screens, creates the
+local account, and installs the virtio guest tools on first logon. Watch it on the VNC console
+(`virsh domdisplay station1`). By default the station's GPU (its whole IOMMU group) is passed
+through; add `--no-gpu` to install headless first and attach the GPU later.
+
+Once Windows has installed itself and rebooted to the desktop, drop the install media so it boots
+straight from disk:
+
+```bash
+sudo tendril-guest --name station1 --finalize --start
+```
+
+### SteamOS-style (Bazzite) station
+
+Valve ships no generic-PC SteamOS installer (the Steam Deck recovery image is image-based and
+AMD-only, so it can't drive an NVIDIA station). Until it does, Tendril's SteamOS station is
+[Bazzite](https://bazzite.gg) — an atomic, Steam-gaming-mode image with a scriptable Anaconda ISO:
+
+```bash
+scripts/fetch-steamos-media.sh --dest /var/lib/tendril/isos   # Bazzite Deck/NVIDIA ISO
+
+sudo tendril-guest \
+  --steamos --name station2 --create-disk --size-gib 128 \
+  --iso /var/lib/tendril/isos/bazzite-deck-nvidia.iso \
+  --unattend --username player --password changeme \
+  --start
+```
+
+`--unattend` builds a `ks.cfg` kickstart on an `OEMDRV`-labelled seed ISO, which Anaconda auto-loads:
+it wipes the disk, installs the image, creates the user, enables SSH, and auto-logs into Steam gaming
+mode. Override the image with `--image ghcr.io/ublue-os/bazzite-deck:stable` (e.g. AMD/Intel), or
+`--no-ssh`. Then `--finalize --start` to boot from disk. `--native-hardware` applies the opt-in
+fingerprint-reduction overlay (read the ToS warnings in the README first).
+
 ## What's not here yet
 
-Creating and running the Windows/SteamOS VMs, the setup wizard, multi-seat peripherals, vGPU, and
-clustering are on the [roadmap](../README.md#roadmap) but not implemented. For now Tendril gets the
-*host* ready for passthrough; the VM layer is next.
+The graphical "create a gaming station" wizard, multi-seat peripheral binding, vGPU (>1 VM per GPU),
+and clustering are on the [roadmap](../README.md#roadmap) but not implemented. The CLIs above already
+take a host from bare metal to a running, self-installed Windows station.

@@ -1,0 +1,22 @@
+[package]
+name = "tendril-web"
+description = "Tendril web control plane — Axum + HTMX over the provision service layer."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "tendril-web"
+path = "src/main.rs"
+
+[dependencies]
+tendril-capability-engine = { workspace = true }
+tendril-provisioning = { workspace = true }
+tendril-orchestrator = { workspace = true }
+
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+maud = { version = "0.26", features = ["axum"] }
+serde = { version = "1", features = ["derive"] }
+include_dir = "0.7"

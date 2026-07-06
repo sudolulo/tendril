@@ -42,6 +42,11 @@ impl DomainState {
     }
 }
 
+/// Linux input keycode for Enter.
+const KEY_ENTER: u32 = 28;
+/// Enter taps after start — covers firmware POST plus the CD prompt's ~5-second timeout.
+const KEY_ENTER_TAPS: u32 = 18;
+
 impl Libvirt {
     /// The system libvirt instance (`qemu:///system`).
     pub fn system() -> Self {
@@ -93,6 +98,23 @@ impl Libvirt {
         Self::ok(self.run(&["start", name])?).map(|_| ())
     }
 
+    /// Send a key by Linux input keycode (e.g. 28 = Enter) to the domain's console.
+    pub fn send_key(&self, name: &str, keycode: u32) -> io::Result<()> {
+        Self::ok(self.run(&["send-key", name, &keycode.to_string()])?).map(|_| ())
+    }
+
+    /// Tap Enter repeatedly across the boot window.
+    ///
+    /// Windows install ISOs show "Press any key to boot from CD or DVD..." with a ~5-second timeout;
+    /// if no key is pressed the firmware skips the CD and the unattended install never begins. With no
+    /// human at the keyboard, we press it ourselves — harmless keystrokes once WinPE has taken over.
+    pub fn clear_boot_prompt(&self, name: &str) {
+        for _ in 0..KEY_ENTER_TAPS {
+            let _ = self.send_key(name, KEY_ENTER);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
     /// Request a graceful shutdown.
     pub fn shutdown(&self, name: &str) -> io::Result<()> {
         Self::ok(self.run(&["shutdown", name])?).map(|_| ())
@@ -106,6 +128,19 @@ impl Libvirt {
     /// Remove a domain definition (and its nvram).
     pub fn undefine(&self, name: &str) -> io::Result<()> {
         Self::ok(self.run(&["undefine", name, "--nvram"])?).map(|_| ())
+    }
+
+    /// Names of all defined domains (running or not); empty if virsh is unreachable.
+    pub fn list(&self) -> Vec<String> {
+        match self.run(&["list", "--all", "--name"]) {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// Current state of a domain (`Absent` if it doesn't exist or virsh is unreachable).

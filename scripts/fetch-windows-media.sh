@@ -48,11 +48,20 @@ uuid=$(curl -fsSL "https://api.uupdump.net/listid.php?search=Windows%2011&sortBy
 import sys, json
 builds = json.load(sys.stdin)['response']['builds']
 vals = builds.values() if isinstance(builds, dict) else builds
-print(next(v['uuid'] for v in vals if v.get('arch') == 'amd64' and 'Windows 11' in v.get('title', '')))
+# Retail feature-update builds are titled 'Windows 11, version XXHY (...)'. Skip cumulative update
+# packages ('.NET ...', 'Preview Update ...') and Insider/prerelease builds, which have no full ISO.
+retail = [v for v in vals if v.get('arch') == 'amd64'
+          and 'version' in v.get('title', '').lower()
+          and 'insider' not in v.get('title', '').lower()]
+if not retail:
+    sys.exit('no retail Windows 11 build found')
+print(retail[0]['uuid'])
 ")
 echo "    build: $uuid"
 
-work="$(mktemp -d)"
+# Stage on the destination disk, not the default $TMPDIR — /tmp is often tmpfs (RAM-backed) and far
+# too small for the multi-GB UUP download.
+work="$(mktemp -d "${DEST%/}/uup-work.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 echo "==> Fetching the download+convert package"

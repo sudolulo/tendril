@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-06
+
+The web control plane — a full browser UI for the host, shipped in the image and served on `:80`.
+
+### Added
+- **Web control plane** (`crates/web`, `tendril-web`) — Axum + HTMX over the shared
+  `orchestrator::provision` service, the same code path as the console and CLI. Pages:
+  - a **dashboard** (host summary, live self-refreshing stations, hardware matrix);
+  - a **create-station wizard** — choose OS, GPU, disk, and unattended account; it builds the disk,
+    the answer-file/kickstart seed, and the VM, then installs hands-off;
+  - **station management** (start / shut down / force off / delete) with HTMX swaps;
+  - a **live in-browser console** — noVNC over a built-in WebSocket↔VNC proxy, to watch installs;
+  - a **GPU/passthrough** page that binds a GPU (its whole IOMMU group) to `vfio-pci`;
+  - **media** (list ISOs, background fetch) and **network** (interfaces/routes/DNS) pages.
+
+  Server-rendered with Maud; htmx and the noVNC client are embedded in the binary, so the appliance
+  serves everything offline.
+- **Shipped in the image.** The OS runs `tendril-web` as a systemd service on `:80` — the address the
+  console already advertises.
+
+### Changed
+- The `tendril` console banner now points at the live web UI (no longer "planned").
+
+## [0.7.0] - 2026-07-06
+
+An interactive console for the whole host — the stepping stone to the web UI. Boot the Tendril OS to
+a monitor and you land in a menu that fronts every function.
+
+### Added
+- **`tendril` console.** A dependency-free, TrueNAS-style numbered menu covering everything: inspect
+  hardware & capabilities, bind a GPU to `vfio-pci`, create a gaming station (guided: OS, GPU, disk,
+  unattended account), manage stations (start/stop/force-off/delete), fetch install media, list USB
+  devices, configure networking (`nmtui` + routes/DNS), open a shell, and reboot/shut down. The
+  header shows the host name/address and where the web UI will live.
+- **The OS boots into it.** The image auto-logs in the primary console (`tty1`) and launches the
+  menu (appliance UX); other VTs and SSH still get a normal shell. Ships `NetworkManager-tui`,
+  `genisoimage`, and the media-fetch scripts (`/usr/libexec/tendril`).
+- **`orchestrator::provision` service layer.** A single `provision(StationRequest)` entry point that
+  turns a resolved request into a running/defined station. `tendril-guest` (CLI), the console menu,
+  and a future web UI all call it, so a station is created identically everywhere. Adds
+  `Libvirt::list` for station enumeration.
+
+### Changed
+- `tendril-guest` now delegates to `orchestrator::provision` (no behavioural change; one code path).
+- `InstallMedia.unattend_iso` was renamed to `seed_iso` in 0.6.0's API.
+
+## [0.6.0] - 2026-07-06
+
+Hands-off guest install for both station types: a station boots a stock Windows 11 ISO (or a
+SteamOS-style Bazzite ISO) and installs itself unattended, then boots straight from disk.
+
+### Added
+- **Unattended Windows setup.** New `orchestrator::unattend` generates a Windows `autounattend.xml`
+  that injects the virtio storage driver in WinPE (so the disk is visible), auto-partitions the disk,
+  skips the OOBE / Microsoft-account screens, creates a local administrator, optionally auto-logs in,
+  and installs the virtio guest tools (QEMU guest agent, balloon, network) on first logon.
+- **Unattended SteamOS install.** New `orchestrator::kickstart` generates an Anaconda kickstart that
+  wipes the disk, installs the OS image, creates a sudo user, enables SSH, and auto-logs into Steam
+  gaming mode. Valve ships no generic-PC SteamOS installer (the Deck recovery image is image-based
+  and AMD-only, so it can't drive an NVIDIA station), so the "SteamOS" station is
+  [Bazzite](https://bazzite.gg) — an atomic, gaming-mode image with a scriptable Anaconda ISO. New
+  `scripts/fetch-steamos-media.sh` grabs the Bazzite (Deck/NVIDIA) ISO.
+- **Seed ISO builder.** New `orchestrator::guest::build_seed_iso` / `build_kickstart_seed` write the
+  answer file onto a small ISO — `autounattend.xml` (any label, Windows scans all drives) or `ks.cfg`
+  on an `OEMDRV`-labelled disc (Anaconda auto-loads it). The domain renderer attaches it as a third
+  cdrom, and `InstallMedia` gains a `seed_iso` field.
+- **End-to-end station install.** `tendril-guest` now composes the whole flow: create disk → build
+  the seed ISO (`--unattend`) → render the install domain → `--define`/`--start` to register and
+  launch it. Windows honors `--username`/`--password`/`--computer-name`/`--locale`/`--timezone`/
+  `--edition`; SteamOS honors `--username`/`--password`/`--hostname`/`--image`/`--no-ssh`. `--steamos`
+  selects the Bazzite path (and auto-taps Enter through the Windows CD boot prompt only where needed).
+  `--finalize` re-renders the domain without install media so the station boots from disk; `--no-gpu`
+  installs headless via VNC before a GPU is attached.
+
 ## [0.5.0] - 2026-07-05
 
 First bootable release: a flashable installer ISO built from the bootc host image, plus VM lifecycle,

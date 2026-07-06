@@ -43,10 +43,11 @@ COPY image/kargs.d/00-tendril.toml /usr/lib/bootc/kargs.d/00-tendril.toml
 # Load the VFIO modules at boot.
 COPY image/vfio.conf /etc/modules-load.d/tendril-vfio.conf
 
-# Tendril host binaries: the `tendril` console, detect -> plan -> apply, and the station tooling
-# (domain/vm/guest/usb).
+# Tendril host binaries: the `tendril` console, the `tendril-web` control plane, detect -> plan ->
+# apply, and the station tooling (domain/vm/guest/usb). tendril-web embeds its assets (htmx, noVNC).
 COPY --from=build \
      /src/target/release/tendril \
+     /src/target/release/tendril-web \
      /src/target/release/tendril-detect \
      /src/target/release/tendril-plan \
      /src/target/release/tendril-apply \
@@ -55,6 +56,10 @@ COPY --from=build \
      /src/target/release/tendril-guest \
      /src/target/release/tendril-usb \
      /usr/bin/
+
+# The web control plane, served on :80.
+COPY image/web/tendril-web.service /usr/lib/systemd/system/tendril-web.service
+RUN systemctl enable tendril-web.service
 
 # Helper scripts the console can invoke (media fetch, installer build).
 COPY scripts/ /usr/libexec/tendril/

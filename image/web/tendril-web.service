@@ -1,0 +1,16 @@
+[Unit]
+Description=Tendril web control plane
+Documentation=https://git.onetick.ninja/flan/tendril
+After=network-online.target libvirtd.service
+Wants=network-online.target
+
+[Service]
+# Serves on :80 (root; it also needs privilege for libvirt/VFIO). Override the port with a drop-in
+# setting TENDRIL_WEB_ADDR if 80 is taken.
+Environment=TENDRIL_WEB_ADDR=0.0.0.0:80
+ExecStart=/usr/bin/tendril-web
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

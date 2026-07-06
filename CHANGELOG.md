@@ -7,12 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-06
+
+The web control plane — a full browser UI for the host, shipped in the image and served on `:80`.
+
 ### Added
-- **Web UI (in progress).** New `crates/web` (`tendril-web`) — the control plane, built in **Axum +
-  HTMX** over the shared `orchestrator::provision` service (same code path as the console and CLI).
-  Server-rendered HTML with Maud, htmx embedded in the binary (no CDN). First slice: a dashboard with
-  the live hardware/capability table and a self-refreshing stations panel (start / shut down / force
-  off via HTMX). Not yet shipped in the image.
+- **Web control plane** (`crates/web`, `tendril-web`) — Axum + HTMX over the shared
+  `orchestrator::provision` service, the same code path as the console and CLI. Pages:
+  - a **dashboard** (host summary, live self-refreshing stations, hardware matrix);
+  - a **create-station wizard** — choose OS, GPU, disk, and unattended account; it builds the disk,
+    the answer-file/kickstart seed, and the VM, then installs hands-off;
+  - **station management** (start / shut down / force off / delete) with HTMX swaps;
+  - a **live in-browser console** — noVNC over a built-in WebSocket↔VNC proxy, to watch installs;
+  - a **GPU/passthrough** page that binds a GPU (its whole IOMMU group) to `vfio-pci`;
+  - **media** (list ISOs, background fetch) and **network** (interfaces/routes/DNS) pages.
+
+  Server-rendered with Maud; htmx and the noVNC client are embedded in the binary, so the appliance
+  serves everything offline.
+- **Shipped in the image.** The OS runs `tendril-web` as a systemd service on `:80` — the address the
+  console already advertises.
+
+### Changed
+- The `tendril` console banner now points at the live web UI (no longer "planned").
 
 ## [0.7.0] - 2026-07-06
 

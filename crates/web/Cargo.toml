@@ -15,6 +15,8 @@ tendril-capability-engine = { workspace = true }
 tendril-provisioning = { workspace = true }
 tendril-orchestrator = { workspace = true }
 
-axum = "0.7"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 maud = { version = "0.26", features = ["axum"] }
+serde = { version = "1", features = ["derive"] }
+include_dir = "0.7"

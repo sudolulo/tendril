@@ -68,9 +68,7 @@ fn print_banner() {
     let ips = run_stdout("hostname", &["-I"]).unwrap_or_default();
     if let Some(ip) = ips.split_whitespace().next() {
         println!("  Address:   {ip}");
-        println!(
-            "  \x1b[2mWeb UI:    http://{ip}  (planned — manage from this console for now)\x1b[0m"
-        );
+        println!("  \x1b[2mWeb UI:    http://{ip}\x1b[0m");
     }
     if !is_root() {
         println!("  \x1b[33m(not root — station / GPU / network / power actions need sudo)\x1b[0m");

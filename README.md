@@ -40,11 +40,11 @@ Plus `scripts/build-installer.sh` (build the ISO) and `scripts/fetch-windows-med
 
 ## Install
 
-**Easiest:** grab the installer ISO from the
-[latest release](https://git.onetick.ninja/flan/tendril/releases) (it's split into `.part` files to
-fit the host's asset limit — `cat` them back per the release notes, verify against `SHA256SUMS`),
-flash it to a USB stick, boot the target, and install. Or build the image yourself — see
-**[docs/INSTALL.md](docs/INSTALL.md)** for both. Still pre-1.0; expect rough edges.
+**Easiest:** download the installer ISO — one file — from **https://dl.onetick.ninja/**, verify it
+against `SHA256SUMS`, flash it to a USB stick, boot the target, and install. (It's also mirrored in
+the [Gitea release](https://git.onetick.ninja/flan/tendril/releases), split into `.part` files to fit
+the 2 GiB asset cap — reassemble per the release notes.) Or build the image yourself — see
+**[docs/INSTALL.md](docs/INSTALL.md)**. Still pre-1.0; expect rough edges.
 
 **Prerequisite:** enable **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in your motherboard's BIOS —
 no software can turn this on for you.

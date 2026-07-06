@@ -6,6 +6,7 @@
 
 pub mod domain;
 pub mod guest;
+pub mod kickstart;
 pub mod lifecycle;
 pub mod role;
 pub mod station;
@@ -13,6 +14,7 @@ pub mod unattend;
 
 pub use domain::DomainSpec;
 pub use guest::InstallMedia;
+pub use kickstart::{render_kickstart, KickstartSpec};
 pub use lifecycle::{DomainState, Libvirt};
 pub use role::Role;
 pub use station::{GuestOs, StationSpec};

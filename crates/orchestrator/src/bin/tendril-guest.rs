@@ -9,8 +9,11 @@
 //! and prints the domain XML.
 //!
 //! ```text
+//! # Windows station (autounattend.xml seed + virtio driver injection):
 //! tendril-guest --create-disk --iso win11.iso --virtio-iso virtio-win.iso --unattend --start
-//! # ...Windows installs itself, reboots into the desktop...
+//! # SteamOS-style station (Bazzite; kickstart seed on an OEMDRV disc):
+//! tendril-guest --steamos --create-disk --iso bazzite-deck-nvidia.iso --unattend --start
+//! # ...the OS installs itself, reboots into the desktop / gaming mode...
 //! tendril-guest --finalize --start        # boot the installed station from disk (no media)
 //! ```
 
@@ -18,8 +21,10 @@ use std::path::{Path, PathBuf};
 
 use tendril_capability_engine::{iommu, matrix, pci};
 use tendril_orchestrator::domain::{render, DomainSpec};
-use tendril_orchestrator::guest::{build_seed_iso, create_disk};
-use tendril_orchestrator::{GuestOs, InstallMedia, Libvirt, StationSpec, UnattendSpec};
+use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso, create_disk};
+use tendril_orchestrator::{
+    GuestOs, InstallMedia, KickstartSpec, Libvirt, StationSpec, UnattendSpec,
+};
 use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
 fn arg_value(flag: &str) -> Option<String> {
@@ -71,13 +76,10 @@ fn main() {
     let media = if finalize {
         InstallMedia::none()
     } else {
-        let unattend_iso = if has_flag("--unattend") {
+        let seed_iso = if has_flag("--unattend") {
             match guest {
-                GuestOs::SteamOs => {
-                    eprintln!("--unattend is Windows-only; ignoring for a SteamOS station");
-                    None
-                }
                 GuestOs::Windows => Some(build_unattend_seed(&name, &disk)),
+                GuestOs::SteamOs => Some(build_kickstart_seed_file(&name, &disk)),
             }
         } else {
             None
@@ -85,13 +87,14 @@ fn main() {
         InstallMedia {
             install_iso: arg_value("--iso"),
             virtio_iso: arg_value("--virtio-iso"),
-            unattend_iso,
+            seed_iso,
         }
     };
 
-    // Booting an install ISO (not a finalized boot-from-disk) means we must clear the firmware's
-    // "press any key to boot from CD" prompt ourselves.
     let installing = !finalize && media.install_iso.is_some();
+    // Only the Windows ISO shows the firmware "press any key to boot from CD" prompt that skips the
+    // CD on timeout; the Bazzite installer's boot menu auto-selects, so leave it alone.
+    let clear_prompt = installing && matches!(guest, GuestOs::Windows);
 
     // 3. GPU passthrough group (unless installing headless via VNC first).
     let passthrough_addresses = if has_flag("--no-gpu") {
@@ -145,14 +148,14 @@ fn main() {
             Ok(()) => eprintln!(
                 "started '{name}' — connect a viewer to the VNC console to watch{}",
                 if installing {
-                    "; Windows will install itself unattended"
+                    "; the OS will install itself unattended"
                 } else {
                     ""
                 }
             ),
             Err(e) => die(format!("start failed: {e}")),
         }
-        if installing {
+        if clear_prompt {
             eprintln!("clearing the boot-from-CD prompt (~{}s)...", 18);
             lv.clear_boot_prompt(&name);
         }
@@ -199,6 +202,52 @@ fn build_unattend_seed(name: &str, disk: &str) -> String {
             seed.to_string_lossy().into_owned()
         }
         Err(e) => die(format!("build seed ISO failed: {e}")),
+    }
+}
+
+/// Build the `ks.cfg` kickstart seed ISO (label `OEMDRV`) for a Bazzite station, honoring overrides.
+fn build_kickstart_seed_file(name: &str, disk: &str) -> String {
+    let mut spec = KickstartSpec {
+        hostname: name.to_string(),
+        ..KickstartSpec::default()
+    };
+    if let Some(v) = arg_value("--username") {
+        spec.username = v;
+    }
+    if let Some(v) = arg_value("--password") {
+        spec.password = v;
+    }
+    if let Some(v) = arg_value("--hostname").or_else(|| arg_value("--computer-name")) {
+        spec.hostname = v;
+    }
+    if let Some(v) = arg_value("--locale") {
+        spec.locale = v;
+    }
+    if let Some(v) = arg_value("--timezone") {
+        spec.timezone = v;
+    }
+    if let Some(v) = arg_value("--image") {
+        spec.image_ref = v;
+    }
+    if has_flag("--no-autologon") {
+        spec.autologin = false;
+    }
+    if has_flag("--no-ssh") {
+        spec.enable_ssh = false;
+    }
+
+    let seed = arg_value("--seed-iso")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let dir = Path::new(disk).parent().unwrap_or_else(|| Path::new("."));
+            dir.join(format!("{name}-seed.iso"))
+        });
+    match build_kickstart_seed(&spec, &seed) {
+        Ok(()) => {
+            eprintln!("built kickstart seed ISO (OEMDRV) at {}", seed.display());
+            seed.to_string_lossy().into_owned()
+        }
+        Err(e) => die(format!("build kickstart seed failed: {e}")),
     }
 }
 

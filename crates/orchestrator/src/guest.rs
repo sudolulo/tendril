@@ -7,6 +7,7 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
+use crate::kickstart::{render_kickstart, KickstartSpec};
 use crate::unattend::{render_autounattend, UnattendSpec};
 
 /// Create a qcow2 disk of `size_gib` gigabytes at `path` (fails if it already exists).
@@ -38,12 +39,13 @@ pub fn create_disk(path: &Path, size_gib: u32) -> io::Result<()> {
 /// The install media a station needs to bring up its guest OS.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallMedia {
-    /// The OS install ISO (Windows or SteamOS/HoloISO/Bazzite).
+    /// The OS install ISO (Windows, or a SteamOS-style Bazzite ISO).
     pub install_iso: Option<String>,
     /// The virtio-win driver ISO — needed so Windows can see the virtio disk during setup.
     pub virtio_iso: Option<String>,
-    /// A "seed" ISO carrying `autounattend.xml` — makes the Windows install hands-off.
-    pub unattend_iso: Option<String>,
+    /// A "seed" ISO driving the install hands-off: `autounattend.xml` for Windows, or a
+    /// `ks.cfg` kickstart (on an `OEMDRV`-labelled disc) for a Bazzite station.
+    pub seed_iso: Option<String>,
 }
 
 impl InstallMedia {
@@ -53,17 +55,38 @@ impl InstallMedia {
     }
 }
 
-/// Build a small ISO carrying `autounattend.xml` at its root, from `spec`, at `out_path`.
+/// Build a seed ISO carrying `autounattend.xml` for a hands-off Windows install.
 ///
 /// Windows Setup scans every attached removable/optical drive for `autounattend.xml` during WinPE, so
 /// this seed disc — attached alongside the Windows and virtio ISOs — drives the whole install without
-/// a keypress. Uses `genisoimage` (or `mkisofs`), already needed by `fetch-windows-media.sh`.
+/// a keypress.
 pub fn build_seed_iso(spec: &UnattendSpec, out_path: &Path) -> io::Result<()> {
+    // Any volume label works — Windows scans all drives for the file by name.
+    build_media_iso(
+        &[("autounattend.xml", render_autounattend(spec))],
+        "TENDRIL_SEED",
+        out_path,
+    )
+}
+
+/// Build a seed ISO carrying a `ks.cfg` kickstart for a hands-off Bazzite (SteamOS-style) install.
+///
+/// The disc is labelled `OEMDRV`, which Anaconda auto-detects and reads `ks.cfg` from — no installer
+/// kernel argument or media modification needed.
+pub fn build_kickstart_seed(spec: &KickstartSpec, out_path: &Path) -> io::Result<()> {
+    build_media_iso(&[("ks.cfg", render_kickstart(spec))], "OEMDRV", out_path)
+}
+
+/// Write `files` (name → content) to the root of a fresh ISO with volume `label`, at `out_path`.
+/// Uses `genisoimage` (or `mkisofs`), already needed by `fetch-windows-media.sh`.
+fn build_media_iso(files: &[(&str, String)], label: &str, out_path: &Path) -> io::Result<()> {
     let staging = out_path.with_extension("seed.d");
     // Fresh staging dir each time so a re-run reflects the current spec.
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
-    std::fs::write(staging.join("autounattend.xml"), render_autounattend(spec))?;
+    for (name, content) in files {
+        std::fs::write(staging.join(name), content)?;
+    }
 
     let mkisofs = which_mkisofs().ok_or_else(|| {
         io::Error::new(
@@ -74,10 +97,10 @@ pub fn build_seed_iso(spec: &UnattendSpec, out_path: &Path) -> io::Result<()> {
     let out = Command::new(mkisofs)
         .args([
             "-quiet",
-            "-J", // Joliet, so Windows reads the filename
+            "-J", // Joliet + Rock Ridge, so the long filename survives
             "-r",
             "-V",
-            "TENDRIL_SEED",
+            label,
             "-o",
             &out_path.to_string_lossy(),
             &staging.to_string_lossy(),

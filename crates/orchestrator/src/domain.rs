@@ -114,8 +114,8 @@ pub fn render(spec: &DomainSpec) -> String {
         xml.push_str("      <readonly/>\n");
         xml.push_str("    </disk>\n");
     }
-    // Unattended-setup seed (third cdrom): carries autounattend.xml so the install is hands-off.
-    if let Some(iso) = &spec.media.unattend_iso {
+    // Unattended-setup seed (third cdrom): autounattend.xml (Windows) or a kickstart (Bazzite).
+    if let Some(iso) = &spec.media.seed_iso {
         xml.push_str("    <disk type='file' device='cdrom'>\n");
         xml.push_str("      <driver name='qemu' type='raw'/>\n");
         let _ = writeln!(xml, "      <source file='{iso}'/>");
@@ -239,7 +239,7 @@ mod tests {
             media: InstallMedia {
                 install_iso: Some("/isos/win11.iso".to_string()),
                 virtio_iso: Some("/isos/virtio-win.iso".to_string()),
-                unattend_iso: Some("/isos/station1-seed.iso".to_string()),
+                seed_iso: Some("/isos/station1-seed.iso".to_string()),
             },
             usb_devices: vec![],
         };

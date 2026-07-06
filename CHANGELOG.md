@@ -9,23 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-07-06
 
-Hands-off Windows install: a station now boots a stock Windows 11 ISO and installs itself
-unattended — past the "no drives found" (virtio) and Microsoft-account (OOBE) walls — then boots
-straight from disk.
+Hands-off guest install for both station types: a station boots a stock Windows 11 ISO (or a
+SteamOS-style Bazzite ISO) and installs itself unattended, then boots straight from disk.
 
 ### Added
 - **Unattended Windows setup.** New `orchestrator::unattend` generates a Windows `autounattend.xml`
   that injects the virtio storage driver in WinPE (so the disk is visible), auto-partitions the disk,
   skips the OOBE / Microsoft-account screens, creates a local administrator, optionally auto-logs in,
   and installs the virtio guest tools (QEMU guest agent, balloon, network) on first logon.
-- **Seed ISO builder.** New `orchestrator::guest::build_seed_iso` writes the answer file onto a small
-  ISO (`autounattend.xml` at the root, via `genisoimage`); Windows Setup reads it automatically. The
-  domain renderer attaches it as a third cdrom, and `InstallMedia` gains an `unattend_iso` field.
+- **Unattended SteamOS install.** New `orchestrator::kickstart` generates an Anaconda kickstart that
+  wipes the disk, installs the OS image, creates a sudo user, enables SSH, and auto-logs into Steam
+  gaming mode. Valve ships no generic-PC SteamOS installer (the Deck recovery image is image-based
+  and AMD-only, so it can't drive an NVIDIA station), so the "SteamOS" station is
+  [Bazzite](https://bazzite.gg) — an atomic, gaming-mode image with a scriptable Anaconda ISO. New
+  `scripts/fetch-steamos-media.sh` grabs the Bazzite (Deck/NVIDIA) ISO.
+- **Seed ISO builder.** New `orchestrator::guest::build_seed_iso` / `build_kickstart_seed` write the
+  answer file onto a small ISO — `autounattend.xml` (any label, Windows scans all drives) or `ks.cfg`
+  on an `OEMDRV`-labelled disc (Anaconda auto-loads it). The domain renderer attaches it as a third
+  cdrom, and `InstallMedia` gains a `seed_iso` field.
 - **End-to-end station install.** `tendril-guest` now composes the whole flow: create disk → build
-  the seed ISO (`--unattend`, with `--username`/`--password`/`--computer-name`/`--locale`/
-  `--timezone`/`--edition` overrides) → render the install domain → `--define`/`--start` to register
-  and launch it. `--finalize` re-renders the domain without any install media so the installed
-  station boots from disk; `--no-gpu` installs headless via VNC before a GPU is attached.
+  the seed ISO (`--unattend`) → render the install domain → `--define`/`--start` to register and
+  launch it. Windows honors `--username`/`--password`/`--computer-name`/`--locale`/`--timezone`/
+  `--edition`; SteamOS honors `--username`/`--password`/`--hostname`/`--image`/`--no-ssh`. `--steamos`
+  selects the Bazzite path (and auto-taps Enter through the Windows CD boot prompt only where needed).
+  `--finalize` re-renders the domain without install media so the station boots from disk; `--no-gpu`
+  installs headless via VNC before a GPU is attached.
 
 ## [0.5.0] - 2026-07-05
 

@@ -142,8 +142,27 @@ straight from disk:
 sudo tendril-guest --name station1 --finalize --start
 ```
 
-Add `--steamos` instead for a SteamOS station (no answer file needed); `--native-hardware` applies
-the opt-in fingerprint-reduction overlay (read the ToS warnings in the README first).
+### SteamOS-style (Bazzite) station
+
+Valve ships no generic-PC SteamOS installer (the Steam Deck recovery image is image-based and
+AMD-only, so it can't drive an NVIDIA station). Until it does, Tendril's SteamOS station is
+[Bazzite](https://bazzite.gg) — an atomic, Steam-gaming-mode image with a scriptable Anaconda ISO:
+
+```bash
+scripts/fetch-steamos-media.sh --dest /var/lib/tendril/isos   # Bazzite Deck/NVIDIA ISO
+
+sudo tendril-guest \
+  --steamos --name station2 --create-disk --size-gib 128 \
+  --iso /var/lib/tendril/isos/bazzite-deck-nvidia.iso \
+  --unattend --username player --password changeme \
+  --start
+```
+
+`--unattend` builds a `ks.cfg` kickstart on an `OEMDRV`-labelled seed ISO, which Anaconda auto-loads:
+it wipes the disk, installs the image, creates the user, enables SSH, and auto-logs into Steam gaming
+mode. Override the image with `--image ghcr.io/ublue-os/bazzite-deck:stable` (e.g. AMD/Intel), or
+`--no-ssh`. Then `--finalize --start` to boot from disk. `--native-hardware` applies the opt-in
+fingerprint-reduction overlay (read the ToS warnings in the README first).
 
 ## What's not here yet
 

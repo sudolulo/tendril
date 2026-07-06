@@ -4,6 +4,7 @@ members = [
     "crates/capability-engine",
     "crates/provisioning",
     "crates/orchestrator",
+    "crates/web",
 ]
 
 [workspace.package]
@@ -15,3 +16,4 @@ authors = ["Tendril contributors"]
 [workspace.dependencies]
 tendril-capability-engine = { path = "crates/capability-engine" }
 tendril-provisioning = { path = "crates/provisioning" }
+tendril-orchestrator = { path = "crates/orchestrator" }

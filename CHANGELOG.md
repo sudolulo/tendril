@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Web UI (in progress).** New `crates/web` (`tendril-web`) — the control plane, built in **Axum +
+  HTMX** over the shared `orchestrator::provision` service (same code path as the console and CLI).
+  Server-rendered HTML with Maud, htmx embedded in the binary (no CDN). First slice: a dashboard with
+  the live hardware/capability table and a self-refreshing stations panel (start / shut down / force
+  off via HTMX). Not yet shipped in the image.
+
 ## [0.7.0] - 2026-07-06
 
 An interactive console for the whole host — the stepping stone to the web UI. Boot the Tendril OS to

@@ -1,8 +1,21 @@
 # Installing Tendril
 
-> ⚠️ **Pre-release.** Tendril does not yet ship a published image or a turnkey installer. This guide
-> covers building the host image yourself and deploying it with [`bootc`](https://bootc-dev.github.io/bootc/).
-> Expect rough edges; this is for testers and contributors.
+> ⚠️ **Pre-1.0.** There's a bootable installer ISO (below), but no graphical VM wizard yet — for
+> testers and contributors. Expect rough edges.
+
+## 0. Install from the release ISO (easiest)
+
+Download the installer from the [latest release](https://git.onetick.ninja/flan/tendril/releases).
+It's split into `.part` files (the host caps release assets at 2 GiB); reassemble, verify, and flash:
+
+```bash
+cat tendril-*-installer-x86_64.iso.part* > tendril-installer.iso
+sha256sum -c SHA256SUMS
+sudo dd if=tendril-installer.iso of=/dev/sdX bs=4M status=progress
+```
+
+Boot the target from the USB stick, follow the installer, then jump to **step 4 (Verify)**. Prefer
+to build it yourself? Continue below.
 
 ## 1. Prerequisites
 

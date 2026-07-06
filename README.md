@@ -22,19 +22,29 @@ driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get 
 
 ## What works today
 
-Tendril is **pre-release**. The host-side provisioning pipeline runs and is validated on real
-hardware; there is not yet a turnkey installer or VM wizard. The building-block CLIs:
+**v0.5.0 — first bootable release.** There's a flashable installer ISO (built from the bootc image),
+the full host-side provisioning pipeline, and libvirt orchestration — all validated on real hardware.
+No graphical VM wizard yet; you create stations with the CLIs:
 
 | Tool | What it does |
 |---|---|
 | `tendril-detect` | Enumerates GPUs + IOMMU groups, classifies each as passthrough / host-only |
 | `tendril-plan` | Computes the exact `vfio-pci` bind set for a GPU (its whole IOMMU group) |
 | `tendril-apply` | Binds a GPU to `vfio-pci` — **dry-run by default**, `--execute` to enact |
+| `tendril-domain` | Renders a libvirt domain (Secure Boot + TPM, passthrough hostdevs) for a GPU |
+| `tendril-vm` | Renders and (with `--define`) registers a station's VM with libvirt |
+| `tendril-guest` | Creates the station disk + the OS-install domain (Windows/SteamOS) |
+| `tendril-usb` | Lists USB controllers + devices for multi-seat assignment |
+
+Plus `scripts/build-installer.sh` (build the ISO) and `scripts/fetch-windows-media.sh` (Win11 + virtio-win ISOs).
 
 ## Install
 
-> ⚠️ **Pre-release.** No published image or one-click installer yet. Today you build the host image
-> yourself and deploy it with `bootc`. See **[docs/INSTALL.md](docs/INSTALL.md)** for the full guide.
+**Easiest:** grab the installer ISO from the
+[latest release](https://git.onetick.ninja/flan/tendril/releases) (it's split into `.part` files to
+fit the host's asset limit — `cat` them back per the release notes, verify against `SHA256SUMS`),
+flash it to a USB stick, boot the target, and install. Or build the image yourself — see
+**[docs/INSTALL.md](docs/INSTALL.md)** for both. Still pre-1.0; expect rough edges.
 
 **Prerequisite:** enable **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in your motherboard's BIOS —
 no software can turn this on for you.
@@ -75,10 +85,11 @@ cargo run --bin tendril-detect
 | Detection | GPU + IOMMU enumeration → capability matrix | ✅ Done |
 | Provisioning · plan | Per-GPU VFIO bind config (whole IOMMU group) | ✅ Done |
 | Provisioning · apply | Bind GPU to `vfio-pci` (dry-run + execute) | ✅ Done |
-| Host image | Fedora bootc + virt stack + IOMMU kargs + binaries | 🔨 In progress |
-| VM orchestration | libvirt domain templating; create/manage stations | 📋 Planned |
-| Guest images | Automated Windows + SteamOS (Secure Boot/TPM, virtio) | 📋 Planned |
-| Multi-seat | N GPUs → N stations; USB-controller + audio routing | 📋 Planned |
+| Host image + installer | Fedora bootc image + flashable installer ISO | ✅ Done |
+| VM orchestration | libvirt domain templating + lifecycle (`virsh`) | ✅ Done |
+| Guest disks & media | qcow2 disks, install ISOs, Win11 + virtio fetch | ✅ Done |
+| Multi-seat USB | USB controller + per-device passthrough | ✅ Done |
+| Guest OS install | Boot a Windows/SteamOS station end-to-end | 🔨 Next |
 | Control plane | Web UI + "create gaming station" wizard | 📋 Planned |
 | vGPU | >1 VM per GPU (official + `vgpu_unlock`) | 🔭 Future |
 | Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |

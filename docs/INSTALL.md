@@ -42,10 +42,12 @@ This produces a Fedora bootc image containing:
 - the VFIO modules loaded at boot;
 - the `tendril-detect` / `tendril-plan` / `tendril-apply` binaries.
 
-Push it to a registry your target can reach if you're not building on the target itself:
+Push it to a registry your target can reach if you're not building on the target itself. The
+official image is published to Tendril's own Gitea registry:
 
 ```bash
-podman push tendril:dev registry.example/you/tendril:dev
+podman tag tendril:dev git.onetick.ninja/flan/tendril:latest
+podman push git.onetick.ninja/flan/tendril:latest
 ```
 
 ## 2b. Build a bootable USB installer (easiest for end users)
@@ -71,7 +73,7 @@ sudo dd if=out/*.iso of=/dev/sdX bs=4M status=progress
 **Switch an existing Fedora bootc host:**
 
 ```bash
-sudo bootc switch localhost/tendril:dev   # or the registry ref you pushed
+sudo bootc switch git.onetick.ninja/flan/tendril:latest   # or a ref you pushed yourself
 sudo reboot
 ```
 

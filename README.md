@@ -59,8 +59,8 @@ Deploy it to a machine with [`bootc`](https://containers.github.io/bootc/) — e
 to a disk, or switch an existing Fedora bootc system over:
 
 ```bash
-# switch an existing Fedora bootc host to Tendril
-sudo bootc switch localhost/tendril:dev
+# switch an existing Fedora bootc host to Tendril (published image)
+sudo bootc switch git.onetick.ninja/flan/tendril:latest
 sudo reboot
 ```
 

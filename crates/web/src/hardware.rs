@@ -15,6 +15,7 @@ pub async fn page() -> Markup {
         html! {
             (ui::panel("GPUs & passthrough", None, gpu_fragment(None)))
             (ui::panel("USB devices", None, usb_panel()))
+            (ui::panel("Seats", Some("USB device groups a station passes through as one"), crate::seats::panel()))
         },
     )
 }

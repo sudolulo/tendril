@@ -171,10 +171,20 @@ fn create_form(error: Option<&str>) -> Markup {
                     div.field.check.wide { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } }
                     div.field { label { "Username" } input name="username" value="player"; }
                     div.field { label { "Password" } input name="password" value="tendril"; }
+                    @let seat_list = crate::seats::load();
+                    @if !seat_list.is_empty() {
+                        div.field.wide {
+                            label { "Seat (a saved group of USB devices — manage under Hardware)" }
+                            select name="seat" {
+                                option value="" { "None" }
+                                @for s in &seat_list { option value=(s.name) { (s.name) " (" (s.devices.len()) " devices)" } }
+                            }
+                        }
+                    }
                     @let usb_list = usb::devices();
                     @if !usb_list.is_empty() {
                         div.field.wide {
-                            label { "Pass through USB devices (keyboard, mouse, controller)" }
+                            label { "Or pick individual USB devices (keyboard, mouse, controller)" }
                             @for d in &usb_list {
                                 @let id = format!("{:04x}:{:04x}", d.vendor_id, d.product_id);
                                 @let uid = format!("usb-{id}");
@@ -217,11 +227,20 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             .unwrap_or_default()
     };
     let checked = |k: &str| form.iter().any(|(kk, _)| kk == k);
-    let usb_devices: Vec<UsbPassthrough> = form
+    let mut usb_devices: Vec<UsbPassthrough> = form
         .iter()
         .filter(|(k, _)| k == "usb")
         .filter_map(|(_, v)| parse_usb_id(v))
         .collect();
+    // A chosen seat contributes its whole USB group.
+    let seat = form
+        .iter()
+        .find(|(k, _)| k == "seat")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default();
+    if !seat.is_empty() {
+        usb_devices.extend(crate::seats::devices_of(&seat));
+    }
 
     let guest = if get("os") == "steamos" {
         GuestOs::SteamOs
@@ -461,6 +480,7 @@ pub async fn detail(Path(name): Path<String>) -> Response {
                         button.btn.sm hx-post=(format!("/stations/{name}/sendenter")) hx-swap="none"
                             title="Nudges a Windows installer past the 'press any key to boot from CD' prompt" { "Send Enter" }
                         span.sub { "A station with no OS (or stuck at firmware) shows black — this is live VNC, not an error." }
+                        (progress_fragment(&name))
                         @if let Some((host, disp, port)) = &ep {
                             span.badge.mono { "VNC " (host) ":" (port) " (display " (disp) ")" }
                         }
@@ -531,6 +551,35 @@ fn usb_fragment(lv: &Libvirt, name: &str) -> Markup {
 pub async fn send_enter(Path(name): Path<String>) -> StatusCode {
     let _ = Libvirt::system().send_key(&name, 28);
     StatusCode::NO_CONTENT
+}
+
+/// The station's OS disk path, from libvirt (the first `device='disk'` in its block list).
+fn disk_path(name: &str) -> Option<String> {
+    let out = ui::run_stdout(
+        "virsh",
+        &["-c", "qemu:///system", "domblklist", "--details", name],
+    )?;
+    out.lines().find_map(|l| {
+        let c: Vec<&str> = l.split_whitespace().collect();
+        (c.len() >= 4 && c[1] == "disk").then(|| c[3].to_string())
+    })
+}
+
+/// Live install-progress: how much has been written to the station's disk so far. Polls itself.
+pub async fn progress(Path(name): Path<String>) -> Markup {
+    progress_fragment(&name)
+}
+
+fn progress_fragment(name: &str) -> Markup {
+    let written = disk_path(name)
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    html! {
+        span #progress hx-get=(format!("/stations/{name}/progress")) hx-trigger="every 5s" hx-swap="outerHTML" {
+            span.badge { "disk written: " span.mono { (format!("{:.1} GB", written as f64 / 1e9)) } }
+        }
+    }
 }
 
 pub async fn usb_add(Path((name, id)): Path<(String, String)>) -> Markup {

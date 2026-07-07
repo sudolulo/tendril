@@ -34,6 +34,8 @@ async fn main() {
         .route("/stations/:name/stop", post(stations::stop))
         .route("/stations/:name/forceoff", post(stations::forceoff))
         .route("/stations/:name/delete", post(stations::delete))
+        .route("/stations/:name/usb/add/:id", post(stations::usb_add))
+        .route("/stations/:name/usb/remove/:id", post(stations::usb_remove))
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         // hardware
         .route("/hardware", get(hardware::page))
@@ -42,6 +44,11 @@ async fn main() {
         .route("/media", get(pages::media))
         .route("/media/fetch/:which", post(pages::fetch))
         .route("/network", get(pages::network))
+        // system / OS updates
+        .route("/system", get(pages::system))
+        .route("/system/check", post(pages::system_check))
+        .route("/system/update", post(pages::system_update))
+        .route("/system/auto", post(pages::system_auto))
         // assets
         .route("/assets/htmx.min.js", get(htmx_js))
         .route("/assets/novnc/*path", get(novnc_asset));

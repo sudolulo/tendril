@@ -101,6 +101,7 @@ fn main() {
         native_hardware: has_flag("--native-hardware"),
         passthrough_addresses,
         media,
+        usb_devices: Vec::new(),
         define,
         start,
     };

@@ -130,6 +130,49 @@ impl Libvirt {
         Self::ok(self.run(&["undefine", name, "--nvram"])?).map(|_| ())
     }
 
+    /// Attach a USB device (by vendor/product id) to a domain. Applies to the persistent config, and
+    /// live too if the domain is running (hot-plug).
+    pub fn attach_usb(&self, name: &str, vendor: u16, product: u16) -> io::Result<()> {
+        self.usb_device_op("attach-device", name, vendor, product)
+    }
+
+    /// Detach a previously-attached USB device (by vendor/product id) from a domain.
+    pub fn detach_usb(&self, name: &str, vendor: u16, product: u16) -> io::Result<()> {
+        self.usb_device_op("detach-device", name, vendor, product)
+    }
+
+    fn usb_device_op(&self, op: &str, name: &str, vendor: u16, product: u16) -> io::Result<()> {
+        let xml = format!(
+            "<hostdev mode='subsystem' type='usb' managed='yes'>\
+             <source><vendor id='0x{vendor:04x}'/><product id='0x{product:04x}'/></source>\
+             </hostdev>"
+        );
+        let path =
+            std::env::temp_dir().join(format!("tendril-usb-{name}-{vendor:04x}-{product:04x}.xml"));
+        std::fs::write(&path, xml)?;
+        let path_str = path.to_string_lossy().into_owned();
+        // --config persists it; --live also hot-(un)plugs when the domain is running.
+        let mut args = vec![op, name, path_str.as_str(), "--config"];
+        if matches!(self.state(name), DomainState::Running) {
+            args.push("--live");
+        }
+        let result = self.run(&args);
+        let _ = std::fs::remove_file(&path);
+        Self::ok(result?).map(|_| ())
+    }
+
+    /// The USB devices currently passed through to a domain, as `(vendor_id, product_id)` — parsed
+    /// from its persistent XML.
+    pub fn usb_devices(&self, name: &str) -> Vec<(u16, u16)> {
+        let Ok(out) = self.run(&["dumpxml", "--inactive", name]) else {
+            return Vec::new();
+        };
+        if !out.status.success() {
+            return Vec::new();
+        }
+        parse_usb_hostdevs(&String::from_utf8_lossy(&out.stdout))
+    }
+
     /// Names of all defined domains (running or not); empty if virsh is unreachable.
     pub fn list(&self) -> Vec<String> {
         match self.run(&["list", "--all", "--name"]) {
@@ -154,6 +197,31 @@ impl Libvirt {
     }
 }
 
+/// Extract the `(vendor_id, product_id)` of every `type='usb'` `<hostdev>` in a domain's XML.
+/// A tiny scan rather than a full XML parse — libvirt's output is stable and single-quoted.
+fn parse_usb_hostdevs(xml: &str) -> Vec<(u16, u16)> {
+    let mut out = Vec::new();
+    for block in xml.split("<hostdev").skip(1) {
+        let block = block.split("</hostdev>").next().unwrap_or(block);
+        if !block.contains("type='usb'") {
+            continue;
+        }
+        if let (Some(v), Some(p)) = (hex_attr(block, "vendor"), hex_attr(block, "product")) {
+            out.push((v, p));
+        }
+    }
+    out
+}
+
+/// Pull the hex id from a `<{elem} id='0x....'/>` element within `block`.
+fn hex_attr(block: &str, elem: &str) -> Option<u16> {
+    let needle = format!("<{elem} id='0x");
+    let start = block.find(&needle)? + needle.len();
+    let rest = &block[start..];
+    let end = rest.find('\'')?;
+    u16::from_str_radix(&rest[..end], 16).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +233,23 @@ mod tests {
             lv.virsh_args(&["start", "station1"]),
             vec!["-c", "qemu:///system", "start", "station1"]
         );
+    }
+
+    #[test]
+    fn parses_usb_hostdevs_only() {
+        let xml = "\
+<domain>\
+ <devices>\
+  <hostdev mode='subsystem' type='pci' managed='yes'><source><address domain='0x0000' bus='0x07'/></source></hostdev>\
+  <hostdev mode='subsystem' type='usb' managed='yes'><source><vendor id='0x046d'/><product id='0xc52b'/></source></hostdev>\
+  <hostdev mode='subsystem' type='usb' managed='yes'><source><vendor id='0x1234'/><product id='0xabcd'/></source></hostdev>\
+ </devices>\
+</domain>";
+        assert_eq!(
+            parse_usb_hostdevs(xml),
+            vec![(0x046d, 0xc52b), (0x1234, 0xabcd)]
+        );
+        assert!(parse_usb_hostdevs("<domain><devices/></domain>").is_empty());
     }
 
     #[test]

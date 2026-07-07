@@ -14,6 +14,7 @@ const NAV: &[(&str, &str, &str)] = &[
     ("/hardware", "hardware", "Hardware"),
     ("/media", "media", "Media"),
     ("/network", "network", "Network"),
+    ("/system", "system", "System"),
 ];
 
 /// Full-page shell. `active` highlights the current nav item.
@@ -57,6 +58,9 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                         }
                     }
                     div.spacer {}
+                    @if update_staged() {
+                        a.updatebadge href="/system" title="A new OS image is downloaded and ready" { "⬆ Update ready" }
+                    }
                     @if !host.is_empty() {
                         div.host { span.led {} (host) " · " span.mono { (ip) } }
                     }
@@ -117,6 +121,21 @@ pub fn state_class(s: DomainState) -> &'static str {
         DomainState::Running => "running",
         DomainState::Paused => "installing",
         _ => "off",
+    }
+}
+
+/// True if a bootc OS update is downloaded and staged (pending a reboot). Fast/local — reads
+/// `bootc status`, no network. False when bootc is absent (e.g. a dev host).
+pub fn update_staged() -> bool {
+    let Some(j) = run_stdout("bootc", &["status", "--format", "json"]) else {
+        return false;
+    };
+    // "staged": {...} → an update is staged; "staged": null → none.
+    match j.find("\"staged\"") {
+        Some(i) => j[i + "\"staged\"".len()..]
+            .trim_start_matches([':', ' ', '\n', '\t', '\r'])
+            .starts_with('{'),
+        None => false,
     }
 }
 
@@ -193,6 +212,9 @@ a { color:var(--accent); text-decoration:none; }
   border-radius:999px; background:var(--surface); color:var(--muted); font-size:12.5px; }
 .host .led { width:7px; height:7px; border-radius:50%; background:var(--ok); flex:none; }
 .host .mono { color:var(--fg); }
+.updatebadge { background:var(--info-soft); color:var(--info); border:1px solid var(--info);
+  padding:5px 11px; border-radius:999px; font-size:12.5px; font-weight:600; white-space:nowrap; }
+.updatebadge:hover { filter:brightness(1.12); }
 
 .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:24px; }
 .stat { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);

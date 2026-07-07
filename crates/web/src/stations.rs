@@ -9,15 +9,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
 use maud::{html, Markup};
-use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use tendril_capability_engine::{detect, iommu, pci};
+use tendril_capability_engine::{detect, iommu, pci, usb};
 use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso};
 use tendril_orchestrator::{
     provision, DomainState, GuestOs, InstallMedia, KickstartSpec, Libvirt, StationRequest,
-    UnattendSpec,
+    UnattendSpec, UsbPassthrough,
 };
 use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
@@ -61,6 +60,7 @@ fn row(lv: &Libvirt, name: &str) -> Markup {
                         (action_btn(name, "stop", "Shut down", true))
                     } @else {
                         (action_btn(name, "start", "Start", false))
+                        (delete_btn(name))
                     }
                 }
             }
@@ -73,6 +73,18 @@ fn action_btn(name: &str, action: &str, label: &str, danger: bool) -> Markup {
         button class=(if danger { "btn sm danger" } else { "btn sm" })
             hx-post=(format!("/stations/{name}/{action}"))
             hx-target="#stations" hx-swap="outerHTML" { (label) }
+    }
+}
+
+/// Delete button with a typed browser confirm (removes the VM definition; the disk file is kept).
+fn delete_btn(name: &str) -> Markup {
+    html! {
+        button.btn.sm.danger
+            hx-post=(format!("/stations/{name}/delete"))
+            hx-target="#stations" hx-swap="outerHTML"
+            hx-confirm=(format!("Delete station '{name}'? This removes the VM definition. Its disk image is left on disk.")) {
+            "Delete"
+        }
     }
 }
 
@@ -164,6 +176,21 @@ fn create_form(error: Option<&str>) -> Markup {
                     div.field.wide { label { "Computer name / hostname" } input name="hostname" value="STATION1"; }
                     div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
                     div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install)" } }
+                    @let usb_list = usb::devices();
+                    @if !usb_list.is_empty() {
+                        div.field.wide {
+                            label { "Pass through USB devices (keyboard, mouse, controller)" }
+                            @for d in &usb_list {
+                                @let id = format!("{:04x}:{:04x}", d.vendor_id, d.product_id);
+                                @let uid = format!("usb-{id}");
+                                div.check {
+                                    input type="checkbox" name="usb" value=(id) id=(uid);
+                                    label for=(uid) { (d.product.as_deref().unwrap_or("USB device")) " " span.sub.mono { "(" (id) ")" } }
+                                }
+                            }
+                            span.hint { "You can also add or remove these after the station is created." }
+                        }
+                    }
                     div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create station" } a.btn href="/stations" { "Cancel" } } }
                 }
             }))
@@ -171,46 +198,49 @@ fn create_form(error: Option<&str>) -> Markup {
     )
 }
 
-#[derive(Deserialize)]
-pub struct CreateForm {
-    name: String,
-    os: String,
-    gpu: String,
-    disk: String,
-    size_gib: String,
-    vcpus: String,
-    memory_mib: String,
-    iso: String,
-    virtio_iso: String,
-    #[serde(default)]
-    unattend: Option<String>,
-    username: String,
-    password: String,
-    hostname: String,
-    #[serde(default)]
-    native: Option<String>,
-    #[serde(default)]
-    start: Option<String>,
-}
+/// The create form is parsed as raw pairs so repeated `usb` checkboxes are all captured.
+pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
+    let get = |k: &str| -> String {
+        form.iter()
+            .rev()
+            .find(|(kk, _)| kk == k)
+            .map(|(_, v)| v.trim().to_string())
+            .unwrap_or_default()
+    };
+    let checked = |k: &str| form.iter().any(|(kk, _)| kk == k);
+    let usb_devices: Vec<UsbPassthrough> = form
+        .iter()
+        .filter(|(k, _)| k == "usb")
+        .filter_map(|(_, v)| parse_usb_id(v))
+        .collect();
 
-pub async fn create(Form(f): Form<CreateForm>) -> Response {
-    let guest = if f.os == "steamos" {
+    let guest = if get("os") == "steamos" {
         GuestOs::SteamOs
     } else {
         GuestOs::Windows
     };
-    let name = f.name.trim().to_string();
+    let name = get("name");
     if name.is_empty() {
         return create_form(Some("Station name is required.")).into_response();
     }
-    let disk = if f.disk.trim().is_empty() {
-        format!("{DISK_DIR}/{name}.qcow2")
-    } else {
-        f.disk.trim().to_string()
+    let disk = {
+        let d = get("disk");
+        if d.is_empty() {
+            format!("{DISK_DIR}/{name}.qcow2")
+        } else {
+            d
+        }
     };
 
-    let seed_iso = if f.unattend.is_some() {
-        match build_seed(guest, &name, &disk, &f.username, &f.password, &f.hostname) {
+    let seed_iso = if checked("unattend") {
+        match build_seed(
+            guest,
+            &name,
+            &disk,
+            &get("username"),
+            &get("password"),
+            &get("hostname"),
+        ) {
             Ok(p) => Some(p),
             Err(e) => {
                 return create_form(Some(&format!("Building the seed ISO failed: {e}")))
@@ -225,23 +255,24 @@ pub async fn create(Form(f): Form<CreateForm>) -> Response {
         name: name.clone(),
         guest,
         disk_path: disk.clone(),
-        size_gib: f.size_gib.trim().parse().unwrap_or(128),
+        size_gib: get("size_gib").parse().unwrap_or(128),
         create_disk: !FsPath::new(&disk).exists(),
-        vcpus: f.vcpus.trim().parse().unwrap_or(8),
-        memory_mib: f.memory_mib.trim().parse().unwrap_or(16384),
-        native_hardware: f.native.is_some(),
-        passthrough_addresses: passthrough_for(f.gpu.trim()),
+        vcpus: get("vcpus").parse().unwrap_or(8),
+        memory_mib: get("memory_mib").parse().unwrap_or(16384),
+        native_hardware: checked("native"),
+        passthrough_addresses: passthrough_for(&get("gpu")),
         media: InstallMedia {
-            install_iso: nonempty(&f.iso),
+            install_iso: nonempty(&get("iso")),
             virtio_iso: if matches!(guest, GuestOs::Windows) {
-                nonempty(&f.virtio_iso)
+                nonempty(&get("virtio_iso"))
             } else {
                 None
             },
             seed_iso,
         },
+        usb_devices,
         define: true,
-        start: f.start.is_some(),
+        start: checked("start"),
     };
 
     let lv = Libvirt::system();
@@ -329,6 +360,15 @@ fn nonempty(s: &str) -> Option<String> {
     }
 }
 
+/// Parse a `"vvvv:pppp"` hex USB id into a passthrough spec.
+fn parse_usb_id(s: &str) -> Option<UsbPassthrough> {
+    let (v, p) = s.split_once(':')?;
+    Some(UsbPassthrough {
+        vendor_id: u16::from_str_radix(v.trim(), 16).ok()?,
+        product_id: u16::from_str_radix(p.trim(), 16).ok()?,
+    })
+}
+
 // ── detail + console ────────────────────────────────────────────────────────────────────────
 
 pub async fn detail(Path(name): Path<String>) -> Response {
@@ -364,17 +404,96 @@ pub async fn detail(Path(name): Path<String>) -> Response {
         }
         (ui::panel("Console", None, html! {
             @if running {
+                @let ep = vnc_endpoint(&name);
                 div.pad {
                     div.console { div id="screen" {} }
-                    p.sub style="margin:.6rem 0 0" { "Live VNC. During an unattended install this is where you watch it run." }
+                    div style="margin:.7rem 0 0; display:flex; gap:16px; flex-wrap:wrap; align-items:center" {
+                        span.sub { "Live VNC — a station with no OS shows a black screen; boot an installer to see it." }
+                        @if let Some((host, disp, port)) = &ep {
+                            span.badge.mono { "VNC " (host) ":" (port) " (display " (disp) ")" }
+                        }
+                    }
                 }
                 script type="module" { (maud::PreEscaped(console_script(&name))) }
             } @else {
                 div.emptybox { "The station is not running. Start it to open the console." }
             }
         }))
+        (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
     })
     .into_response()
+}
+
+/// The USB passthrough panel: what's attached (with Remove), and what's available to add. Swapped in
+/// place by the add/remove actions.
+fn usb_fragment(lv: &Libvirt, name: &str) -> Markup {
+    let attached = lv.usb_devices(name);
+    let connected = usb::devices();
+    let friendly = |v: u16, p: u16| -> Option<String> {
+        connected
+            .iter()
+            .find(|d| d.vendor_id == v && d.product_id == p)
+            .and_then(|d| d.product.clone())
+    };
+    let addable: Vec<&usb::UsbDevice> = connected
+        .iter()
+        .filter(|d| {
+            !attached
+                .iter()
+                .any(|(v, p)| *v == d.vendor_id && *p == d.product_id)
+        })
+        .collect();
+    html! {
+        div #usb {
+            div.pad {
+                p.sub style="margin:0 0 8px" { "Passed through to this station:" }
+                @if attached.is_empty() {
+                    p.muted { "None." }
+                } @else {
+                    @for (v, p) in &attached {
+                        @let id = format!("{v:04x}:{p:04x}");
+                        div style="display:flex; align-items:center; gap:10px; padding:5px 0; border-bottom:1px solid var(--line)" {
+                            span { (friendly(*v, *p).as_deref().unwrap_or("USB device")) " " span.sub.mono { "(" (id) ")" } }
+                            div style="flex:1" {}
+                            button.btn.sm.danger hx-post=(format!("/stations/{name}/usb/remove/{id}")) hx-target="#usb" hx-swap="outerHTML" { "Remove" }
+                        }
+                    }
+                }
+                @if !addable.is_empty() {
+                    p.sub style="margin:16px 0 8px" { "Available on the host — add one:" }
+                    @for d in &addable {
+                        @let id = format!("{:04x}:{:04x}", d.vendor_id, d.product_id);
+                        div style="display:flex; align-items:center; gap:10px; padding:5px 0" {
+                            span { (d.product.as_deref().unwrap_or("USB device")) " " span.sub.mono { "(" (id) ")" } }
+                            div style="flex:1" {}
+                            button.btn.sm hx-post=(format!("/stations/{name}/usb/add/{id}")) hx-target="#usb" hx-swap="outerHTML" { "Add" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub async fn usb_add(Path((name, id)): Path<(String, String)>) -> Markup {
+    usb_op(&name, &id, true)
+}
+
+pub async fn usb_remove(Path((name, id)): Path<(String, String)>) -> Markup {
+    usb_op(&name, &id, false)
+}
+
+fn usb_op(name: &str, id: &str, add: bool) -> Markup {
+    let lv = Libvirt::system();
+    let err = match parse_usb_id(id) {
+        Some(u) if add => lv.attach_usb(name, u.vendor_id, u.product_id).err(),
+        Some(u) => lv.detach_usb(name, u.vendor_id, u.product_id).err(),
+        None => Some(std::io::Error::other("invalid USB id")),
+    };
+    html! {
+        @if let Some(e) = err { div.banner.error { (e.to_string()) } }
+        (usb_fragment(&lv, name))
+    }
 }
 
 fn console_script(name: &str) -> String {
@@ -414,6 +533,20 @@ fn vnc_port(name: &str) -> Option<u16> {
         .parse()
         .ok()?;
     Some(5900 + n)
+}
+
+/// The VNC endpoint for display in the console: (host address, `:N` display, TCP port).
+/// The server binds VNC to the host's loopback by default, so a native viewer needs an SSH tunnel
+/// (`ssh -L PORT:127.0.0.1:PORT host`); the in-browser console proxies it for you.
+fn vnc_endpoint(name: &str) -> Option<(String, String, u16)> {
+    let port = vnc_port(name)?;
+    let host = ui::run_stdout("hostname", &["-I"])
+        .unwrap_or_default()
+        .split_whitespace()
+        .next()
+        .unwrap_or("127.0.0.1")
+        .to_string();
+    Some((host, format!(":{}", port - 5900), port))
 }
 
 async fn relay(mut socket: WebSocket, port: u16) {

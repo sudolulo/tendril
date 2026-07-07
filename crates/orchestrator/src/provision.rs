@@ -9,7 +9,7 @@
 use std::io;
 use std::path::Path;
 
-use crate::domain::{render, DomainSpec};
+use crate::domain::{render, DomainSpec, UsbPassthrough};
 use crate::guest::{create_disk, InstallMedia};
 use crate::lifecycle::Libvirt;
 use crate::station::{GuestOs, StationSpec};
@@ -30,6 +30,8 @@ pub struct StationRequest {
     pub passthrough_addresses: Vec<String>,
     /// Install media (install ISO, virtio-win, unattended seed) — already resolved/built.
     pub media: InstallMedia,
+    /// USB devices to pass through (a seat's keyboard/mouse/controller), by vendor/product id.
+    pub usb_devices: Vec<UsbPassthrough>,
     /// Register the domain with libvirt.
     pub define: bool,
     /// Start the domain (implies `define`).
@@ -96,7 +98,7 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
         disk_path: req.disk_path.clone(),
         passthrough_addresses: req.passthrough_addresses.clone(),
         media: req.media.clone(),
-        usb_devices: Vec::new(),
+        usb_devices: req.usb_devices.clone(),
     };
     report.xml = render(&spec);
 
@@ -127,6 +129,7 @@ mod tests {
             native_hardware: false,
             passthrough_addresses: vec![],
             media: InstallMedia::none(),
+            usb_devices: vec![],
             define: false,
             start: false,
         }

@@ -34,7 +34,7 @@ pub async fn dashboard() -> Markup {
                 (stat("Stations", &names.len().to_string(), false, None))
                 (stat("Running", &running.to_string(), true, None))
                 (stat("GPUs · passthrough-ready", &ready.to_string(), false, Some(&format!("/ {}", matrix.gpus.len()))))
-                (stat("Host capacity", &format!("{threads}t"), false, Some(&format!("· {mem_gib} GB"))))
+                (stat("Host capacity", &threads.to_string(), false, Some(&format!("threads · {mem_gib} GB RAM"))))
             }
             (ui::panel("Stations", None, stations::fragment(&lv)))
             (ui::panel("Hardware", Some(&format!("{ready} of {} GPUs ready", matrix.gpus.len())), html! {
@@ -201,4 +201,103 @@ fn dns() -> String {
         .filter(|l| l.starts_with("nameserver") || l.starts_with("search"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// ── system / OS updates (bootc) ───────────────────────────────────────────────────────────────
+
+/// The bootc auto-update timer that periodically fetches and stages new images.
+const AUTO_TIMER: &str = "bootc-fetch-apply-updates.timer";
+
+pub async fn system() -> Markup {
+    let status = ui::run_stdout("bootc", &["status"]);
+    ui::page(
+        "system",
+        "System",
+        html! {
+            @if status.is_none() {
+                (ui::panel("OS updates", None, html! {
+                    div.pad { p.muted {
+                        "This host isn't running bootc, so OS updates aren't managed here. On a Tendril "
+                        "install this shows your image version and lets you update the whole OS atomically."
+                    } }
+                }))
+            } @else {
+                (ui::panel("OS image", None, html! {
+                    div.pad {
+                        pre.mono style="margin:0; overflow-x:auto; white-space:pre-wrap; font-size:12.5px" { (status.unwrap_or_default().trim()) }
+                        div.btnrow style="margin-top:14px" {
+                            button.btn hx-post="/system/check" hx-target="#update-result" hx-swap="innerHTML" { "Check for updates" }
+                            button.btn.primary hx-post="/system/update" hx-target="#update-result" hx-swap="innerHTML"
+                                hx-confirm="Download and stage the latest OS image? It applies on the next reboot." { "Update now" }
+                        }
+                        div #update-result style="margin-top:12px" {}
+                    }
+                }))
+                (ui::panel("Automatic updates", None, auto_fragment()))
+            }
+        },
+    )
+}
+
+pub async fn system_check() -> Markup {
+    match ui::run_stdout("bootc", &["upgrade", "--check"]) {
+        Some(out) if !out.trim().is_empty() => {
+            html! { div.banner.ok { pre.mono style="margin:0; white-space:pre-wrap" { (out.trim()) } } }
+        }
+        Some(_) => html! { div.banner.ok { "You're on the latest image." } },
+        None => {
+            html! { div.banner.error { "Update check failed — no network, or this isn't a bootc host." } }
+        }
+    }
+}
+
+pub async fn system_update() -> Markup {
+    match Command::new("bootc").arg("upgrade").output() {
+        Ok(o) if o.status.success() => html! {
+            div.banner.ok { "Update staged. Reboot to apply it (System stays on the current image until you do)." }
+        },
+        Ok(o) => {
+            let msg = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            html! { div.banner.error { "Update failed: " (msg) } }
+        }
+        Err(e) => html! { div.banner.error { "Could not run bootc: " (e.to_string()) } },
+    }
+}
+
+/// Toggle the auto-update timer, then re-render the panel.
+pub async fn system_auto() -> Markup {
+    let action = if auto_enabled() { "disable" } else { "enable" };
+    let _ = Command::new("systemctl")
+        .args([action, "--now", AUTO_TIMER])
+        .status();
+    auto_fragment()
+}
+
+fn auto_enabled() -> bool {
+    ui::run_stdout("systemctl", &["is-enabled", AUTO_TIMER])
+        .map(|s| s.trim() == "enabled")
+        .unwrap_or(false)
+}
+
+fn auto_fragment() -> Markup {
+    let on = auto_enabled();
+    html! {
+        div #autoupd {
+            div.pad {
+                div style="display:flex; align-items:center; gap:12px" {
+                    @if on {
+                        span.pill.running { span.led {} "on" }
+                        button.btn hx-post="/system/auto" hx-target="#autoupd" hx-swap="outerHTML" { "Disable" }
+                    } @else {
+                        span.pill.off { span.led {} "off" }
+                        button.btn.primary hx-post="/system/auto" hx-target="#autoupd" hx-swap="outerHTML" { "Enable" }
+                    }
+                }
+                p.sub style="margin:10px 0 0" {
+                    "When on, the host fetches and stages new OS images on a timer ("
+                    span.mono { (AUTO_TIMER) } "); they apply on the next reboot."
+                }
+            }
+        }
+    }
 }

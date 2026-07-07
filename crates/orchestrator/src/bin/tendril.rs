@@ -347,6 +347,7 @@ fn menu_create_station() {
             virtio_iso,
             seed_iso,
         },
+        usb_devices: Vec::new(),
         define: true,
         start,
     };

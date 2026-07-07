@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **USB passthrough in the web UI.** Assign a seat's keyboard/mouse/controller to a station by
+  friendly name — both in the create wizard and afterward on the station page (hot-plugged live via
+  `virsh attach-device`/`detach-device`, persisted to the config). `StationRequest`/`provision` gained
+  a `usb_devices` field; `Libvirt` gained `attach_usb`/`detach_usb`/`usb_devices`.
+- **Delete stations in the web UI** — from the stations list and the station page (removes the VM
+  definition; the disk image is kept).
+- **OS updates page (bootc).** A System page shows the current image and can check for, and stage,
+  OS updates (`bootc upgrade`); a toggle turns automatic updates on/off
+  (`bootc-fetch-apply-updates.timer`). A top-bar "Update ready" badge appears when a new image is
+  staged and pending reboot.
+- **Console shows the VNC endpoint**, and the dashboard's host-capacity stat is now labelled
+  (e.g. "8 threads · 8 GB RAM" instead of "8t").
 - **Friendly GPU names.** `tendril-detect` and the web UI now resolve the marketing model name from the
   system `pci.ids` database (`hwdata`) — e.g. `10de:1e84` shows as `TU104 [GeForce RTX 2070 SUPER]`
   instead of a bare vendor. `hwdata` is included in the image.

@@ -1,15 +1,15 @@
 # Tendril
 
-**Tendril** is an open-source, [Fedora bootc](https://docs.fedoraproject.org/en-US/bootc/)–based
-operating system that turns a single multi-GPU machine (or a cluster of them) into multiple
-plug-and-play gaming stations — each running **Windows** or **SteamOS** in a GPU-passthrough VM.
+**Tendril** turns one multi-GPU machine into several plug-and-play gaming stations — each a
+**Windows** or **SteamOS** VM with a real GPU passed through. It's a self-healing
+[Fedora bootc](https://docs.fedoraproject.org/en-US/bootc/) appliance you drive from a web UI or an
+on-screen console; it handles IOMMU, VFIO, driver binding, and VM setup so you don't have to.
 
 > One machine, many tendrils.
 
 > **📍 This GitHub repository is a read-only mirror.** Tendril's canonical home is
-> **[git.onetick.ninja/flan/tendril](https://git.onetick.ninja/flan/tendril)**. Please file **bug
-> reports and issues** on the [Gitea issue tracker](https://git.onetick.ninja/flan/tendril/issues) —
-> issues opened here on the mirror may go unseen.
+> **[git.onetick.ninja/flan/tendril](https://git.onetick.ninja/flan/tendril)** — please file **bug
+> reports and issues** on its [issue tracker](https://git.onetick.ninja/flan/tendril/issues).
 
 ![The Tendril web control plane — dashboard with stations and hardware](docs/images/dashboard.png)
 
@@ -17,8 +17,7 @@ plug-and-play gaming stations — each running **Windows** or **SteamOS** in a G
 
 One powerful box with several GPUs → several independent gaming setups at once. Two people gaming on
 one tower, a handful of Steam Machines driven from a closet server, a Windows VM for the games that
-need it next to a SteamOS VM for everything else. Tendril handles the hard parts — IOMMU, VFIO,
-driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get there.
+need it next to a SteamOS VM for everything else.
 
 - **Passthrough-first:** N GPUs → N independent stations (the reliable path on consumer hardware).
 - **Self-healing host:** atomic bootc images with greenboot auto-rollback — a bad update can't brick the box.
@@ -27,98 +26,49 @@ driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get 
 
 ## What works today
 
-**v0.12.0 — web control plane + console.** Tendril now has a **web UI** (Axum + HTMX) served on the
-host: a dashboard, a create-station wizard, station management, a live in-browser console (noVNC),
-GPU binding, media, and network — all over the same provisioning core as the CLI. There's also the
-**`tendril` console**, a TrueNAS-style menu the OS launches on the primary display. Under both: a
-flashable installer ISO, the full host-side provisioning pipeline, libvirt orchestration, and a
-station that installs its guest OS **unattended** — Windows 11 (past the virtio "no drives" and
-Microsoft-account walls) or a SteamOS-style Bazzite image (Anaconda kickstart, boots to Steam gaming
-mode) — then boots from disk. This release makes the **network configurable from the browser** —
-switch a connection between DHCP and static with a **60-second test-and-revert** safety net so a bad
-change heals itself. (Recent releases also added **seats**, **live install progress**, and a
-**branded, simplified installer**.)
-
-Create a station from the browser — pick the OS, GPU, and unattended account, and Tendril builds the
-disk, the answer-file/kickstart seed, and the VM, then installs it hands-off:
+A **web control plane** (Axum + HTMX) and a TrueNAS-style **on-screen console**, both over one
+libvirt orchestrator. Create a station from the browser — pick the OS, GPU, and account — and Tendril
+builds the disk, the answer-file/kickstart seed, and the VM, then installs the guest **unattended**
+(Windows 11 past the virtio and Microsoft-account walls, or a SteamOS-style Bazzite image) and boots
+from disk.
 
 ![The create-station wizard](docs/images/create-station.png)
 
-You can drive everything from the web UI, the console menu, or the CLIs:
+Along the way: **seats** (named USB device groups), **auto-fetched + checksum-verified** install
+media, **live install progress**, per-GPU `vfio-pci` binding, a live in-browser **noVNC console**,
+password auth, and **configurable networking** with a 60-second **test-and-revert** safety net.
 
-| Tool | What it does |
-|---|---|
-| `tendril-web` | Web control plane (Axum + HTMX) — dashboard, create/manage stations, live noVNC console, GPU/media/network |
-| `tendril` | Interactive console — a menu over every function below (the OS launches it on the primary display) |
-| `tendril-detect` | Enumerates GPUs + IOMMU groups, classifies each as passthrough / host-only |
-| `tendril-plan` | Computes the exact `vfio-pci` bind set for a GPU (its whole IOMMU group) |
-| `tendril-apply` | Binds a GPU to `vfio-pci` — **dry-run by default**, `--execute` to enact |
-| `tendril-domain` | Renders a libvirt domain (Secure Boot + TPM, passthrough hostdevs) for a GPU |
-| `tendril-vm` | Renders and (with `--define`) registers a station's VM with libvirt |
-| `tendril-guest` | Creates the disk, builds a seed (Windows `autounattend.xml` or SteamOS/Bazzite kickstart), and installs the OS hands-off (`--unattend --start`), then boots from disk (`--finalize`) |
-| `tendril-usb` | Lists USB controllers + devices for multi-seat assignment |
+![Configurable networking with test-and-revert](docs/images/network.png)
 
-Plus `scripts/build-installer.sh` (build the ISO), `scripts/fetch-windows-media.sh` (Win11 +
-virtio-win ISOs), and `scripts/fetch-steamos-media.sh` (Bazzite gaming-mode ISO).
+Drive it all from the web UI, the console, or the CLIs — see **[docs/CLI.md](docs/CLI.md)**.
 
 ## Install
 
-**Easiest:** download the installer ISO — one file — from **https://dl.onetick.ninja/**, verify it
-against `SHA256SUMS`, flash it to a USB stick, boot the target, and install. (It's also mirrored in
-the [Gitea release](https://git.onetick.ninja/flan/tendril/releases), split into `.part` files to fit
-the 2 GiB asset cap — reassemble per the release notes.) Or build the image yourself — see
-**[docs/INSTALL.md](docs/INSTALL.md)**. Still pre-1.0; expect rough edges.
+**Easiest:** download the installer ISO from **https://dl.onetick.ninja/**, verify it against
+`SHA256SUMS`, flash it to a USB stick, boot the target, and install.
 
-**Prerequisite:** enable **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in your motherboard's BIOS —
-no software can turn this on for you.
-
-Build the host image (from the repo root):
+Or deploy the **published image** with [`bootc`](https://containers.github.io/bootc/) — pushed to
+Tendril's own registry (tags `latest` and the current version):
 
 ```bash
-podman build -f image/Containerfile -t tendril:dev .
+sudo bootc switch git.onetick.ninja/flan/tendril:latest && sudo reboot
 ```
 
-Or deploy the **published image** with [`bootc`](https://containers.github.io/bootc/) — it's pushed
-to Tendril's own registry at `git.onetick.ninja/flan/tendril` (tags `latest` and `0.12.0`). Fresh
-install to a disk, or switch an existing Fedora bootc system over:
+Once it's up, open the **web UI** at `http://<host-ip>/` and set an admin password, or use the
+`tendril` console on the attached display.
 
-```bash
-# switch an existing Fedora bootc host to Tendril
-sudo bootc switch git.onetick.ninja/flan/tendril:latest
-sudo reboot
-```
-
-Once it's up, open the **web UI** at `http://<host-ip>/`, or use the `tendril` console on the
-attached display. To confirm IOMMU came up and see your GPUs from a shell:
-
-```bash
-tendril-detect
-```
-
-If no IOMMU groups appear, VT-d / AMD-Vi is still disabled in your BIOS.
-
-Just want to try the CLIs without installing the OS? On any Linux host with `/sys`:
-
-```bash
-cargo run --bin tendril-detect
-```
+**Prerequisite:** enable **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in your motherboard's BIOS — no
+software can turn this on for you. Building the image yourself, deploying, and creating your first
+station are covered in **[docs/INSTALL.md](docs/INSTALL.md)**. Still pre-1.0; expect rough edges.
 
 ## Roadmap
 
+Detection, VFIO plan/apply, the installer ISO, libvirt orchestration, unattended Windows/Bazzite
+installs, the console, and the web control plane (incl. networking) are **done** — that's the
+"What works today" above. Ahead:
+
 | Area | Capability | Status |
 |---|---|---|
-| Detection | GPU + IOMMU enumeration → capability matrix | ✅ Done |
-| Provisioning · plan | Per-GPU VFIO bind config (whole IOMMU group) | ✅ Done |
-| Provisioning · apply | Bind GPU to `vfio-pci` (dry-run + execute) | ✅ Done |
-| Host image + installer | Fedora bootc image + flashable installer ISO | ✅ Done |
-| VM orchestration | libvirt domain templating + lifecycle (`virsh`) | ✅ Done |
-| Guest disks & media | qcow2 disks, install ISOs, Win11 + virtio fetch | ✅ Done |
-| Multi-seat USB | USB controller + per-device passthrough | ✅ Done |
-| Guest OS install | Unattended Windows (virtio + no-OOBE) **and** SteamOS/Bazzite (kickstart), boot from disk | ✅ Done |
-| Console menu | Interactive `tendril` console over every function (OS boots into it) | ✅ Done |
-| Web control plane | Axum + HTMX UI: dashboard, create/manage stations, live noVNC console, GPU/media/network | ✅ Done |
-| Web polish | Auth, live install progress, richer host stats, per-seat USB (seats) | ✅ Done |
-| Network config | Configure interfaces, DNS, and static IP from the web UI (DHCP ↔ static via NetworkManager) | ✅ Done |
 | vGPU | >1 VM per GPU (official + `vgpu_unlock`) | 🔭 Future |
 | Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |
 | Streaming | Sunshine/Moonlight for headless / remote play | 🔭 Future |

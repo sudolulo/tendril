@@ -1,8 +1,9 @@
 //! Network configuration via NetworkManager (`nmcli`).
 //!
-//! Read-only status (interfaces, routes, DNS) plus editable IPv4 settings per connection: switch a
-//! connection between DHCP and a static address/gateway/DNS and apply it live. Applying can briefly
-//! drop the link you're managing over — the page warns about that up front.
+//! Editable IPv4 settings per physical connection: switch between DHCP and a static
+//! address/gateway/DNS and apply it live. Every change runs on a 60-second trial that auto-reverts
+//! unless kept (see `apply`), so reconfiguring the link you're connected over is safe. Read-only
+//! interface/route/DNS status is tucked behind an Advanced toggle.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,7 +47,9 @@ struct Conn {
     ctype: String,
 }
 
-/// Active, real connections we're willing to edit (skip loopback and the unmanaged/virtual bits).
+/// Active physical connections a user would actually reconfigure — real ethernet/Wi-Fi only. We skip
+/// loopback and the software plumbing (podman/docker/libvirt bridges, veth, tun/tap) so the page
+/// isn't cluttered with interfaces nobody assigns a static IP to.
 fn connections() -> Vec<Conn> {
     let out = ui::run_stdout(
         "nmcli",
@@ -69,7 +72,14 @@ fn connections() -> Vec<Conn> {
                 f.get(2)?,
                 f.get(3).map(|s| s.as_str()).unwrap_or(""),
             );
-            if device == "lo" || ctype == "loopback" || state != "activated" {
+            // Only real NICs; skip virtual plumbing that happens to be "activated".
+            let physical = ctype == "802-3-ethernet" || ctype == "802-11-wireless";
+            let virtual_dev = [
+                "podman", "docker", "virbr", "veth", "br-", "tun", "tap", "cni",
+            ]
+            .iter()
+            .any(|p| device.starts_with(p));
+            if !physical || virtual_dev || state != "activated" {
                 return None;
             }
             Some(Conn {
@@ -145,10 +155,9 @@ pub async fn page() -> Markup {
         "network",
         "Network",
         html! {
-            div.banner.warn.pad style="margin-bottom:14px" {
-                strong { "Heads up: " }
-                "changing an interface Tendril is reachable over can drop this page. If that happens, "
-                "fix it from the console (" span.mono { "tendril" } " → Configure network) on the host display."
+            p.sub style="margin:0 0 14px" {
+                "Changes apply on a 60-second trial and revert automatically unless you keep them — "
+                "so it's safe to adjust even the connection you're on."
             }
             (ui::panel("IPv4 configuration", None, config_panel()))
             details.advanced style="margin-top:4px" {

@@ -1,24 +1,21 @@
 name: release
 
-# Automatically build and publish a Tendril release whenever the image, code, or installer script
-# changes on `main`:
+# Build and publish a Tendril release on every push to `main` (main is releases-only):
 #   1. build the bootc host image
 #   2. push it to the Gitea container registry (git.onetick.ninja/flan/tendril:<version> and :latest)
 #   3. build the installer ISO with bootc-image-builder
 #   4. publish the ISO to dl.onetick.ninja (/srv/tendril-dl + SHA256SUMS)
 #
+# The version comes from Cargo.toml; if a release for that version already exists, the job exits early
+# (so a non-version-bump push to main is a cheap no-op). No `paths:` filter — it was unreliable on
+# fast-forward PR merges, silently skipping the release; the early version check makes it safe to run on
+# any main push instead.
+#
 # Runs on the self-hosted `host` runner (root) — image builds and bootc-image-builder need podman and
-# loopback devices, which the Docker-mode runner can't provide. No JS actions (the host has no node)
-# and no stored credentials: the checkout and the registry login both use the built-in Actions token.
+# loopback devices, which the Docker-mode runner can't provide.
 on:
   push:
     branches: [main]
-    paths:
-      - 'image/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'scripts/build-installer.sh'
   workflow_dispatch: {}
 
 jobs:
@@ -51,6 +48,16 @@ jobs:
           git checkout "$SHA"
 
           V="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          api="https://${REG}/api/v1/repos/${REPO}"
+          auth="Authorization: token ${REG_TOKEN}"
+          tag="v$V"
+
+          # Idempotency: if this version is already released, there's nothing to do. Makes it safe to
+          # trigger on every main push (bump the version in Cargo.toml to cut a release).
+          if curl -fsS -H "$auth" "$api/releases/tags/$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — nothing to build. Bump the version in Cargo.toml to release."
+            exit 0
+          fi
           echo "Releasing Tendril $V"
 
           # 1. Build the bootc host image.
@@ -83,15 +90,9 @@ jobs:
           ISO_SHA="$(sha256sum "$DL_DIR/$name" | awk '{print $1}')"
           echo "Published $name → https://dl.onetick.ninja/$name"
 
-          # 5. Create the Gitea release for tag v$V (idempotent — skip if it already exists).
-          api="https://${REG}/api/v1/repos/${REPO}"
-          auth="Authorization: token ${REG_TOKEN}"
-          tag="v$V"
-          if curl -fsS -H "$auth" "$api/releases/tags/$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists — leaving it as-is."
-          else
-            notes="$(printf 'Tendril %s\n\nContainer image: `%s/%s/tendril:%s` (also `:latest`)\n\nInstaller ISO: https://dl.onetick.ninja/%s\nSHA-256: `%s`\n\nVerify: `sha256sum -c SHA256SUMS` against https://dl.onetick.ninja/SHA256SUMS' "$V" "$REG" "$OWNER" "$V" "$name" "$ISO_SHA")"
-            body="$(TAG="$tag" NAME="Tendril $V" NOTES="$notes" SHA="$SHA" python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":os.environ["SHA"],"name":os.environ["NAME"],"body":os.environ["NOTES"],"draft":False,"prerelease":False}))')"
-            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
-              -d "$body" "$api/releases" >/dev/null && echo "Created Gitea release $tag."
-          fi
+          # 5. Create the stable Gitea release for tag v$V (api/auth/tag were set + existence-checked
+          #    at the top; if we got here the release doesn't exist yet).
+          notes="$(printf 'Tendril %s\n\nContainer image: `%s/%s/tendril:%s` (also `:latest`)\n\nInstaller ISO: https://dl.onetick.ninja/%s\nSHA-256: `%s`\n\nVerify: `sha256sum -c SHA256SUMS` against https://dl.onetick.ninja/SHA256SUMS' "$V" "$REG" "$OWNER" "$V" "$name" "$ISO_SHA")"
+          body="$(TAG="$tag" NAME="Tendril $V" NOTES="$notes" SHA="$SHA" python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":os.environ["SHA"],"name":os.environ["NAME"],"body":os.environ["NOTES"],"draft":False,"prerelease":False}))')"
+          curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
+            -d "$body" "$api/releases" >/dev/null && echo "Created Gitea release $tag."

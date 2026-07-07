@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   login, a DEMO badge in the header, and every mutating action disabled (returns a friendly banner).
   It shows **self-contained canned data** (stations, media, seats) that touches no real host state, so
   a demo can run **alongside a real Tendril instance on the same box without colliding**.
-  `scripts/demo-setup.sh` installs it as a LAN-reachable systemd service. Live at demo.onetick.ninja.
+  `scripts/demo-setup.sh` installs it as a LAN-reachable systemd service. Running stations show a
+  representative **console preview** (an original Steam gaming-mode / Windows desktop mock). Live at demo.onetick.ninja.
 
 ## [0.14.0] - 2026-07-07
 

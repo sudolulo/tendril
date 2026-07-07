@@ -58,14 +58,19 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                         }
                     }
                     div.spacer {}
+                    @if is_demo() {
+                        span.demobadge title="Live demo — actions are disabled" { "◆ DEMO" }
+                    }
                     @if update_staged() {
                         a.updatebadge href="/system" title="A new OS image is downloaded and ready" { "⬆ Update ready" }
                     }
                     @if !host.is_empty() {
                         div.host { span.led {} (host) " · " span.mono { (ip) } }
                     }
-                    form method="post" action="/logout" style="margin:0" {
-                        button.btn.sm type="submit" { "Log out" }
+                    @if !is_demo() {
+                        form method="post" action="/logout" style="margin:0" {
+                            button.btn.sm type="submit" { "Log out" }
+                        }
                     }
                 }
                 main.wrap { (body) }
@@ -140,6 +145,12 @@ pub fn update_staged() -> bool {
             .starts_with('{'),
         None => false,
     }
+}
+
+/// Public read-only demo mode (`TENDRIL_DEMO` set): no login, mutating actions disabled, a DEMO
+/// badge in the header. For a safely-exposable showcase instance.
+pub fn is_demo() -> bool {
+    std::env::var("TENDRIL_DEMO").is_ok()
 }
 
 /// Run a command and return trimmed stdout on success (read-only host queries).
@@ -234,6 +245,8 @@ a { color:var(--accent); text-decoration:none; }
 .updatebadge { background:var(--info-soft); color:var(--info); border:1px solid var(--info);
   padding:5px 11px; border-radius:999px; font-size:12.5px; font-weight:600; white-space:nowrap; }
 .updatebadge:hover { filter:brightness(1.12); }
+.demobadge { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent);
+  padding:5px 11px; border-radius:999px; font-size:12.5px; font-weight:700; letter-spacing:.04em; white-space:nowrap; }
 
 .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:24px; }
 .stat { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);

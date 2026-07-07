@@ -146,6 +146,19 @@ fn authenticated(req: &Request) -> bool {
 /// otherwise require a session (or a trusted proxy header).
 pub async fn require_auth(req: Request, next: Next) -> Response {
     let path = req.uri().path();
+    // Public read-only demo: skip login, and turn every mutating request (POST) into a no-op that
+    // returns a friendly banner — so the instance is safe to expose behind a proxy.
+    if ui::is_demo() {
+        if req.method() == axum::http::Method::POST {
+            let banner = r#"<div class="banner warn" style="margin:0">🎭 This is a live demo — actions are disabled. <a href="https://git.onetick.ninja/flan/tendril">Run Tendril</a> to use it for real.</div>"#;
+            return (
+                [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                banner,
+            )
+                .into_response();
+        }
+        return next.run(req).await;
+    }
     let open =
         path.starts_with("/assets/") || path == "/login" || path == "/logout" || path == "/setup";
     if open || authenticated(&req) {

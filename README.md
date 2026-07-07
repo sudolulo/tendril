@@ -11,6 +11,9 @@ on-screen console; it handles IOMMU, VFIO, driver binding, and VM setup so you d
 > **[git.onetick.ninja/flan/tendril](https://git.onetick.ninja/flan/tendril)** — please file **bug
 > reports and issues** on its [issue tracker](https://git.onetick.ninja/flan/tendril/issues).
 
+> **🎮 Live demo:** click around the real web UI (read-only — actions are disabled) at
+> **[demo.onetick.ninja](https://demo.onetick.ninja)**. No install needed.
+
 ![The Tendril web control plane — dashboard with stations and hardware](docs/images/dashboard.png)
 
 ## What is it for?

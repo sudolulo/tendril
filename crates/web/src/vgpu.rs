@@ -73,8 +73,26 @@ fn is_pci_address(s: &str) -> bool {
             .all(|(i, c)| matches!(i, 4 | 7 | 10) || c.is_ascii_hexdigit())
 }
 
+/// The PCI addresses of a GPU's current SR-IOV virtual functions (`virtfn0`, `virtfn1`, … symlinks).
+pub fn sriov_vfs(parent: &str) -> Vec<String> {
+    let base = format!("/sys/bus/pci/devices/{parent}");
+    let mut out = Vec::new();
+    for i in 0..256 {
+        match std::fs::read_link(format!("{base}/virtfn{i}")) {
+            Ok(p) => {
+                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                    out.push(n.to_string());
+                }
+            }
+            Err(_) => break, // virtfn indices are contiguous from 0
+        }
+    }
+    out
+}
+
 /// Enable (or change) SR-IOV virtual functions on `parent`. Writing a new count requires zeroing
-/// first, so we always reset to 0 before setting `n`.
+/// first, so we always reset to 0 before setting `n` — which means **any** change tears down the
+/// current VFs (see the in-use guard in the handler).
 pub fn set_sriov_numvfs(parent: &str, n: u32) -> Result<(), String> {
     let path = format!("/sys/bus/pci/devices/{parent}/sriov_numvfs");
     std::fs::write(&path, "0").map_err(|e| format!("reset VFs: {e}"))?;

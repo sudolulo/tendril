@@ -10,7 +10,7 @@ use axum::extract::{Form, Path, Query};
 use maud::{html, Markup};
 use serde::Deserialize;
 
-use tendril_orchestrator::{DomainState, Libvirt};
+use tendril_orchestrator::{DomainState, GuestOs, Libvirt};
 
 use crate::ui;
 
@@ -47,6 +47,42 @@ pub fn path_of(name: &str) -> Option<String> {
     }
     let p = format!("{}/{clean}.qcow2", images_dir());
     FsPath::new(&p).exists().then_some(p)
+}
+
+/// Sidecar file recording the guest OS a golden image was captured from, so cloning re-uses the
+/// right OS (Windows vs SteamOS) instead of trusting a possibly-mismatched wizard selection.
+fn os_sidecar(name: &str) -> String {
+    format!("{}/{}.os", images_dir(), sanitize(name))
+}
+
+/// The guest OS a golden image holds, if recorded. `None` for older images with no sidecar.
+pub fn image_os(name: &str) -> Option<GuestOs> {
+    let raw = std::fs::read_to_string(os_sidecar(name)).ok()?;
+    match raw.trim() {
+        "windows" => Some(GuestOs::Windows),
+        "steamos" => Some(GuestOs::SteamOs),
+        _ => None,
+    }
+}
+
+/// Short label for a guest OS, for the sidecar and the UI.
+fn os_label(os: GuestOs) -> &'static str {
+    match os {
+        GuestOs::Windows => "windows",
+        GuestOs::SteamOs => "steamos",
+    }
+}
+
+/// A station's guest OS, inferred from its domain XML clock (Windows uses localtime, SteamOS UTC).
+fn station_guest(name: &str) -> Option<GuestOs> {
+    let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;
+    if xml.contains("offset='localtime'") {
+        Some(GuestOs::Windows)
+    } else if xml.contains("offset='utc'") {
+        Some(GuestOs::SteamOs)
+    } else {
+        None
+    }
 }
 
 /// Keep image names to a safe charset (they become file names and query values).
@@ -109,10 +145,16 @@ pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Marku
     let _ = std::fs::create_dir_all(&dir);
     // Flatten + compress into a portable standalone image (no backing chain).
     match ui::run_result("qemu-img", &["convert", "-c", "-O", "qcow2", &src, &dest]) {
-        Ok(_) => note(
-            true,
-            &format!("Saved image \u{201c}{name}\u{201d}. Pick it as a base in the create-station wizard."),
-        ),
+        Ok(_) => {
+            // Record the guest OS so cloning re-uses it and can't be paired with the wrong install.
+            if let Some(os) = station_guest(&station) {
+                let _ = std::fs::write(os_sidecar(&name), os_label(os));
+            }
+            note(
+                true,
+                &format!("Saved image \u{201c}{name}\u{201d}. Pick it as a base in the create-station wizard."),
+            )
+        }
         Err(e) => note(false, &format!("Save failed: {e}")),
     }
 }
@@ -125,6 +167,7 @@ pub struct NameQuery {
 pub async fn delete(Query(q): Query<NameQuery>) -> Markup {
     if let Some(p) = path_of(&q.name) {
         let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(os_sidecar(&q.name));
     }
     panel()
 }

@@ -166,6 +166,11 @@ pub async fn new_form() -> Markup {
 
 fn create_form(error: Option<&str>) -> Markup {
     let matrix = detect();
+    // Whole-GPU passthrough and vGPU on the same physical GPU are mutually exclusive at the driver
+    // level, so don't offer a GPU both ways: hide whole-GPU for a card already handing out vGPU
+    // slices, and hide vGPU profiles for a card already passed through whole.
+    let whole_used = crate::hardware::gpu_users();
+    let vgpu_used = crate::hardware::mdev_users();
     ui::page(
         "stations",
         "New station",
@@ -179,16 +184,21 @@ fn create_form(error: Option<&str>) -> Markup {
                     @if !img_list.is_empty() {
                         div.field.wide {
                             label { "Base image (clone a ready-to-play station instantly)" }
-                            select name="base_image" {
+                            select #base-image name="base_image" onchange="tendrilClone()" {
                                 option value="" { "None — install the OS fresh" }
-                                @for (n, sz) in &img_list { option value=(n) { (n) " (" (sz) ")" } }
+                                @for (n, sz) in &img_list {
+                                    @let os = crate::images::image_os(n);
+                                    @let osa = match os { Some(GuestOs::Windows) => "windows", Some(GuestOs::SteamOs) => "steamos", None => "" };
+                                    @let oslabel = match os { Some(GuestOs::Windows) => " · Windows", Some(GuestOs::SteamOs) => " · SteamOS", None => "" };
+                                    option value=(n) data-os=(osa) { (n) " (" (sz) ")" (oslabel) }
+                                }
                             }
-                            span.hint { "Pick a saved image to clone it (copy-on-write, instant); leave as None to install from media below." }
+                            span.hint { "Pick a saved image to clone it (copy-on-write, instant) — the OS and install options come from the image. Leave as None to install fresh from media below." }
                         }
                     }
-                    div.field {
+                    div.field.install-only {
                         label { "Guest OS" }
-                        select name="os" {
+                        select #os-select name="os" {
                             option value="windows" { "Windows 11" }
                             option value="steamos" { "SteamOS (Bazzite)" }
                         }
@@ -198,13 +208,16 @@ fn create_form(error: Option<&str>) -> Markup {
                         select name="gpu" {
                             option value="" { "None — headless / attach later" }
                             @for g in matrix.passthrough_capable() {
-                                option value=(g.gpu.address) {
-                                    (ui::vendor(g.gpu.vendor)) " "
-                                    (g.gpu.model.as_deref().unwrap_or("GPU")) " [" (g.gpu.address) "] — whole GPU"
+                                @if !vgpu_used.contains_key(&g.gpu.address) {
+                                    option value=(g.gpu.address) {
+                                        (ui::vendor(g.gpu.vendor)) " "
+                                        (g.gpu.model.as_deref().unwrap_or("GPU")) " [" (g.gpu.address) "] — whole GPU"
+                                    }
                                 }
                             }
                             // vGPU: one option per available mdev profile (a slice of a shared GPU).
                             @for g in matrix.vgpu_capable() {
+                                @if !whole_used.contains_key(&g.gpu.address) {
                                 @for t in &g.vgpu.mdev_types {
                                     @if t.available > 0 {
                                         option value=(format!("{}{}:{}", crate::vgpu::MDEV_PREFIX, g.gpu.address, t.id)) {
@@ -215,12 +228,13 @@ fn create_form(error: Option<&str>) -> Markup {
                                         }
                                     }
                                 }
+                                }
                             }
                         }
                         span.hint { "Pick a whole GPU for full passthrough, or a vGPU profile to hand a station one slice of a shared GPU (requires an mdev-capable driver, e.g. NVIDIA vGPU). SR-IOV virtual functions appear here as whole GPUs once enabled on the Hardware page." }
                     }
-                    div.field { label { "Username" } input name="username" value="player"; }
-                    div.field { label { "Password" } input name="password" value="tendril"; }
+                    div.field.install-only { label { "Username" } input name="username" value="player"; }
+                    div.field.install-only { label { "Password" } input name="password" value="tendril"; }
                     @let seat_list = crate::seats::load();
                     @if !seat_list.is_empty() {
                         div.field.wide {
@@ -249,21 +263,31 @@ fn create_form(error: Option<&str>) -> Markup {
                     details.advanced.wide {
                         summary { "Advanced options" }
                         div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
-                            div.field.check { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } span.hint { "On by default — installs the guest OS without prompts using the account above. Uncheck for a manual install." } }
+                            div.field.check.install-only { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } span.hint { "On by default — installs the guest OS without prompts using the account above. Uncheck for a manual install." } }
                             div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
                             div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install immediately)" } }
                         }
                         div.grid style="margin-top:12px" {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
                             div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: (host threads − 1) ÷ GPUs" } }
-                            div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
-                            div.field { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
-                            div.field.wide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
-                            div.field.wide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
-                            div.field.wide { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
+                            div.field.install-only { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
+                            div.field.install-only { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
+                            div.field.wide.install-only { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
+                            div.field.wide.install-only { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
+                            div.field.wide.install-only { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
                         }
                     }
                     div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create station" } a.btn href="/stations" { "Cancel" } } }
+                    (maud::PreEscaped(
+                        "<script>window.tendrilClone=function(){\
+                         var b=document.getElementById('base-image');if(!b)return;\
+                         var o=b.options[b.selectedIndex];var cloning=b.value!=='';\
+                         document.querySelectorAll('.install-only').forEach(function(e){e.style.display=cloning?'none':'';});\
+                         var os=o&&o.getAttribute('data-os');var s=document.getElementById('os-select');\
+                         if(cloning&&os&&s){s.value=os;}\
+                         if(cloning&&!os&&s){var f=s.closest('.install-only');if(f)f.style.display='';}\
+                         };tendrilClone();</script>"
+                    ))
                 }
             }))
         },
@@ -301,8 +325,11 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         GuestOs::Windows
     };
     let name = get("name");
-    if name.is_empty() {
-        return create_form(Some("Station name is required.")).into_response();
+    if !valid_station_name(&name) {
+        return create_form(Some(
+            "Station name must be non-empty and contain only letters, numbers, - _ . (no slashes).",
+        ))
+        .into_response();
     }
     let disk = {
         let d = get("disk");
@@ -312,14 +339,23 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             d
         }
     };
+    // Never let a station's disk land in the golden-images directory — it would corrupt an image.
+    if !disk_target_ok(&disk) {
+        return create_form(Some(
+            "The disk path can't be inside the images directory — that's reserved for golden images.",
+        ))
+        .into_response();
+    }
 
     // Clone-from-image path: if a base image is chosen, the disk is a copy-on-write overlay of it and
-    // there's no install step — just define the VM (which boots straight from the cloned disk).
+    // there's no install step — just define the VM (which boots straight from the cloned disk). The
+    // guest OS comes from the image (recorded at save time), not the wizard, so it can't be mismatched.
     let base_image = get("base_image");
     if !base_image.is_empty() {
         let Some(base_path) = crate::images::path_of(&base_image) else {
             return create_form(Some("The selected base image no longer exists.")).into_response();
         };
+        let guest = crate::images::image_os(&base_image).unwrap_or(guest);
         if FsPath::new(&disk).exists() {
             return create_form(Some(&format!("A disk already exists at {disk}."))).into_response();
         }
@@ -613,6 +649,26 @@ fn build_seed(
         )?,
     }
     Ok(seed)
+}
+
+/// Reject station names that could escape the disk directory — a name becomes both a qcow2 file name
+/// (`{DISK_DIR}/{name}.qcow2`) and the libvirt domain name.
+fn valid_station_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Refuse a station disk path inside the golden-images directory. Running or installing a station
+/// there writes over an image (overlays back onto images read-only, but a *disk* placed there is
+/// written directly), corrupting it.
+fn disk_target_ok(disk: &str) -> bool {
+    let images = crate::images::images_dir();
+    let images = images.trim_end_matches('/');
+    let d = disk.trim();
+    d != images && !d.starts_with(&format!("{images}/"))
 }
 
 fn passthrough_for(addr: &str) -> Vec<String> {
@@ -982,5 +1038,29 @@ async fn relay(mut socket: WebSocket, port: u16) {
                 Ok(n) => { if socket.send(Message::Binary(buf[..n].to_vec())).await.is_err() { break; } }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{disk_target_ok, valid_station_name};
+
+    #[test]
+    fn station_names_reject_path_escapes() {
+        assert!(valid_station_name("station1"));
+        assert!(valid_station_name("win11-gaming.v2"));
+        assert!(!valid_station_name("")); // empty
+        assert!(!valid_station_name("images/test-golden")); // slash
+        assert!(!valid_station_name("../images/x")); // traversal
+        assert!(!valid_station_name("a b")); // space
+    }
+
+    #[test]
+    fn disk_target_rejects_images_dir() {
+        // Default images dir is /var/lib/tendril/images (no store mounted in tests).
+        assert!(disk_target_ok("/var/lib/tendril/station1.qcow2"));
+        assert!(disk_target_ok("/data/vms/s1.qcow2"));
+        assert!(!disk_target_ok("/var/lib/tendril/images/test-golden.qcow2"));
+        assert!(!disk_target_ok("/var/lib/tendril/images"));
     }
 }

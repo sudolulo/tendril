@@ -25,7 +25,7 @@ pub fn gpu_users() -> HashMap<String, String> {
 
 /// Which stations hold a vGPU slice on each parent GPU (a GPU can host several). Keyed by parent PCI
 /// address; mdev-backed stations carry no PCI hostdev, so this is tracked via the mdev UUID.
-fn mdev_users() -> HashMap<String, Vec<String>> {
+pub(crate) fn mdev_users() -> HashMap<String, Vec<String>> {
     let lv = Libvirt::system();
     let mut m: HashMap<String, Vec<String>> = HashMap::new();
     for name in lv.list() {
@@ -193,6 +193,19 @@ pub async fn sriov(
     Path(addr): Path<String>,
     axum::extract::Form(f): axum::extract::Form<SriovForm>,
 ) -> Markup {
+    // Changing numvfs zeroes the VFs first, which would yank a VF out from under a running station.
+    // Refuse if any current VF is passed through to a station.
+    let users = gpu_users();
+    let busy: Vec<String> = crate::vgpu::sriov_vfs(&addr)
+        .into_iter()
+        .filter(|vf| users.contains_key(vf))
+        .collect();
+    if !busy.is_empty() {
+        return gpu_fragment(Some(html! { div.banner.error {
+            "Can't change virtual functions on " (addr) " — VF(s) " (busy.join(", "))
+            " are assigned to a station. Delete or detach those stations first."
+        } }));
+    }
     let note = match crate::vgpu::set_sriov_numvfs(&addr, f.numvfs) {
         Ok(()) if f.numvfs == 0 => {
             html! { div.banner.ok { "Disabled SR-IOV virtual functions on " (addr) "." } }

@@ -313,6 +313,16 @@ pub struct ProvisionSpec {
     #[serde(default)]
     pub size_gib: Option<u32>,
     #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub hostname: String,
+    #[serde(default)]
+    pub unattend: bool,
+    #[serde(default)]
+    pub native: bool,
+    #[serde(default)]
     pub start: bool,
 }
 
@@ -424,14 +434,28 @@ pub struct FleetCreateForm {
     #[serde(default)]
     target: String,
     #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    hostname: String,
+    #[serde(default)]
     memory_mib: String,
     #[serde(default)]
     vcpus: String,
     #[serde(default)]
+    size_gib: String,
+    #[serde(default)]
+    unattend: Option<String>,
+    #[serde(default)]
+    native: Option<String>,
+    #[serde(default)]
     start: Option<String>,
 }
 
-/// The "create a station on the fleet" form.
+/// The "create a station on the fleet" form — mirrors the standard station wizard (same options,
+/// sensible defaults), with the non-essential ones behind an Advanced toggle. GPU is auto-assigned by
+/// placement rather than picked; seats/USB and vGPU are set on the node's own wizard.
 pub async fn new_page() -> Markup {
     let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
     let images = crate::images::list();
@@ -440,6 +464,7 @@ pub async fn new_page() -> Markup {
         "New fleet station",
         html! {
             (ui::panel("Create a station on the fleet", None, html! {
+                @let (ram, vcpus, disk) = crate::stations::resource_defaults();
                 form.grid.pad method="post" action="/fleet/create" {
                     div.field { label { "Station name" } input name="name" value="station1" required; }
                     div.field {
@@ -450,31 +475,57 @@ pub async fn new_page() -> Markup {
                                 option value=(n.name) { (n.name) " (" (free_gpu(n).map(|_| "free GPU").unwrap_or("no free GPU")) ")" }
                             } }
                         }
+                        span.hint { "A whole GPU is auto-assigned on the chosen node." }
                     }
                     @if !images.is_empty() {
                         div.field.wide {
-                            label { "Base image (clone — the OS comes from the image)" }
-                            select name="base_image" {
-                                option value="" { "None — install fresh" }
-                                @for (n, sz) in &images { option value=(n) { (n) " (" (sz) ") · " (crate::images::os_display(n)) } }
+                            label { "Base image (clone a ready-to-play station instantly)" }
+                            select #fleet-base name="base_image" onchange="fleetClone()" {
+                                option value="" { "None — install the OS fresh" }
+                                @for (n, sz) in &images {
+                                    @let osa = crate::images::image_os_short(n);
+                                    option value=(n) data-os=(osa) { (n) " (" (sz) ") · " (crate::images::os_display(n)) }
+                                }
                             }
-                            span.hint { "Golden images on the shared store are visible to every node. Cloning is instant and needs no install media." }
+                            span.hint { "Golden images on the shared store are visible to every node — cloning is instant, needs no install media, and the OS comes from the image." }
                         }
                     }
-                    div.field {
-                        label { "Guest OS (fresh install only)" }
-                        select name="os" {
+                    div.field.fleet-install-only {
+                        label { "Guest OS" }
+                        select #fleet-os name="os" {
                             option value="windows" { "Windows 11" }
                             option value="steamos" { "SteamOS (Bazzite)" }
                         }
                     }
-                    div.field { label { "Memory (MiB, blank = node default)" } input name="memory_mib" inputmode="numeric"; }
-                    div.field { label { "vCPUs (blank = node default)" } input name="vcpus" inputmode="numeric"; }
-                    div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now" } }
+                    div.field.fleet-install-only { label { "Username" } input name="username" value="player"; }
+                    div.field.fleet-install-only { label { "Password" } input name="password" value="tendril"; }
+                    details.advanced.wide {
+                        summary { "Advanced options" }
+                        div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
+                            div.field.check.fleet-install-only { input type="checkbox" name="unattend" id="f-unattend" checked; label for="f-unattend" { "Install unattended (hands-off)" } span.hint { "Installs the guest OS without prompts using the account above." } }
+                            div.field.check { input type="checkbox" name="native" id="f-native"; label for="f-native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
+                            div.field.check { input type="checkbox" name="start" id="f-start" checked; label for="f-start" { "Start now" } }
+                        }
+                        div.grid style="margin-top:12px" {
+                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Default sized to the chosen node." } }
+                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; }
+                            div.field.fleet-install-only { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; }
+                            div.field.wide.fleet-install-only { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
+                        }
+                    }
                     div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create on fleet" } a.btn href="/fleet" { "Cancel" } } }
+                    (maud::PreEscaped(
+                        "<script>window.fleetClone=function(){\
+                         var b=document.getElementById('fleet-base');if(!b)return;\
+                         var o=b.options[b.selectedIndex];var cloning=b.value!=='';\
+                         document.querySelectorAll('.fleet-install-only').forEach(function(e){e.style.display=cloning?'none':'';});\
+                         var os=o&&o.getAttribute('data-os');var s=document.getElementById('fleet-os');\
+                         if(cloning&&os&&s){s.value=os;}\
+                         if(cloning&&!os&&s){var f=s.closest('.fleet-install-only');if(f)f.style.display='';}\
+                         };fleetClone();</script>"
+                    ))
                 }
             }))
-            p.sub.pad { "A whole GPU is assigned on the chosen node. Seats/USB, vGPU, and unattended options are set on the node's own wizard for now." }
         },
     )
 }
@@ -496,7 +547,12 @@ pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>
         gpu: Some(gpu.clone()),
         memory_mib: f.memory_mib.trim().parse().ok(),
         vcpus: f.vcpus.trim().parse().ok(),
-        size_gib: None,
+        size_gib: f.size_gib.trim().parse().ok(),
+        username: f.username.clone(),
+        password: f.password.clone(),
+        hostname: f.hostname.clone(),
+        unattend: f.unattend.is_some(),
+        native: f.native.is_some(),
         start: f.start.is_some(),
     };
     let (t, sp) = (target.clone(), spec.clone());
@@ -659,6 +715,11 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
         memory_mib: None,
         vcpus: None,
         size_gib: None,
+        username: String::new(),
+        password: String::new(),
+        hostname: String::new(),
+        unattend: false,
+        native: false,
         start: true,
     };
     let (t, sp) = (target.clone(), spec.clone());

@@ -679,8 +679,8 @@ fn disk_target_ok(disk: &str) -> bool {
 
 /// Provision a station on THIS node from a compact federation spec (used by the remote-provision API
 /// and the fleet create flow). Supports cloning a golden image (the federation-primary path — images
-/// live on the shared store) or a fresh install with an explicit GPU address. Seats/USB, unattended
-/// tuning, native-hardware, and vGPU are left to the local wizard for now.
+/// live on the shared store) or a fresh install (optionally unattended). Seats/USB and vGPU are left
+/// to the node's own wizard for now.
 pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(), String> {
     if !valid_station_name(&s.name) {
         return Err("invalid station name (letters, numbers, - _ . only)".into());
@@ -715,10 +715,29 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         let install_iso = Some(default_iso(guest));
         let virtio_iso = matches!(guest, GuestOs::Windows)
             .then(|| format!("{}/virtio-win.iso", crate::storage::iso_dir()));
+        // Unattended install: build the answer-file/kickstart seed from the account fields.
+        let seed_iso = if s.unattend {
+            let user = if s.username.trim().is_empty() {
+                "player"
+            } else {
+                s.username.trim()
+            };
+            let pass = if s.password.trim().is_empty() {
+                "tendril"
+            } else {
+                s.password.trim()
+            };
+            Some(
+                build_seed(guest, &s.name, &disk, user, pass, s.hostname.trim())
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
         media = InstallMedia {
             install_iso,
             virtio_iso,
-            seed_iso: None,
+            seed_iso,
         };
     }
     let req = StationRequest {
@@ -729,7 +748,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         create_disk,
         vcpus: s.vcpus.unwrap_or(dvcpus),
         memory_mib: s.memory_mib.unwrap_or(dram),
-        native_hardware: false,
+        native_hardware: s.native,
         passthrough_addresses: passthrough_for(s.gpu.as_deref().unwrap_or("")),
         mdev_uuid: None,
         media,
@@ -809,7 +828,7 @@ fn assign_gpu(sel: &str) -> Result<GpuAssignment, String> {
 
 /// Sensible per-station resource defaults: split the host's RAM, CPU threads, and free disk evenly
 /// across the passthrough-capable GPUs (one station per GPU). Returns (memory_mib, vcpus, disk_gib).
-fn resource_defaults() -> (u64, u32, u32) {
+pub(crate) fn resource_defaults() -> (u64, u32, u32) {
     let num = detect().passthrough_capable().count().max(1) as u64;
     let total_ram_mib = std::fs::read_to_string("/proc/meminfo")
         .ok()

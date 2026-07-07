@@ -81,9 +81,14 @@ fn verify_password(pw: &str) -> bool {
 // ── sessions ────────────────────────────────────────────────────────────────────────────────
 
 fn new_token() -> String {
+    use std::fmt::Write as _;
     let mut b = [0u8; 32];
     OsRng.fill_bytes(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    let mut s = String::with_capacity(64);
+    for x in b {
+        let _ = write!(s, "{x:02x}");
+    }
+    s
 }
 
 fn create_session() -> String {

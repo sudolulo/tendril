@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Windows media fetch only downloads what's missing.** If you already have a valid `win11.iso` or
+  `virtio-win.iso`, the fetcher skips it and grabs only the other (pass `--force` to re-fetch both).
+  Downloads are written atomically (temp + move), so a "present" file is always complete — an
+  interrupted download won't be mistaken for a good copy. When win11 is already present, the fetch no
+  longer requires the whole UUP toolchain just to grab virtio.
+
 ## [0.13.1] - 2026-07-07
 
 Safety fix for the network trial, plus System/wizard polish.

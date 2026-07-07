@@ -24,6 +24,11 @@ on:
 jobs:
   release:
     runs-on: host
+    # The built-in Actions token needs package-write to push to the container registry (login is
+    # rejected as "invalid username/password" without it) and repo-read to clone.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Build image + ISO and publish
         env:

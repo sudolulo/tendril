@@ -127,6 +127,49 @@ fn ipv4(name: &str) -> Ipv4Cfg {
     cfg
 }
 
+/// The connection's *runtime* IPv4 — what's actually in effect right now (from DHCP or static):
+/// (address, gateway, dns). Used to fill the form placeholders so a DHCP connection shows its real
+/// current address/gateway/DNS instead of a generic example.
+fn runtime_ipv4(name: &str) -> Ipv4Cfg {
+    let out = ui::run_stdout(
+        "nmcli",
+        &[
+            "-t",
+            "-f",
+            "IP4.ADDRESS,IP4.GATEWAY,IP4.DNS",
+            "connection",
+            "show",
+            name,
+        ],
+    )
+    .unwrap_or_default();
+    let mut cfg = Ipv4Cfg {
+        method: String::new(),
+        address: String::new(),
+        gateway: String::new(),
+        dns: String::new(),
+    };
+    let mut dns = Vec::new();
+    for line in out.lines() {
+        // Keys are indexed, e.g. "IP4.ADDRESS[1]:192.168.10.22/24", "IP4.DNS[1]:1.1.1.1".
+        if let Some((k, v)) = line.split_once(':') {
+            let v = v.trim();
+            if v.is_empty() || v == "--" {
+                continue;
+            }
+            if k.starts_with("IP4.ADDRESS") && cfg.address.is_empty() {
+                cfg.address = v.to_string();
+            } else if k == "IP4.GATEWAY" {
+                cfg.gateway = v.to_string();
+            } else if k.starts_with("IP4.DNS") {
+                dns.push(v.to_string());
+            }
+        }
+    }
+    cfg.dns = dns.join(" ");
+    cfg
+}
+
 /// Split one terse (`-t`) nmcli line on unescaped ':' and unescape the fields.
 fn split_terse(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
@@ -192,7 +235,11 @@ fn config_panel_note(note: Option<Markup>) -> Markup {
                 div.pad {
                     @for c in &conns {
                         @let cfg = ipv4(&c.name);
+                        @let rt = runtime_ipv4(&c.name);
                         @let manual = cfg.method == "manual";
+                        @let ph_addr = if rt.address.is_empty() { "192.168.1.50/24".to_string() } else { rt.address.clone() };
+                        @let ph_gw = if rt.gateway.is_empty() { "192.168.1.1".to_string() } else { rt.gateway.clone() };
+                        @let ph_dns = if rt.dns.is_empty() { "1.1.1.1 8.8.8.8".to_string() } else { rt.dns.clone() };
                         form.netform hx-post="/network/apply" hx-target="#netconfig" hx-swap="outerHTML"
                             hx-confirm=(format!("Apply IPv4 settings to '{}' ({})? This reactivates the connection and may briefly drop the link.", c.name, c.device)) {
                             input type="hidden" name="name" value=(c.name);
@@ -207,16 +254,16 @@ fn config_panel_note(note: Option<Markup>) -> Markup {
                                 }
                             }
                             div.netgrid {
-                                div.field { label { "Address (CIDR)" } input name="address" placeholder="192.168.1.50/24" value=(cfg.address); }
+                                div.field { label { "Address (CIDR)" } input name="address" placeholder=(ph_addr) value=(cfg.address); }
                             }
                             details.advanced style="margin:10px 0" {
                                 summary { "Advanced: gateway & DNS" }
                                 div.netgrid {
-                                    div.field { label { "Gateway" } input name="gateway" placeholder="192.168.1.1" value=(cfg.gateway); }
-                                    div.field { label { "DNS (space-separated)" } input name="dns" placeholder="1.1.1.1 8.8.8.8" value=(cfg.dns); }
+                                    div.field { label { "Gateway" } input name="gateway" placeholder=(ph_gw) value=(cfg.gateway); }
+                                    div.field { label { "DNS (space-separated)" } input name="dns" placeholder=(ph_dns) value=(cfg.dns); }
                                 }
                             }
-                            p.sub style="margin:2px 0 10px" { "Address, gateway, and DNS are used only when the method is Manual." }
+                            p.sub style="margin:2px 0 10px" { "Address, gateway, and DNS are used only when the method is Manual. On DHCP the greyed values above are what's currently in effect." }
                             button.btn.primary type="submit" { "Apply to " (c.device) }
                             hr style="border:0; border-top:1px solid var(--line); margin:16px 0 4px";
                         }

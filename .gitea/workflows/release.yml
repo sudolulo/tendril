@@ -35,6 +35,8 @@ jobs:
           REG: git.onetick.ninja
           OWNER: ${{ github.repository_owner }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A real PAT — the built-in Actions token can't authenticate to the container registry.
+          REG_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
           DL_DIR: /srv/tendril-dl
@@ -54,8 +56,8 @@ jobs:
           # 1. Build the bootc host image.
           podman build -f image/Containerfile -t localhost/tendril:dev .
 
-          # 2. Push to the Gitea container registry.
-          echo "$TOKEN" | podman login "$REG" -u "$OWNER" --password-stdin
+          # 2. Push to the Gitea container registry (PAT — the built-in token is rejected here).
+          echo "$REG_TOKEN" | podman login "$REG" -u "$OWNER" --password-stdin
           podman tag localhost/tendril:dev "$REG/$OWNER/tendril:$V"
           podman tag localhost/tendril:dev "$REG/$OWNER/tendril:latest"
           podman push "$REG/$OWNER/tendril:$V"
@@ -83,7 +85,7 @@ jobs:
 
           # 5. Create the Gitea release for tag v$V (idempotent — skip if it already exists).
           api="https://${REG}/api/v1/repos/${REPO}"
-          auth="Authorization: token ${TOKEN}"
+          auth="Authorization: token ${REG_TOKEN}"
           tag="v$V"
           if curl -fsS -H "$auth" "$api/releases/tags/$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — leaving it as-is."

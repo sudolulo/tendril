@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-07
+
+Marginal-buffer station sizing, network/media polish, and a release pipeline that finally auto-publishes.
+
 ### Added
 - **Media provenance tooltips.** Each known install ISO (Windows/virtio/Bazzite) carries an "ⓘ source"
   tooltip explaining where it came from and how it's verified, so the media never looks like it
@@ -16,8 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visible on test builds.
 
 ### Changed
+- **Station resource defaults are now proportional to GPU count with only a marginal host buffer.**
+  RAM/CPU/disk split evenly across one station per GPU, keeping just what the host OS needs to run
+  (~2 GiB RAM, 1 thread, ~20 GiB disk) instead of a large proportional reserve. On an 8-thread / 8 GB
+  box a single station now defaults to ~7 vCPU and ~5–6 GB rather than 6 vCPU / 4 GB.
+- **Network:** on a DHCP connection the form now shows the box's **real current address/gateway/DNS**
+  as placeholders (instead of generic examples), and the System page puts **OS image above Host**.
 - System page: automatic-updates toggle sits **under OS image** (with the update controls); logs now
   **drop SELinux `audit`/AVC spam** from both the All and Stations-only views.
+- **Automated releases work.** `release.yml` authenticates to the container registry with a stored PAT
+  (`REGISTRY_TOKEN`) — the built-in Actions token is rejected there even with `packages: write`.
 - **Windows media fetch only downloads what's missing.** If you already have a valid `win11.iso` or
   `virtio-win.iso`, the fetcher skips it and grabs only the other (pass `--force` to re-fetch both).
   Downloads are written atomically (temp + move), so a "present" file is always complete — an

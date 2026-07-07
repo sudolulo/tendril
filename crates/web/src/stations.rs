@@ -210,9 +210,9 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install immediately)" } }
                         }
                         div.grid style="margin-top:12px" {
-                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: host RAM (minus headroom) ÷ GPUs" } }
-                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: host threads (minus 2) ÷ GPUs" } }
-                            div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: 80% of free disk ÷ GPUs" } }
+                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
+                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: (host threads − 1) ÷ GPUs" } }
+                            div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
                             div.field { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
                             div.field.wide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{ISO_DIR}/win11.iso · bazzite-deck-nvidia.iso")); }
                             div.field.wide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{ISO_DIR}/virtio-win.iso")); }
@@ -537,16 +537,12 @@ fn resource_defaults() -> (u64, u32, u32) {
         .map(|b| b / (1 << 30)) // GiB (binary), matching the RAM/threads units
         .unwrap_or(256);
 
-    // Leave the host real headroom, then split what's left evenly across one station per GPU.
-    // RAM: reserve max(4 GiB, 1/8 of RAM) for the host; each station ≥ 4 GiB (whole GiB).
-    let host_ram_reserve_mib = (total_ram_mib / 8).max(4096);
-    let usable_ram_mib = total_ram_mib.saturating_sub(host_ram_reserve_mib);
-    let ram = ((usable_ram_mib / num) / 1024).max(4) * 1024;
-    // CPU: reserve 2 threads for the host; each station ≥ 2 threads.
-    let usable_threads = threads.saturating_sub(2).max(1);
-    let vcpus = (usable_threads / num).max(2) as u32;
-    // Disk: 80% of free space split per station, clamped to a sane gaming range (qcow2 is sparse).
-    let disk = ((free_disk_gib * 8 / 10) / num).clamp(64, 512) as u32;
+    // Split resources across one station per GPU, keeping only a *marginal* buffer for the host OS to
+    // run (a lean bootc host plus libvirt/qemu overhead) — not a large proportional slice. Flat
+    // reserves so a big host isn't over-reserved. Each station keeps a sane minimum.
+    let ram = ((total_ram_mib.saturating_sub(2048) / num) / 1024).max(2) * 1024; // ~2 GiB for the host
+    let vcpus = (threads.saturating_sub(1) / num).max(2) as u32; // 1 thread for the host
+    let disk = (free_disk_gib.saturating_sub(20) / num).clamp(32, 1024) as u32; // ~20 GiB for the host
     (ram, vcpus, disk)
 }
 

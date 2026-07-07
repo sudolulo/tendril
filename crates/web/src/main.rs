@@ -6,6 +6,7 @@
 //! are baked into the binary, so the appliance serves everything offline.
 
 mod auth;
+mod cluster;
 mod demo;
 mod hardware;
 mod images;
@@ -39,6 +40,9 @@ async fn main() {
     let app = Router::new()
         .route("/", get(pages::dashboard))
         .route("/stats", get(pages::stats))
+        // federation
+        .route("/cluster", get(cluster::page))
+        .route("/api/node", get(cluster::api_node))
         // stations
         .route("/stations", get(stations::list_page).post(stations::create))
         .route("/stations/fragment", get(stations::fragment_route))

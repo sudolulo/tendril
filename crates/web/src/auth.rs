@@ -161,7 +161,14 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
     }
     let open =
         path.starts_with("/assets/") || path == "/login" || path == "/logout" || path == "/setup";
-    if open || authenticated(&req) {
+    // A peer node calling our federation API authenticates with the shared cluster token.
+    let cluster_api = path == "/api/node"
+        && req
+            .headers()
+            .get("X-Tendril-Cluster")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(crate::cluster::token_ok);
+    if open || cluster_api || authenticated(&req) {
         return next.run(req).await;
     }
     // Not authenticated: first run has no password → set one; otherwise sign in.

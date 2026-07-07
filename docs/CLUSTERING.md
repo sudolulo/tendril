@@ -99,11 +99,26 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 
 ## Phased build order
 
-| Phase | Delivers |
-|---|---|
-| **A — Fleet view** | Aggregator management view over the per-node APIs (stations, GPUs, health) + node heartbeats. Read-only. |
-| **B — Placement + remote provision** | Stateless GPU-aware placement: pick a compatible node and call its create endpoint. Station registry on the shared store. |
-| **C — Integrity + assisted re-home** | Golden-image SHA-256 record + verify (started now, standalone); node-down detection; one-click human-confirmed cold re-home (with the shared-disk power-off guard). |
+| Phase | Delivers | Status |
+|---|---|---|
+| **A — Fleet view** | Aggregator management view over the per-node APIs (stations, GPUs, health), with reachable/unreachable per node. Read-only. | **✅ done** |
+| **B — Placement + remote provision** | Stateless GPU-aware placement: pick a compatible node and call its create endpoint. Station registry on the shared store. | Next |
+| **C — Integrity + assisted re-home** | Golden-image SHA-256 record + verify (**✅ done**, standalone); node-down detection (✅ via the fleet view); one-click human-confirmed cold re-home (with the shared-disk power-off guard). | Partial |
+
+### Configuration (Phase A)
+
+Federation is off until peers are configured; then a **Fleet** tab appears. Configure each node via env
+(systemd `Environment=`) or `/etc/tendril/cluster.conf` (`key=value` lines):
+
+| Setting | Env | conf key | Meaning |
+|---|---|---|---|
+| Node name | `TENDRIL_NODE_NAME` | `name` | This node's label in the fleet (defaults to hostname). |
+| Shared token | `TENDRIL_CLUSTER_TOKEN` | `token` | Secret every node shares; peers present it (`X-Tendril-Cluster`) to read each other's `/api/node`. Also readable from `/etc/tendril/cluster-token`. |
+| Peers | `TENDRIL_PEERS` (comma-sep) | repeated `peer=` | Each peer as `name=http://host:port` or a bare URL. |
+
+The aggregator reads peers over `GET /api/node` (JSON) with a short timeout; an unresponsive peer is
+shown as **unreachable** (its stations keep running — it's just not manageable until it's back). Nodes
+otherwise stay fully independent; there is no shared state in Phase A.
 
 ## Deferred: autonomous operation
 

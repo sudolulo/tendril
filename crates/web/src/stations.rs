@@ -136,6 +136,7 @@ pub async fn delete(Path(n): Path<String>) -> Markup {
     if let Some(uuid) = mdev {
         crate::vgpu::remove_mdev(&uuid);
     }
+    crate::cluster::forget_station(&crate::cluster::node_name(), &n);
     out
 }
 
@@ -385,7 +386,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         };
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
-            Ok(_) => Redirect::to(&format!("/stations/{name}")).into_response(),
+            Ok(_) => {
+                record_local(&name, guest, Some(&base_image));
+                Redirect::to(&format!("/stations/{name}")).into_response()
+            }
             Err(e) => {
                 assign.cleanup();
                 create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
@@ -496,6 +500,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     let lv = Libvirt::system();
     match provision(&req, &lv) {
         Ok(report) => {
+            record_local(&name, guest, None);
             if report.started && req.needs_boot_prompt_clear() {
                 // Clear the Windows CD prompt without blocking the response.
                 let n = name.clone();
@@ -568,6 +573,7 @@ fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
     let lv = Libvirt::system();
     match provision(&req, &lv) {
         Ok(report) => {
+            record_local(&req.name, guest, None);
             if report.started && req.needs_boot_prompt_clear() {
                 Libvirt::system().clear_boot_prompt(&req.name);
             }
@@ -731,9 +737,23 @@ pub(crate) fn provision_spec(s: &crate::cluster::ProvisionSpec) -> Result<(), St
         define: true,
         start: s.start,
     };
-    provision(&req, &Libvirt::system())
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    provision(&req, &Libvirt::system()).map_err(|e| e.to_string())?;
+    record_local(
+        &s.name,
+        guest,
+        s.base_image.as_deref().filter(|b| !b.is_empty()),
+    );
+    Ok(())
+}
+
+/// Record a station this node just created into the shared fleet registry (so it can be re-homed if
+/// this node later goes down). No-op-safe when there's no shared store (writes locally).
+fn record_local(name: &str, guest: GuestOs, base_image: Option<&str>) {
+    let os = match guest {
+        GuestOs::Windows => "windows",
+        GuestOs::SteamOs => "steamos",
+    };
+    crate::cluster::record_station(&crate::cluster::node_name(), name, os, base_image);
 }
 
 pub(crate) fn passthrough_for(addr: &str) -> Vec<String> {

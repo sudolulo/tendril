@@ -109,6 +109,15 @@ pub fn image_dir() -> String {
         .unwrap_or_else(|| LOCAL_IMAGES.to_string())
 }
 
+/// The fleet station registry: env override, else the mounted store's `registry/`, else local. Shared
+/// so a node's stations are known even when the node itself is down (for re-home).
+pub fn registry_dir() -> String {
+    std::env::var("TENDRIL_REGISTRY_DIR")
+        .ok()
+        .or_else(|| active_mount().map(|m| format!("{m}/registry")))
+        .unwrap_or_else(|| "/var/lib/tendril/registry".to_string())
+}
+
 // ── mount / unmount ─────────────────────────────────────────────────────────────────────────────
 
 fn mount_store(s: &Store, password: &str) -> Result<(), String> {
@@ -143,9 +152,10 @@ fn mount_store(s: &Store, password: &str) -> Result<(), String> {
         args.push(&opts);
     }
     ui::run_result("mount", &args).map_err(|e| e.to_string())?;
-    // Create the media/image subdirs on the share.
+    // Create the media/image/registry subdirs on the share.
     let _ = std::fs::create_dir_all(format!("{}/isos", s.mount));
     let _ = std::fs::create_dir_all(format!("{}/images", s.mount));
+    let _ = std::fs::create_dir_all(format!("{}/registry", s.mount));
     persist_fstab(s, &opts);
     Ok(())
 }

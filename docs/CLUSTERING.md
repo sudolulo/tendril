@@ -103,7 +103,7 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 |---|---|---|
 | **A — Fleet view** | Aggregator management view over the per-node APIs (stations, GPUs, health), with reachable/unreachable per node. Read-only. | **✅ done** |
 | **B — Placement + remote provision** | Stateless GPU-aware placement: pick a compatible node and call its create endpoint. Station registry on the shared store. | Next |
-| **C — Integrity + assisted re-home** | Golden-image SHA-256 record + verify (**✅ done**, standalone); node-down detection (✅ via the fleet view); one-click human-confirmed cold re-home (with the shared-disk power-off guard). | Partial |
+| **C — Integrity + assisted re-home** | Golden-image SHA-256 record + verify (**✅ done**); node-down detection (**✅** via the fleet view); a shared **station registry** (a JSON record per station on the store, written on provision, dropped on delete) so a down node's stations are known; and **one-click human-confirmed cold re-home** of an image-backed station onto a healthy node. | **✅ done** |
 
 ### Configuration (Phase A)
 

@@ -44,6 +44,7 @@ async fn main() {
         .route("/cluster", get(cluster::page))
         .route("/cluster/new", get(cluster::new_page))
         .route("/cluster/create", post(cluster::create))
+        .route("/cluster/rehome", post(cluster::rehome))
         .route("/api/node", get(cluster::api_node))
         .route("/api/provision", post(cluster::api_provision))
         // stations

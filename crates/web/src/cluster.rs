@@ -526,6 +526,168 @@ fn banner(ok: bool, msg: &str) -> Markup {
     html! { div class=(if ok { "banner ok" } else { "banner error" }) { (msg) } }
 }
 
+fn os_pretty(os: &str) -> &'static str {
+    match os {
+        "windows" => "Windows 11",
+        "steamos" => "SteamOS",
+        _ => "—",
+    }
+}
+
+// ── station registry (Phase C) — shared record so a down node's stations are recoverable ─────────
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct StationRecord {
+    pub node: String,
+    pub name: String,
+    #[serde(default)]
+    pub os: String,
+    /// The golden image a station was cloned from, if any — the key to re-homing it elsewhere.
+    #[serde(default)]
+    pub base_image: Option<String>,
+}
+
+fn safe_component(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn record_file(node: &str, name: &str) -> String {
+    format!(
+        "{}/{}__{}.json",
+        crate::storage::registry_dir(),
+        safe_component(node),
+        safe_component(name)
+    )
+}
+
+/// Record (or update) a station in the shared registry so it's known even if its node goes down. The
+/// provisioning node calls this for its own stations (`node` is this node's name).
+pub fn record_station(node: &str, name: &str, os: &str, base_image: Option<&str>) {
+    let _ = std::fs::create_dir_all(crate::storage::registry_dir());
+    let rec = StationRecord {
+        node: node.to_string(),
+        name: name.to_string(),
+        os: os.to_string(),
+        base_image: base_image.map(str::to_string),
+    };
+    if let Ok(j) = serde_json::to_string(&rec) {
+        let _ = std::fs::write(record_file(node, name), j);
+    }
+}
+
+/// Drop a station's registry record.
+pub fn forget_station(node: &str, name: &str) {
+    let _ = std::fs::remove_file(record_file(node, name));
+}
+
+fn all_records() -> Vec<StationRecord> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(crate::storage::registry_dir()) {
+        for e in rd.flatten() {
+            if e.path().extension().is_some_and(|x| x == "json") {
+                if let Ok(txt) = std::fs::read_to_string(e.path()) {
+                    if let Ok(r) = serde_json::from_str::<StationRecord>(&txt) {
+                        out.push(r);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn records_for(node: &str) -> Vec<StationRecord> {
+    let mut v: Vec<StationRecord> = all_records()
+        .into_iter()
+        .filter(|r| r.node == node)
+        .collect();
+    v.sort_by(|a, b| a.name.cmp(&b.name));
+    v
+}
+
+#[derive(Deserialize)]
+pub struct RehomeForm {
+    name: String,
+    from: String,
+}
+
+/// Cold re-home a down node's station onto a healthy one: recreate it from its golden image, place it
+/// on a survivor with a free GPU, and move its registry record. Human-confirmed in the UI.
+pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> Markup {
+    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let Some(rec) = records_for(&f.from).into_iter().find(|r| r.name == f.name) else {
+        return fleet_page(
+            nodes,
+            Some(banner(false, "No registry record for that station.")),
+        );
+    };
+    let Some(base) = rec.base_image.clone().filter(|b| !b.is_empty()) else {
+        return fleet_page(
+            nodes,
+            Some(banner(
+                false,
+                &format!(
+                    "\u{201c}{}\u{201d} has no golden image recorded — its disk was local to {}, so it can't be re-homed. Recreate it fresh.",
+                    rec.name, f.from
+                ),
+            )),
+        );
+    };
+    // Survivors: reachable nodes other than the down one.
+    let survivors: Vec<NodeInfo> = nodes
+        .iter()
+        .filter(|n| n.reachable && n.name != f.from)
+        .cloned()
+        .collect();
+    let (target, gpu) = match place(&survivors, "") {
+        Ok(x) => x,
+        Err(e) => return fleet_page(nodes, Some(banner(false, &format!("Can't re-home: {e}")))),
+    };
+    let spec = ProvisionSpec {
+        name: rec.name.clone(),
+        os: rec.os.clone(),
+        base_image: Some(base),
+        gpu: Some(gpu.clone()),
+        memory_mib: None,
+        vcpus: None,
+        size_gib: None,
+        start: true,
+    };
+    let (t, sp) = (target.clone(), spec.clone());
+    let res = tokio::task::spawn_blocking(move || dispatch(&t, &sp))
+        .await
+        .unwrap_or_else(|_| Err("dispatch task panicked".into()));
+    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    match res {
+        Ok(()) => {
+            // The target recorded the station under its own name; drop the old node's record.
+            forget_station(&f.from, &rec.name);
+            fleet_page(
+                nodes,
+                Some(banner(
+                    true,
+                    &format!(
+                        "Re-homed \u{201c}{}\u{201d} from {} onto {target} (GPU {gpu}).",
+                        rec.name, f.from
+                    ),
+                )),
+            )
+        }
+        Err(e) => fleet_page(
+            nodes,
+            Some(banner(false, &format!("Re-home failed on {target}: {e}"))),
+        ),
+    }
+}
+
 fn node_card(n: &NodeInfo) -> Markup {
     let free_gpus = n
         .gpus
@@ -538,7 +700,35 @@ fn node_card(n: &NodeInfo) -> Markup {
         html! {
             div.pad {
                 @if !n.reachable {
-                    p.sub { "Node is not responding. Existing stations keep running; it's just not reachable for management right now." }
+                    p.sub { "Node is not responding. Its stations keep running if it's only a network blip; if the node is dead, re-home its image-backed stations onto a healthy node below." }
+                    @let recs = records_for(&n.name);
+                    @if recs.is_empty() {
+                        p.sub { "No stations recorded for this node in the shared registry." }
+                    } @else {
+                        div.scroll { table {
+                            thead { tr { th { "Station" } th { "OS" } th { "Golden image" } th.right { "" } } }
+                            tbody { @for r in &recs {
+                                @let recoverable = r.base_image.as_deref().map(|b| !b.is_empty()).unwrap_or(false);
+                                tr {
+                                    td.mono { (r.name) }
+                                    td { (os_pretty(&r.os)) }
+                                    td.mono.sub { (r.base_image.as_deref().unwrap_or("—")) }
+                                    td.right {
+                                        @if recoverable {
+                                            form method="post" action="/cluster/rehome" style="display:inline"
+                                                onsubmit=(format!("return confirm('Re-home \"{}\" onto a healthy node? It is recreated from its golden image and started. If {} comes back, delete the duplicate there.')", r.name, n.name)) {
+                                                input type="hidden" name="name" value=(r.name);
+                                                input type="hidden" name="from" value=(n.name);
+                                                button.btn.sm type="submit" { "Re-home" }
+                                            }
+                                        } @else {
+                                            span.sub title="No golden image recorded and the disk was local to this node — its state can't be recovered; recreate it fresh." { "not re-homeable" }
+                                        }
+                                    }
+                                }
+                            } }
+                        } }
+                    }
                 } @else {
                     p.sub style="margin:0 0 10px" {
                         (n.stations.len()) " station(s) · " (n.gpus.len()) " GPU(s), " (free_gpus) " free for passthrough"

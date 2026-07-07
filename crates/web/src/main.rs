@@ -42,7 +42,10 @@ async fn main() {
         .route("/stats", get(pages::stats))
         // federation
         .route("/cluster", get(cluster::page))
+        .route("/cluster/new", get(cluster::new_page))
+        .route("/cluster/create", post(cluster::create))
         .route("/api/node", get(cluster::api_node))
+        .route("/api/provision", post(cluster::api_provision))
         // stations
         .route("/stations", get(stations::list_page).post(stations::create))
         .route("/stations/fragment", get(stations::fragment_route))

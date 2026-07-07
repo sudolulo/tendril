@@ -162,7 +162,7 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
     let open =
         path.starts_with("/assets/") || path == "/login" || path == "/logout" || path == "/setup";
     // A peer node calling our federation API authenticates with the shared cluster token.
-    let cluster_api = path == "/api/node"
+    let cluster_api = (path == "/api/node" || path == "/api/provision")
         && req
             .headers()
             .get("X-Tendril-Cluster")

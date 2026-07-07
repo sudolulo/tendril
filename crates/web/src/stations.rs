@@ -671,7 +671,72 @@ fn disk_target_ok(disk: &str) -> bool {
     d != images && !d.starts_with(&format!("{images}/"))
 }
 
-fn passthrough_for(addr: &str) -> Vec<String> {
+/// Provision a station on THIS node from a compact federation spec (used by the remote-provision API
+/// and the fleet create flow). Supports cloning a golden image (the clustering-primary path — images
+/// live on the shared store) or a fresh install with an explicit GPU address. Seats/USB, unattended
+/// tuning, native-hardware, and vGPU are left to the local wizard for now.
+pub(crate) fn provision_spec(s: &crate::cluster::ProvisionSpec) -> Result<(), String> {
+    if !valid_station_name(&s.name) {
+        return Err("invalid station name (letters, numbers, - _ . only)".into());
+    }
+    let disk = format!("{DISK_DIR}/{}.qcow2", s.name);
+    if !disk_target_ok(&disk) {
+        return Err("disk path resolves into the images directory".into());
+    }
+    let (dram, dvcpus, ddisk) = resource_defaults();
+    let guest;
+    let create_disk;
+    let size_gib;
+    let media;
+    if let Some(img) = s.base_image.as_deref().filter(|i| !i.is_empty()) {
+        let base = crate::images::path_of(img).ok_or("base image not found on this node")?;
+        if FsPath::new(&disk).exists() {
+            return Err(format!("a disk already exists at {disk}"));
+        }
+        create_overlay(FsPath::new(&disk), FsPath::new(&base)).map_err(|e| e.to_string())?;
+        guest = crate::images::image_os(img).unwrap_or(GuestOs::Windows);
+        create_disk = false;
+        size_gib = 0;
+        media = InstallMedia::default();
+    } else {
+        guest = if s.os == "steamos" {
+            GuestOs::SteamOs
+        } else {
+            GuestOs::Windows
+        };
+        create_disk = !FsPath::new(&disk).exists();
+        size_gib = s.size_gib.unwrap_or(ddisk);
+        let install_iso = Some(default_iso(guest));
+        let virtio_iso = matches!(guest, GuestOs::Windows)
+            .then(|| format!("{}/virtio-win.iso", crate::storage::iso_dir()));
+        media = InstallMedia {
+            install_iso,
+            virtio_iso,
+            seed_iso: None,
+        };
+    }
+    let req = StationRequest {
+        name: s.name.clone(),
+        guest,
+        disk_path: disk,
+        size_gib,
+        create_disk,
+        vcpus: s.vcpus.unwrap_or(dvcpus),
+        memory_mib: s.memory_mib.unwrap_or(dram),
+        native_hardware: false,
+        passthrough_addresses: passthrough_for(s.gpu.as_deref().unwrap_or("")),
+        mdev_uuid: None,
+        media,
+        usb_devices: Vec::new(),
+        define: true,
+        start: s.start,
+    };
+    provision(&req, &Libvirt::system())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) fn passthrough_for(addr: &str) -> Vec<String> {
     if addr.is_empty() {
         return Vec::new();
     }

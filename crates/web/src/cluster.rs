@@ -272,12 +272,20 @@ pub async fn api_node() -> axum::Json<NodeInfo> {
 pub async fn page() -> Markup {
     // Peer fetches shell out with a timeout; run off the async worker.
     let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    fleet_page(nodes, None)
+}
+
+fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
     let up = nodes.iter().filter(|n| n.reachable).count();
     let total_stations: usize = nodes.iter().map(|n| n.stations.len()).sum();
     ui::page(
         "fleet",
         "Fleet",
         html! {
+            @if let Some(n) = note { (n) }
+            div.btnrow style="margin-bottom:16px" {
+                a.btn.primary href="/cluster/new" { "+ New fleet station" }
+            }
             p.sub style="margin-bottom:16px" {
                 "Every node manages itself; this view aggregates the fleet over each node's API. "
                 strong { (up) "/" (nodes.len()) } " node(s) reachable · " (total_stations) " station(s)."
@@ -285,6 +293,237 @@ pub async fn page() -> Markup {
             @for n in &nodes { (node_card(n)) }
         },
     )
+}
+
+// ── remote provision + GPU-aware placement (Phase B) ────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProvisionSpec {
+    pub name: String,
+    #[serde(default)]
+    pub os: String,
+    #[serde(default)]
+    pub base_image: Option<String>,
+    #[serde(default)]
+    pub gpu: Option<String>,
+    #[serde(default)]
+    pub memory_mib: Option<u64>,
+    #[serde(default)]
+    pub vcpus: Option<u32>,
+    #[serde(default)]
+    pub size_gib: Option<u32>,
+    #[serde(default)]
+    pub start: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProvisionResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Remote-provision API: create a station on THIS node (called by the fleet aggregator with the
+/// cluster token). Provisioning is blocking libvirt work, so it runs off the async worker.
+pub async fn api_provision(
+    axum::Json(spec): axum::Json<ProvisionSpec>,
+) -> axum::Json<ProvisionResult> {
+    let res = tokio::task::spawn_blocking(move || crate::stations::provision_spec(&spec))
+        .await
+        .unwrap_or_else(|_| Err("provision task panicked".into()));
+    axum::Json(match res {
+        Ok(()) => ProvisionResult {
+            ok: true,
+            error: None,
+        },
+        Err(e) => ProvisionResult {
+            ok: false,
+            error: Some(e),
+        },
+    })
+}
+
+/// Post a provision spec to a peer's `/api/provision` over HTTP (curl, cluster token).
+fn remote_provision(url: &str, spec: &ProvisionSpec) -> Result<(), String> {
+    let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
+    let ep = format!("{}/api/provision", url.trim_end_matches('/'));
+    let auth = format!("X-Tendril-Cluster: {}", cluster_token());
+    let out = ui::run_result(
+        "curl",
+        &[
+            "-s",
+            "--max-time",
+            "120",
+            "-H",
+            &auth,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body,
+            &ep,
+        ],
+    )?;
+    let res: ProvisionResult =
+        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
+    if res.ok {
+        Ok(())
+    } else {
+        Err(res
+            .error
+            .unwrap_or_else(|| "remote provision failed".into()))
+    }
+}
+
+/// A node's first free passthrough-capable GPU address, if any.
+fn free_gpu(n: &NodeInfo) -> Option<String> {
+    n.gpus
+        .iter()
+        .find(|g| g.used_by.is_none() && g.capability == "Passthrough")
+        .map(|g| g.address.clone())
+}
+
+/// GPU-aware placement: resolve `target` ("" = auto) to a (node, gpu-address) with a free GPU.
+fn place(nodes: &[NodeInfo], target: &str) -> Result<(String, String), String> {
+    if !target.is_empty() {
+        let n = nodes
+            .iter()
+            .find(|n| n.name == target && n.reachable)
+            .ok_or("target node is not reachable")?;
+        let g = free_gpu(n).ok_or("target node has no free passthrough GPU")?;
+        Ok((n.name.clone(), g))
+    } else {
+        nodes
+            .iter()
+            .filter(|n| n.reachable)
+            .find_map(|n| free_gpu(n).map(|g| (n.name.clone(), g)))
+            .ok_or_else(|| "no node in the fleet has a free passthrough GPU".to_string())
+    }
+}
+
+/// Dispatch a provision to the chosen node — locally if it's us, else over the peer's API.
+fn dispatch(target: &str, spec: &ProvisionSpec) -> Result<(), String> {
+    if target == node_name() {
+        crate::stations::provision_spec(spec)
+    } else {
+        let url = peers()
+            .into_iter()
+            .find(|p| p.name == target)
+            .map(|p| p.url)
+            .ok_or("unknown peer node")?;
+        remote_provision(&url, spec)
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FleetCreateForm {
+    name: String,
+    #[serde(default)]
+    os: String,
+    #[serde(default)]
+    base_image: String,
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    memory_mib: String,
+    #[serde(default)]
+    vcpus: String,
+    #[serde(default)]
+    start: Option<String>,
+}
+
+/// The "create a station on the fleet" form.
+pub async fn new_page() -> Markup {
+    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let images = crate::images::list();
+    ui::page(
+        "fleet",
+        "New fleet station",
+        html! {
+            (ui::panel("Create a station on the fleet", None, html! {
+                form.grid.pad method="post" action="/cluster/create" {
+                    div.field { label { "Station name" } input name="name" value="station1" required; }
+                    div.field {
+                        label { "Placement" }
+                        select name="target" {
+                            option value="" { "Auto — any node with a free GPU" }
+                            @for n in &nodes { @if n.reachable {
+                                option value=(n.name) { (n.name) " (" (free_gpu(n).map(|_| "free GPU").unwrap_or("no free GPU")) ")" }
+                            } }
+                        }
+                    }
+                    @if !images.is_empty() {
+                        div.field.wide {
+                            label { "Base image (clone — the OS comes from the image)" }
+                            select name="base_image" {
+                                option value="" { "None — install fresh" }
+                                @for (n, sz) in &images { option value=(n) { (n) " (" (sz) ")" } }
+                            }
+                            span.hint { "Golden images on the shared store are visible to every node. Cloning is instant and needs no install media." }
+                        }
+                    }
+                    div.field {
+                        label { "Guest OS (fresh install only)" }
+                        select name="os" {
+                            option value="windows" { "Windows 11" }
+                            option value="steamos" { "SteamOS (Bazzite)" }
+                        }
+                    }
+                    div.field { label { "Memory (MiB, blank = node default)" } input name="memory_mib" inputmode="numeric"; }
+                    div.field { label { "vCPUs (blank = node default)" } input name="vcpus" inputmode="numeric"; }
+                    div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now" } }
+                    div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create on fleet" } a.btn href="/cluster" { "Cancel" } } }
+                }
+            }))
+            p.sub.pad { "A whole GPU is assigned on the chosen node. Seats/USB, vGPU, and unattended options are set on the node's own wizard for now." }
+        },
+    )
+}
+
+/// Resolve placement and dispatch the provision to the chosen node.
+pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>) -> Markup {
+    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    if f.name.trim().is_empty() {
+        return fleet_page(nodes, Some(banner(false, "Station name is required.")));
+    }
+    let (target, gpu) = match place(&nodes, f.target.trim()) {
+        Ok(x) => x,
+        Err(e) => return fleet_page(nodes, Some(banner(false, &e))),
+    };
+    let spec = ProvisionSpec {
+        name: f.name.trim().to_string(),
+        os: f.os.clone(),
+        base_image: (!f.base_image.trim().is_empty()).then(|| f.base_image.trim().to_string()),
+        gpu: Some(gpu.clone()),
+        memory_mib: f.memory_mib.trim().parse().ok(),
+        vcpus: f.vcpus.trim().parse().ok(),
+        size_gib: None,
+        start: f.start.is_some(),
+    };
+    let (t, sp) = (target.clone(), spec.clone());
+    let res = tokio::task::spawn_blocking(move || dispatch(&t, &sp))
+        .await
+        .unwrap_or_else(|_| Err("dispatch task panicked".into()));
+    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    match res {
+        Ok(()) => fleet_page(
+            nodes,
+            Some(banner(
+                true,
+                &format!(
+                    "Created \u{201c}{}\u{201d} on {target} (GPU {gpu}).",
+                    spec.name
+                ),
+            )),
+        ),
+        Err(e) => fleet_page(
+            nodes,
+            Some(banner(false, &format!("Failed on {target}: {e}"))),
+        ),
+    }
+}
+
+fn banner(ok: bool, msg: &str) -> Markup {
+    html! { div class=(if ok { "banner ok" } else { "banner error" }) { (msg) } }
 }
 
 fn node_card(n: &NodeInfo) -> Markup {

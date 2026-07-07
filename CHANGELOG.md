@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-07
+
+Safety fix for the network trial, plus System/wizard polish.
+
 ### Changed
 - **Auto-update toggle moved next to the power buttons** on the System page (under "Automatic OS
   updates"). On a non-bootc host it now renders as a clickable **demo** (labelled as such) instead of
   being hidden, so the control is visible everywhere; on a real bootc host it drives the systemd timer.
+- **Unattended-install toggle moved into Advanced** in the create-station wizard (grouped with
+  native-overlay and start-now), keeping the default view minimal. Unattended and **Start-now are
+  both on by default**, so a station installs hands-off as soon as you create it.
+- Release CI: the workflow now grants the job `packages: write` so the registry login succeeds.
 
 ### Fixed
 - **Network test-and-revert race.** The 60-second trial now reserves its backup *before* touching the

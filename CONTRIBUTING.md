@@ -84,16 +84,24 @@ CI runs the same checks; running them locally saves a round-trip.
 ## Releases — SemVer
 
 - Versions follow [SemVer](https://semver.org): `MAJOR.MINOR.PATCH`.
-- **`main` is release-only.** Merging `dev → main` **is** a release — don't do it between milestones
+- **`main` is release-only.** Advancing `main` **is** a release — don't do it between milestones
   (see *Changelog & versioning* below). Keep everyday work on `dev`.
-- **Cutting a release:** roll `[Unreleased]` into a `## [X.Y.Z] - YYYY-MM-DD` changelog section, bump
-  `version` in the workspace `Cargo.toml`, then open a `dev → main` PR and rebase-merge it. The push to
-  `main` triggers `.gitea/workflows/release.yml`, which **builds + pushes** the bootc image (registry
-  `:X.Y.Z` and `:latest`), **publishes the installer ISO** to dl.onetick.ninja, and **creates the
-  Gitea release + `vX.Y.Z` tag** — all automatically. No manual tagging.
+- **Cutting a release** (one push, no PR dance):
+  1. On `dev`: roll `[Unreleased]` into a `## [X.Y.Z] - YYYY-MM-DD` changelog section and bump
+     `version` in the workspace `Cargo.toml`. Commit and `git push origin dev`.
+  2. `git push origin dev:main` — a direct fast-forward push (the repo owner is whitelisted for
+     `main`; force-push stays blocked). That push triggers `.gitea/workflows/release.yml`, which
+     **builds + pushes** the bootc image (registry `:X.Y.Z` and `:latest`), **publishes the installer
+     ISO** to dl.onetick.ninja, and **creates the stable Gitea release + `vX.Y.Z` tag** — automatically.
+  The workflow is **idempotent by version**: pushing `main` when its `Cargo.toml` version is already
+  released is a no-op, so only a version bump actually cuts a release.
+- **Why a direct push, not a PR:** a *fast-forward PR merge* does not emit a `push` event in this Gitea,
+  so it never triggers `release.yml` (it needed a manual `workflow_dispatch`). A direct push does. A PR
+  still works if you prefer review — just run the release via `workflow_dispatch` afterward.
 - **CI gotcha:** the release job authenticates to the container registry with the **`REGISTRY_TOKEN`**
   repo secret (a real PAT). Gitea's built-in Actions token is rejected by the registry even with
-  `packages: write`, so that secret must exist for releases to publish.
+  `packages: write`, so that secret must exist (and be current) for releases to publish. If the PAT is
+  rotated, update this secret too.
 - Pre-1.0 the API/layout may change between minor versions; roadmap phases (see
   [docs/PLAN.md](docs/PLAN.md)) map roughly to minor milestones.
 

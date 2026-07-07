@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-07
+
+The web control plane hardens up: login-gated, smarter defaults, and live host stats.
+
 ### Added
 - **Live host stats** on the dashboard — memory and disk usage bars, load, and uptime, auto-refreshing.
 - **Smarter, simpler create-station wizard.** Non-essential fields are tucked behind an **Advanced**

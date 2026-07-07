@@ -22,7 +22,7 @@ driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get 
 
 ## What works today
 
-**v0.9.0 — web control plane + console.** Tendril now has a **web UI** (Axum + HTMX) served on the
+**v0.10.0 — web control plane + console.** Tendril now has a **web UI** (Axum + HTMX) served on the
 host: a dashboard, a create-station wizard, station management, a live in-browser console (noVNC),
 GPU binding, media, and network — all over the same provisioning core as the CLI. There's also the
 **`tendril` console**, a TrueNAS-style menu the OS launches on the primary display. Under both: a
@@ -71,7 +71,7 @@ podman build -f image/Containerfile -t tendril:dev .
 ```
 
 Or deploy the **published image** with [`bootc`](https://containers.github.io/bootc/) — it's pushed
-to Tendril's own registry at `git.onetick.ninja/flan/tendril` (tags `latest` and `0.9.0`). Fresh
+to Tendril's own registry at `git.onetick.ninja/flan/tendril` (tags `latest` and `0.10.0`). Fresh
 install to a disk, or switch an existing Fedora bootc system over:
 
 ```bash

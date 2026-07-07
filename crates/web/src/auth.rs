@@ -148,14 +148,12 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
     let path = req.uri().path();
     let open =
         path.starts_with("/assets/") || path == "/login" || path == "/logout" || path == "/setup";
-    if open {
+    if open || authenticated(&req) {
         return next.run(req).await;
     }
+    // Not authenticated: first run has no password → set one; otherwise sign in.
     if !is_configured() {
-        return Redirect::to("/setup").into_response();
-    }
-    if authenticated(&req) {
-        next.run(req).await
+        Redirect::to("/setup").into_response()
     } else {
         Redirect::to("/login").into_response()
     }

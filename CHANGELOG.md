@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live host stats** on the dashboard — memory and disk usage bars, load, and uptime, auto-refreshing.
+- **Smarter, simpler create-station wizard.** Non-essential fields are tucked behind an **Advanced**
+  toggle; RAM, vCPUs, and disk size now **default to the host total ÷ number of GPUs** (one station
+  per GPU); and the install ISO defaults to the right image for the chosen OS when left blank.
 - **Web UI authentication.** A single admin password (Argon2-hashed at `/etc/tendril/webauth`),
   server-side sessions via an HttpOnly cookie, and a first-run `/setup` page to create it — every
   route is gated. An optional reverse-proxy trust mode (`TENDRIL_TRUST_PROXY_HEADER`, e.g.

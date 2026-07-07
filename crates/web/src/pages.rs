@@ -36,6 +36,7 @@ pub async fn dashboard() -> Markup {
                 (stat("GPUs · passthrough-ready", &ready.to_string(), false, Some(&format!("/ {}", matrix.gpus.len()))))
                 (stat("Host capacity", &threads.to_string(), false, Some(&format!("threads · {mem_gib} GB RAM"))))
             }
+            (ui::panel("Host", Some("live"), host_stats()))
             (ui::panel("Stations", None, stations::fragment(&lv)))
             (ui::panel("Hardware", Some(&format!("{ready} of {} GPUs ready", matrix.gpus.len())), html! {
                 div.scroll {
@@ -84,6 +85,76 @@ fn host_capacity() -> (usize, u64) {
         .map(|kb| (kb + 512 * 1024) / (1024 * 1024))
         .unwrap_or(0);
     (threads, mem_gib)
+}
+
+/// Live host-stats fragment (memory/disk bars, load, uptime); polled every few seconds.
+pub async fn stats() -> Markup {
+    host_stats()
+}
+
+fn host_stats() -> Markup {
+    let (mu, mt) = mem_gb();
+    let (du, dt) = disk_gb();
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join("  "))
+        .unwrap_or_default();
+    html! {
+        div #hoststats hx-get="/stats" hx-trigger="every 5s" hx-swap="outerHTML" {
+            div.pad {
+                (bar("Memory", mu, mt, "GB"))
+                (bar("Disk (/)", du, dt, "GB"))
+                table { tbody {
+                    tr { td.sub style="width:8rem" { "Load (1/5/15m)" } td.mono { (load) } }
+                    tr { td.sub { "Uptime" } td.mono { (ui::run_stdout("uptime", &["-p"]).unwrap_or_default().trim().to_string()) } }
+                    tr { td.sub { "CPU threads" } td.mono { (ui::run_stdout("nproc", &[]).unwrap_or_default().trim().to_string()) } }
+                } }
+            }
+        }
+    }
+}
+
+fn bar(label: &str, used: f64, total: f64, unit: &str) -> Markup {
+    let pct = if total > 0.0 {
+        (used / total * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    html! {
+        div style="margin-bottom:12px" {
+            div style="display:flex; justify-content:space-between; font-size:12.5px" {
+                span.sub { (label) } span.mono { (format!("{used:.1} / {total:.1} {unit} · {pct:.0}%")) }
+            }
+            div.bar { i style=(format!("width:{pct:.0}%")) {} }
+        }
+    }
+}
+
+fn mem_gb() -> (f64, f64) {
+    let read = |k: &str| {
+        std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with(k))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<f64>().ok())
+        })
+    };
+    match (read("MemTotal:"), read("MemAvailable:")) {
+        (Some(t), Some(a)) => ((t - a) / 1048576.0, t / 1048576.0),
+        _ => (0.0, 0.0),
+    }
+}
+
+fn disk_gb() -> (f64, f64) {
+    ui::run_stdout("df", &["-B1", "--output=used,size", "/"])
+        .and_then(|s| {
+            let l = s.lines().nth(1)?;
+            let mut it = l.split_whitespace();
+            let used: f64 = it.next()?.parse().ok()?;
+            let size: f64 = it.next()?.parse().ok()?;
+            Some((used / 1e9, size / 1e9))
+        })
+        .unwrap_or((0.0, 0.0))
 }
 
 // ── media ───────────────────────────────────────────────────────────────────────────────────

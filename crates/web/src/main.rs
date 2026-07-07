@@ -32,6 +32,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(pages::dashboard))
+        .route("/stats", get(pages::stats))
         // stations
         .route("/stations", get(stations::list_page).post(stations::create))
         .route("/stations/fragment", get(stations::fragment_route))

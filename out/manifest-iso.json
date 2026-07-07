@@ -9515,7 +9515,7 @@
         {
           "type": "org.osbuild.mkfs.fat",
           "options": {
-            "volid": "90B3C56D"
+            "volid": "CF0FC5AC"
           },
           "devices": {
             "device": {
@@ -9602,7 +9602,7 @@
               "type": "org.osbuild.containers-storage",
               "origin": "org.osbuild.source",
               "references": {
-                "sha256:5c08d87b3eb073bc5f35e18dfe5b82400ba9c796240941fa0275c4eddc205f04": {
+                "sha256:9ad6431ffcb1b887945b55754da6c235328c20fa2317b434958d2d56a7ac1056": {
                   "name": "localhost/tendril:dev"
                 }
               }
@@ -9732,7 +9732,7 @@
   "sources": {
     "org.osbuild.containers-storage": {
       "items": {
-        "sha256:5c08d87b3eb073bc5f35e18dfe5b82400ba9c796240941fa0275c4eddc205f04": {}
+        "sha256:9ad6431ffcb1b887945b55754da6c235328c20fa2317b434958d2d56a7ac1056": {}
       }
     },
     "org.osbuild.inline": {

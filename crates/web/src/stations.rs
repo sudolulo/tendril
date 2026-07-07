@@ -146,6 +146,7 @@ fn create_form(error: Option<&str>) -> Markup {
         html! {
             @if let Some(e) = error { div.banner.error { (e) } }
             (ui::panel("Create a gaming station", None, html! {
+                @let (ram, vcpus, disk) = resource_defaults();
                 form.grid.pad method="post" action="/stations" {
                     div.field { label { "Station name" } input name="name" value="station1" required; }
                     div.field {
@@ -167,18 +168,9 @@ fn create_form(error: Option<&str>) -> Markup {
                             }
                         }
                     }
-                    div.field { label { "Disk image" } input name="disk" value=(format!("{DISK_DIR}/station1.qcow2")); }
-                    div.field { label { "Disk size (GiB)" } input name="size_gib" value="128" inputmode="numeric"; }
-                    div.field { label { "vCPUs" } input name="vcpus" value="8" inputmode="numeric"; }
-                    div.field { label { "Memory (MiB)" } input name="memory_mib" value="16384" inputmode="numeric"; }
-                    div.field.wide { label { "Install ISO" } input name="iso" value=(format!("{ISO_DIR}/win11.iso")); span.hint { "Windows: win11.iso · SteamOS: bazzite-deck-nvidia.iso" } }
-                    div.field.wide { label { "virtio-win ISO (Windows only)" } input name="virtio_iso" value=(format!("{ISO_DIR}/virtio-win.iso")); }
                     div.field.check.wide { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } }
                     div.field { label { "Username" } input name="username" value="player"; }
                     div.field { label { "Password" } input name="password" value="tendril"; }
-                    div.field.wide { label { "Computer name / hostname" } input name="hostname" value="STATION1"; }
-                    div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
-                    div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install)" } }
                     @let usb_list = usb::devices();
                     @if !usb_list.is_empty() {
                         div.field.wide {
@@ -192,6 +184,20 @@ fn create_form(error: Option<&str>) -> Markup {
                                 }
                             }
                             span.hint { "You can also add or remove these after the station is created." }
+                        }
+                    }
+                    div.field.check.wide { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install)" } }
+                    details.advanced.wide {
+                        summary { "Advanced options" }
+                        div.grid style="margin-top:14px" {
+                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Default: host RAM ÷ GPUs" } }
+                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Default: threads ÷ GPUs" } }
+                            div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Default: free disk ÷ GPUs" } }
+                            div.field { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
+                            div.field.wide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{ISO_DIR}/win11.iso · bazzite-deck-nvidia.iso")); }
+                            div.field.wide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{ISO_DIR}/virtio-win.iso")); }
+                            div.field.wide { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
+                            div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
                         }
                     }
                     div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create station" } a.btn href="/stations" { "Cancel" } } }
@@ -254,23 +260,34 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         None
     };
 
+    let (dram, dvcpus, ddisk) = resource_defaults();
+    let install_iso = {
+        let v = get("iso");
+        Some(if v.is_empty() { default_iso(guest) } else { v })
+    };
+    let virtio_iso = if matches!(guest, GuestOs::Windows) {
+        let v = get("virtio_iso");
+        Some(if v.is_empty() {
+            format!("{ISO_DIR}/virtio-win.iso")
+        } else {
+            v
+        })
+    } else {
+        None
+    };
     let req = StationRequest {
         name: name.clone(),
         guest,
         disk_path: disk.clone(),
-        size_gib: get("size_gib").parse().unwrap_or(128),
+        size_gib: get("size_gib").parse().unwrap_or(ddisk),
         create_disk: !FsPath::new(&disk).exists(),
-        vcpus: get("vcpus").parse().unwrap_or(8),
-        memory_mib: get("memory_mib").parse().unwrap_or(16384),
+        vcpus: get("vcpus").parse().unwrap_or(dvcpus),
+        memory_mib: get("memory_mib").parse().unwrap_or(dram),
         native_hardware: checked("native"),
         passthrough_addresses: passthrough_for(&get("gpu")),
         media: InstallMedia {
-            install_iso: nonempty(&get("iso")),
-            virtio_iso: if matches!(guest, GuestOs::Windows) {
-                nonempty(&get("virtio_iso"))
-            } else {
-                None
-            },
+            install_iso,
+            virtio_iso,
             seed_iso,
         },
         usb_devices,
@@ -354,12 +371,39 @@ fn passthrough_for(addr: &str) -> Vec<String> {
     }
 }
 
-fn nonempty(s: &str) -> Option<String> {
-    let s = s.trim();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s.to_string())
+/// Sensible per-station resource defaults: split the host's RAM, CPU threads, and free disk evenly
+/// across the passthrough-capable GPUs (one station per GPU). Returns (memory_mib, vcpus, disk_gib).
+fn resource_defaults() -> (u64, u32, u32) {
+    let num = detect().passthrough_capable().count().max(1) as u64;
+    let total_ram_mib = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .map(|kb| kb / 1024)
+        .unwrap_or(16384);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get() as u64)
+        .unwrap_or(8);
+    let free_disk_gib = ui::run_stdout("df", &["-B1", "--output=avail", "/"])
+        .and_then(|s| s.lines().nth(1).and_then(|l| l.trim().parse::<u64>().ok()))
+        .map(|b| b / 1_000_000_000)
+        .unwrap_or(256);
+
+    let ram = ((total_ram_mib / num) / 1024).max(2) * 1024; // whole GiB, min 2
+    let vcpus = (threads / num).max(1) as u32;
+    let disk = (free_disk_gib / num).clamp(32, 1024) as u32;
+    (ram, vcpus, disk)
+}
+
+/// Default install ISO for a guest OS (used when the create form's ISO field is left blank).
+fn default_iso(guest: GuestOs) -> String {
+    match guest {
+        GuestOs::Windows => format!("{ISO_DIR}/win11.iso"),
+        GuestOs::SteamOs => format!("{ISO_DIR}/bazzite-deck-nvidia.iso"),
     }
 }
 

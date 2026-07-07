@@ -276,6 +276,14 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
 input[type=checkbox] { width:auto; accent-color:var(--accent); }
 .check { flex-direction:row; align-items:center; gap:9px; }
 .check label { font-size:13.5px; color:var(--fg); }
+details.advanced { grid-column:1 / -1; border:1px solid var(--line); border-radius:8px; padding:0 12px; background:var(--bg); }
+details.advanced > summary { cursor:pointer; padding:11px 4px; color:var(--muted); font-size:13.5px; font-weight:600; list-style:none; }
+details.advanced > summary::-webkit-details-marker { display:none; }
+details.advanced > summary::before { content:"\25B8  "; }
+details.advanced[open] > summary::before { content:"\25BE  "; }
+details.advanced[open] { padding-bottom:14px; }
+.bar { height:7px; background:var(--off-soft); border-radius:4px; overflow:hidden; margin-top:5px; }
+.bar i { display:block; height:100%; background:var(--accent); border-radius:4px; }
 
 .banner { padding:.7rem .9rem; border-radius:8px; margin-bottom:14px; font-size:13.5px; }
 .banner.error { background:var(--crit-soft); border:1px solid var(--crit); color:var(--crit); }

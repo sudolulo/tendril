@@ -10,7 +10,7 @@
 use std::path::Path as FsPath;
 
 use axum::extract::Form;
-use maud::{html, Markup};
+use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
 
 use crate::ui;
@@ -19,6 +19,18 @@ const LOCAL_ISOS: &str = "/var/lib/tendril/isos";
 const LOCAL_IMAGES: &str = "/var/lib/tendril/images";
 const SMB_CREDS: &str = "/etc/tendril/smb-creds";
 const FSTAB_TAG: &str = "# tendril-store (managed)";
+/// Default mount point when the user leaves it blank.
+const DEFAULT_MOUNT: &str = "/var/lib/tendril/store";
+
+/// Sensible default mount options per type when the user leaves the field blank. SMB benefits from a
+/// modern protocol version (the 1.0 default is insecure/often disabled); NFS negotiates on its own.
+fn default_options(kind: &str) -> &'static str {
+    if kind == "smb" {
+        "vers=3.0"
+    } else {
+        ""
+    }
+}
 
 fn conf_path() -> String {
     std::env::var("TENDRIL_STORAGE_CONF")
@@ -191,18 +203,28 @@ pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
             html! { div.banner.error { "A server/share address is required." } },
         ));
     }
+    let kind = if f.kind == "smb" { "smb" } else { "nfs" }.to_string();
+    let mount = {
+        let m = f.mount.trim();
+        if m.is_empty() {
+            DEFAULT_MOUNT.to_string()
+        } else {
+            m.to_string()
+        }
+    };
+    let options = {
+        let o = f.options.trim();
+        if o.is_empty() {
+            default_options(&kind).to_string()
+        } else {
+            o.to_string()
+        }
+    };
     let s = Store {
-        kind: if f.kind == "smb" { "smb" } else { "nfs" }.to_string(),
+        kind,
         remote,
-        mount: {
-            let m = f.mount.trim();
-            if m.is_empty() {
-                "/var/lib/tendril/store".to_string()
-            } else {
-                m.to_string()
-            }
-        },
-        options: f.options.trim().to_string(),
+        mount,
+        options,
         username: f.username.trim().to_string(),
     };
     match mount_store(&s, &f.password) {
@@ -256,17 +278,33 @@ fn panel_with(note: Option<Markup>) -> Markup {
                     p.sub { "Media and images currently use local storage. Connect an NFS or SMB share to put them on shared network storage." }
                     form hx-post="/storage/configure" hx-target="#storage" hx-swap="outerHTML" {
                         div.grid {
-                            div.field { label { "Type" } select name="kind" {
+                            div.field { label { "Type" } select #store-kind name="kind" onchange="tendrilStore()" {
                                 option value="nfs" { "NFS" } option value="smb" { "SMB / CIFS" } } }
-                            div.field { label { "Server / share" } input name="remote" placeholder="nfs: 10.0.0.5:/tank/tendril  ·  smb: //10.0.0.5/tendril" required; }
-                            div.field { label { "Mount point" } input name="mount" placeholder="/var/lib/tendril/store"; }
-                            div.field { label { "Options (optional)" } input name="options" placeholder="e.g. vers=4.1  ·  vers=3.0"; }
-                            div.field { label { "SMB username (SMB only)" } input name="username"; }
-                            div.field { label { "SMB password (SMB only)" } input type="password" name="password"; }
+                            div.field { label { "Server / share" } input #store-remote name="remote" required; }
+                            div.field.store-smb { label { "SMB username" } input name="username"; }
+                            div.field.store-smb { label { "SMB password" } input type="password" name="password"; }
+                        }
+                        details.advanced.wide style="margin-top:4px" {
+                            summary { "Advanced: mount point & options" }
+                            div.grid {
+                                div.field { label { "Mount point" } input name="mount" placeholder=(DEFAULT_MOUNT); }
+                                div.field { label { "Mount options" } input #store-options name="options"; }
+                            }
+                            p.sub style="margin:6px 0 2px" { "Leave blank for sensible defaults — mounts at " span.mono { (DEFAULT_MOUNT) } ", and SMB negotiates SMB3." }
                         }
                         button.btn.primary type="submit" style="margin-top:10px" { "Connect & mount" }
                     }
                     p.sub style="margin-top:8px" { "The mount is saved to /etc/fstab (nofail) so it reconnects on boot. Station disks stay local." }
+                    (PreEscaped(
+                        "<script>window.tendrilStore=function(){\
+                         var k=document.getElementById('store-kind');if(!k)return;var smb=k.value==='smb';\
+                         document.querySelectorAll('.store-smb').forEach(function(e){e.style.display=smb?'':'none';});\
+                         var r=document.getElementById('store-remote');\
+                         if(r)r.placeholder=smb?'//10.0.0.5/tendril':'10.0.0.5:/tank/tendril';\
+                         var o=document.getElementById('store-options');\
+                         if(o)o.placeholder=smb?'vers=3.0':'defaults (kernel negotiates)';\
+                         };tendrilStore();</script>"
+                    ))
                 }
             }
         }

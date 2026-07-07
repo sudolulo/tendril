@@ -49,9 +49,16 @@ pub fn fragment(lv: &Libvirt) -> Markup {
 fn row(lv: &Libvirt, name: &str) -> Markup {
     let state = lv.state(name);
     let running = matches!(state, DomainState::Running);
+    let has_gpu = !lv.pci_hostdevs(name).is_empty();
     html! {
         tr {
-            td { a href=(format!("/stations/{name}")) { (name) } }
+            td {
+                a href=(format!("/stations/{name}")) { (name) }
+                @if !has_gpu {
+                    span title="No GPU passed through — this station has no graphics acceleration"
+                        style="color:var(--crit); margin-left:6px; cursor:help" { "⚠" }
+                }
+            }
             td { (ui::state_pill(state)) }
             td.right {
                 div.actions {
@@ -196,18 +203,20 @@ fn create_form(error: Option<&str>) -> Markup {
                             span.hint { "You can also add or remove these after the station is created." }
                         }
                     }
-                    div.field.check.wide { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install)" } }
                     details.advanced.wide {
                         summary { "Advanced options" }
-                        div.grid style="margin-top:14px" {
-                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Default: host RAM ÷ GPUs" } }
-                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Default: threads ÷ GPUs" } }
-                            div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Default: free disk ÷ GPUs" } }
+                        div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
+                            div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
+                            div.field.check { input type="checkbox" name="start" id="start"; label for="start" { "Start now (begins the install immediately)" } span.hint { "Off by default — the station is created stopped so you're never left staring at an empty VM. Start it when you're ready." } }
+                        }
+                        div.grid style="margin-top:12px" {
+                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: host RAM (minus headroom) ÷ GPUs" } }
+                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: host threads (minus 2) ÷ GPUs" } }
+                            div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: 80% of free disk ÷ GPUs" } }
                             div.field { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
                             div.field.wide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{ISO_DIR}/win11.iso · bazzite-deck-nvidia.iso")); }
                             div.field.wide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{ISO_DIR}/virtio-win.iso")); }
                             div.field.wide { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
-                            div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
                         }
                     }
                     div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create station" } a.btn href="/stations" { "Cancel" } } }
@@ -525,12 +534,19 @@ fn resource_defaults() -> (u64, u32, u32) {
         .unwrap_or(8);
     let free_disk_gib = ui::run_stdout("df", &["-B1", "--output=avail", "/"])
         .and_then(|s| s.lines().nth(1).and_then(|l| l.trim().parse::<u64>().ok()))
-        .map(|b| b / 1_000_000_000)
+        .map(|b| b / (1 << 30)) // GiB (binary), matching the RAM/threads units
         .unwrap_or(256);
 
-    let ram = ((total_ram_mib / num) / 1024).max(2) * 1024; // whole GiB, min 2
-    let vcpus = (threads / num).max(1) as u32;
-    let disk = (free_disk_gib / num).clamp(32, 1024) as u32;
+    // Leave the host real headroom, then split what's left evenly across one station per GPU.
+    // RAM: reserve max(4 GiB, 1/8 of RAM) for the host; each station ≥ 4 GiB (whole GiB).
+    let host_ram_reserve_mib = (total_ram_mib / 8).max(4096);
+    let usable_ram_mib = total_ram_mib.saturating_sub(host_ram_reserve_mib);
+    let ram = ((usable_ram_mib / num) / 1024).max(4) * 1024;
+    // CPU: reserve 2 threads for the host; each station ≥ 2 threads.
+    let usable_threads = threads.saturating_sub(2).max(1);
+    let vcpus = (usable_threads / num).max(2) as u32;
+    // Disk: 80% of free space split per station, clamped to a sane gaming range (qcow2 is sparse).
+    let disk = ((free_disk_gib * 8 / 10) / num).clamp(64, 512) as u32;
     (ram, vcpus, disk)
 }
 

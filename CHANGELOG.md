@@ -15,9 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verification** (a checksum mismatch). Media with no upstream checksum (e.g. the locally-assembled
   Windows ISO) is fine to use.
 
+- **Hardware usage & warnings.** The Hardware page shows which station each GPU and USB device is
+  **used by** (or "free"), and the station list flags any station with **no GPU** passed through with a
+  red ⚠. The System **logs** gain a **Stations-only filter** and a **Download** button.
+
 ### Changed
 - Network page: dropped the "may drop the link, use the console" warning (the 60-second test-and-revert
   makes it safe) and now lists only physical NICs — podman/docker/libvirt bridges are hidden.
+- **Smarter station defaults.** RAM/vCPU/disk now reserve real host headroom before splitting per GPU
+  (previously they handed the host's *entire* RAM/CPU/disk to the stations). The **Start now** and
+  **native-hardware** options moved into **Advanced**, and Start is now **off by default** so a new
+  station isn't left running an empty VM.
+- Dashboard: the live Host panel moved below Stations/Hardware to keep the top focused.
 
 ## [0.12.0] - 2026-07-07
 

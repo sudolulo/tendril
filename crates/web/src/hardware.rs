@@ -1,12 +1,49 @@
 //! Hardware & passthrough: the GPU/IOMMU matrix (with a "bind to vfio-pci" action) and USB devices.
 
+use std::collections::HashMap;
+
 use axum::extract::Path;
 use maud::{html, Markup};
 
 use tendril_capability_engine::{detect, iommu, pci, usb, Capability};
+use tendril_orchestrator::Libvirt;
 use tendril_provisioning::{apply, Mode, PassthroughStrategy, ProvisioningStrategy};
 
 use crate::ui;
+
+/// Which station (if any) passes through each GPU PCI address.
+pub fn gpu_users() -> HashMap<String, String> {
+    let lv = Libvirt::system();
+    let mut m = HashMap::new();
+    for name in lv.list() {
+        for addr in lv.pci_hostdevs(&name) {
+            m.insert(addr, name.clone());
+        }
+    }
+    m
+}
+
+/// Which station (if any) passes through each USB `(vendor, product)`.
+fn usb_users() -> HashMap<(u16, u16), String> {
+    let lv = Libvirt::system();
+    let mut m = HashMap::new();
+    for name in lv.list() {
+        for id in lv.usb_devices(&name) {
+            m.insert(id, name.clone());
+        }
+    }
+    m
+}
+
+/// A small "in use by <station>" / "free" cell.
+fn used_by(station: Option<&String>) -> Markup {
+    html! {
+        @match station {
+            Some(s) => span.badge title="Passed through to this station" { "▶ " (s) },
+            None => span.sub { "free" },
+        }
+    }
+}
 
 pub async fn page() -> Markup {
     ui::page(
@@ -23,12 +60,13 @@ pub async fn page() -> Markup {
 /// The GPU table (swapped in place after a bind). `note` shows the result of the last action.
 fn gpu_fragment(note: Option<Markup>) -> Markup {
     let matrix = detect();
+    let users = gpu_users();
     html! {
         div #gpus {
             @if let Some(n) = note { div.pad style="padding-bottom:0" { (n) } }
             div.scroll {
                 table {
-                    thead { tr { th { "GPU" } th { "Address" } th { "Capability" } th { "Passthrough" } th { "Driver" } th.right { "" } } }
+                    thead { tr { th { "GPU" } th { "Address" } th { "Capability" } th { "Passthrough" } th { "Driver" } th { "Used by" } th.right { "" } } }
                     tbody {
                         @for g in &matrix.gpus {
                             @let addr = g.gpu.address.clone();
@@ -40,6 +78,7 @@ fn gpu_fragment(note: Option<Markup>) -> Markup {
                                 td { (format!("{:?}", g.capability)) }
                                 td { span class=(if matches!(g.viability, tendril_capability_engine::PassthroughViability::Isolated) { "via clean" } else { "via" }) { (ui::viability(g.viability)) } }
                                 td.mono.sub { (driver) }
+                                td { (used_by(users.get(&addr))) }
                                 td.right {
                                     @if bindable && driver != "vfio-pci" {
                                         button.btn.sm
@@ -99,8 +138,12 @@ fn usb_panel() -> Markup {
         }
         div.pad {
             p.sub style="margin:0 0 8px" { (devices.len()) " connected device(s):" }
+            @let users = usb_users();
             @for d in &devices {
-                div.sub.mono { (format!("{:04x}:{:04x}", d.vendor_id, d.product_id)) " — " (d.product.as_deref().unwrap_or("device")) }
+                div style="display:flex; gap:8px; align-items:center; justify-content:space-between" {
+                    div.sub.mono { (format!("{:04x}:{:04x}", d.vendor_id, d.product_id)) " — " (d.product.as_deref().unwrap_or("device")) }
+                    (used_by(users.get(&(d.vendor_id, d.product_id))))
+                }
             }
         }
     }

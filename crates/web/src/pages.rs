@@ -3,7 +3,11 @@
 use std::path::Path as FsPath;
 use std::process::Command;
 
+use axum::extract::Query;
+use axum::http::header;
+use axum::response::IntoResponse;
 use maud::{html, Markup};
+use serde::Deserialize;
 
 use tendril_capability_engine::detect;
 use tendril_orchestrator::{DomainState, Libvirt};
@@ -36,7 +40,6 @@ pub async fn dashboard() -> Markup {
                 (stat("GPUs · passthrough-ready", &ready.to_string(), false, Some(&format!("/ {}", matrix.gpus.len()))))
                 (stat("Host capacity", &threads.to_string(), false, Some(&format!("threads · {mem_gib} GB RAM"))))
             }
-            (ui::panel("Host", Some("live"), host_stats()))
             (ui::panel("Stations", None, stations::fragment(&lv)))
             (ui::panel("Hardware", Some(&format!("{ready} of {} GPUs ready", matrix.gpus.len())), html! {
                 div.scroll {
@@ -55,6 +58,7 @@ pub async fn dashboard() -> Markup {
                     }
                 }
             }))
+            (ui::panel("Host", Some("live"), host_stats()))
         },
     )
 }
@@ -412,7 +416,7 @@ pub async fn system() -> Markup {
                     } }
                 }))
             }
-            (ui::panel("Logs", Some("last 200 journal lines · live"), logs_fragment()))
+            (ui::panel("Logs", Some("live · filterable · downloadable"), logs_fragment(false)))
         },
     )
 }
@@ -459,19 +463,83 @@ fn meminfo() -> String {
 }
 
 /// Recent journal lines. Polled by the Logs panel for a live tail.
-pub async fn logs() -> Markup {
-    logs_fragment()
+#[derive(Deserialize, Default)]
+pub struct LogQuery {
+    #[serde(default)]
+    stations: bool,
 }
 
-fn logs_fragment() -> Markup {
-    let out = ui::run_stdout(
-        "journalctl",
-        &["--no-pager", "-n", "200", "-o", "short-iso"],
+pub async fn logs(Query(q): Query<LogQuery>) -> Markup {
+    logs_fragment(q.stations)
+}
+
+/// Download the current log view as a text file (more lines than the live view shows).
+pub async fn logs_download(Query(q): Query<LogQuery>) -> impl IntoResponse {
+    let body = journal_text(q.stations, "5000");
+    let fname = if q.stations {
+        "tendril-station-logs.txt"
+    } else {
+        "tendril-logs.txt"
+    };
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".to_string(),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{fname}\""),
+            ),
+        ],
+        body,
     )
-    .unwrap_or_else(|| "journalctl unavailable".to_string());
+}
+
+/// Journal text, optionally filtered to station-relevant sources (libvirt/qemu/vfio/tendril).
+fn journal_text(stations_only: bool, lines: &str) -> String {
+    if stations_only {
+        ui::run_stdout(
+            "sh",
+            &["-c", &format!(
+                "journalctl --no-pager -n {lines} -o short-iso | grep -iE 'libvirt|qemu|virt|vfio|hostdev|tendril|station' || true"
+            )],
+        )
+        .unwrap_or_default()
+    } else {
+        ui::run_stdout(
+            "journalctl",
+            &["--no-pager", "-n", lines, "-o", "short-iso"],
+        )
+        .unwrap_or_default()
+    }
+}
+
+fn logs_fragment(stations_only: bool) -> Markup {
+    let out = journal_text(stations_only, "300");
+    let out = if out.is_empty() {
+        "(no matching log lines)".to_string()
+    } else {
+        out
+    };
+    let all_cls = if stations_only {
+        "btn sm"
+    } else {
+        "btn sm primary"
+    };
+    let sta_cls = if stations_only {
+        "btn sm primary"
+    } else {
+        "btn sm"
+    };
     html! {
-        div #logs hx-get="/system/logs" hx-trigger="every 5s" hx-swap="outerHTML" {
-            pre.mono style="margin:0; padding:14px 18px; max-height:420px; overflow:auto; font-size:12px; line-height:1.5" { (out) }
+        div #logs hx-get=(format!("/system/logs?stations={stations_only}")) hx-trigger="every 5s" hx-swap="outerHTML" {
+            div.btnrow style="padding:10px 14px; gap:8px; align-items:center" {
+                button class=(all_cls) hx-get="/system/logs?stations=false" hx-target="#logs" hx-swap="outerHTML" { "All" }
+                button class=(sta_cls) hx-get="/system/logs?stations=true" hx-target="#logs" hx-swap="outerHTML" { "Stations only" }
+                a.btn.sm href=(format!("/system/logs/download?stations={stations_only}")) download="tendril-logs.txt" { "⬇ Download" }
+            }
+            pre.mono style="margin:0; padding:0 18px 14px; max-height:420px; overflow:auto; font-size:12px; line-height:1.5" { (out) }
         }
     }
 }

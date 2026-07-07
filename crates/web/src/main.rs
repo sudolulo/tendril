@@ -71,6 +71,7 @@ async fn main() {
         .route("/system/reboot", post(pages::system_reboot))
         .route("/system/shutdown", post(pages::system_shutdown))
         .route("/system/logs", get(pages::logs))
+        .route("/system/logs/download", get(pages::logs_download))
         // auth
         .route("/login", get(auth::login_page).post(auth::login))
         .route("/logout", post(auth::logout))

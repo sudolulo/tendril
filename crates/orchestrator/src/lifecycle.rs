@@ -175,6 +175,18 @@ impl Libvirt {
         parse_usb_hostdevs(&String::from_utf8_lossy(&out.stdout))
     }
 
+    /// The PCI addresses (e.g. `0000:03:00.0`) passed through to a domain, from its persistent XML.
+    /// A station with none has no GPU/PCI passthrough.
+    pub fn pci_hostdevs(&self, name: &str) -> Vec<String> {
+        let Ok(out) = self.run(&["dumpxml", "--inactive", name]) else {
+            return Vec::new();
+        };
+        if !out.status.success() {
+            return Vec::new();
+        }
+        parse_pci_hostdevs(&String::from_utf8_lossy(&out.stdout))
+    }
+
     /// Names of all defined domains (running or not); empty if virsh is unreachable.
     pub fn list(&self) -> Vec<String> {
         match self.run(&["list", "--all", "--name"]) {
@@ -210,6 +222,39 @@ fn parse_usb_hostdevs(xml: &str) -> Vec<(u16, u16)> {
         }
         if let (Some(v), Some(p)) = (hex_attr(block, "vendor"), hex_attr(block, "product")) {
             out.push((v, p));
+        }
+    }
+    out
+}
+
+/// Extract the PCI address (`domain:bus:slot.function`) of every `type='pci'` `<hostdev>`, reading
+/// the `<source>` address (not the guest-side one). Same lightweight scan as the USB parser.
+fn parse_pci_hostdevs(xml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for block in xml.split("<hostdev").skip(1) {
+        let block = block.split("</hostdev>").next().unwrap_or(block);
+        if !block.contains("type='pci'") {
+            continue;
+        }
+        // The source address lives inside <source>…</source>; the sibling guest <address> does not.
+        let src = block
+            .split_once("<source>")
+            .and_then(|(_, r)| r.split_once("</source>"))
+            .map(|(inner, _)| inner)
+            .unwrap_or(block);
+        let attr = |key: &str| -> Option<u32> {
+            let pat = format!("{key}='");
+            let i = src.find(&pat)? + pat.len();
+            let end = src[i..].find('\'')? + i;
+            u32::from_str_radix(src[i..end].trim_start_matches("0x"), 16).ok()
+        };
+        if let (Some(d), Some(b), Some(s), Some(f)) = (
+            attr("domain"),
+            attr("bus"),
+            attr("slot"),
+            attr("function"),
+        ) {
+            out.push(format!("{d:04x}:{b:02x}:{s:02x}.{f:x}"));
         }
     }
     out

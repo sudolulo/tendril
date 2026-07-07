@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-07
+
+Configure the network from the browser — with a TrueNAS-style safety net.
+
 ### Added
 - **Configurable network from the web UI.** The Network page is now editable: each active
   NetworkManager connection can be switched between **DHCP and a static** address/gateway/DNS and

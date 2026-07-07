@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Media provenance tooltips.** Each known install ISO (Windows/virtio/Bazzite) carries an "ⓘ source"
+  tooltip explaining where it came from and how it's verified, so the media never looks like it
+  appeared from nowhere. Removed the now-redundant footer note.
+- **Previewable OS updates on non-bootc hosts.** The System page's OS-image panel shows a labelled
+  **demo** (sample `bootc status`, Check/Update buttons) instead of being hidden, so the control is
+  visible on test builds.
+
 ### Changed
+- System page: automatic-updates toggle sits **under OS image** (with the update controls); logs now
+  **drop SELinux `audit`/AVC spam** from both the All and Stations-only views.
 - **Windows media fetch only downloads what's missing.** If you already have a valid `win11.iso` or
   `virtio-win.iso`, the fetcher skips it and grabs only the other (pass `--force` to re-fetch both).
   Downloads are written atomically (temp + move), so a "present" file is always complete — an

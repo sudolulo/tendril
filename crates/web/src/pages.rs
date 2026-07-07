@@ -185,7 +185,12 @@ fn media_page(note: Option<Markup>) -> Markup {
                                 thead { tr { th { "File" } th { "Verification" } th.right { "Size" } } }
                                 tbody { @for (f, sz) in &isos {
                                     tr {
-                                        td.mono { (f) }
+                                        td {
+                                            span.mono { (f) }
+                                            @if let Some(p) = provenance(f) {
+                                                span.info title=(p) style="margin-left:6px; cursor:help; color:var(--muted); border-bottom:1px dotted var(--muted)" { "\u{24D8} source" }
+                                            }
+                                        }
                                         td { (verify_cell(f)) }
                                         td.right.num { (sz) }
                                     }
@@ -198,10 +203,6 @@ fn media_page(note: Option<Markup>) -> Markup {
                         button.btn hx-post="/media/fetch/steamos" hx-target="#media-note" hx-swap="innerHTML" { "Fetch SteamOS (Bazzite)" }
                     }
                     div #media-note style="margin-top:12px" {}
-                    p.sub style="margin-top:10px" {
-                        "Bazzite ISOs are checked against Bazzite's published SHA-256. Windows is assembled by UUP "
-                        "dump from hash-verified components (no single upstream checksum for the built ISO)."
-                    }
                 }
             }))
         },
@@ -239,6 +240,27 @@ enum VerifyState {
     Local(String),
     /// Not checked yet.
     Unchecked,
+}
+
+/// Where a known install ISO comes from and how it's trustworthy — shown on the Media page so the
+/// media never looks like it appeared from nowhere.
+fn provenance(iso: &str) -> Option<&'static str> {
+    let n = iso.to_lowercase();
+    if n.starts_with("win11") {
+        Some("Source: assembled by UUP dump from Microsoft's Windows Update CDN. Every component is \
+              SHA-verified against Microsoft's own hashes as it downloads, so the ISO is built from \
+              genuine Microsoft parts. Microsoft publishes no whole-ISO checksum, so the hash shown \
+              is recorded locally (no upstream to compare).")
+    } else if n.contains("virtio") {
+        Some("Source: Red Hat's official virtio-win driver ISO (fedorapeople.org). The drivers inside \
+              are WHQL-signed by Microsoft and GPG-signed by Red Hat; Red Hat's published CHECKSUM \
+              covers the signed RPM the ISO ships in (not a bare-ISO hash), so the hash shown is local.")
+    } else if n.contains("bazzite") {
+        Some("Source: Bazzite (SteamOS-style) image from bazzite.gg, verified against the publisher's \
+              SHA-256 CHECKSUM.")
+    } else {
+        None
+    }
 }
 
 fn list_isos() -> Vec<(String, String)> {
@@ -378,6 +400,15 @@ pub fn locate_script(name: &str) -> Option<String> {
 /// The bootc auto-update timer that periodically fetches and stages new images.
 const AUTO_TIMER: &str = "bootc-fetch-apply-updates.timer";
 
+/// Sample `bootc status` output shown on the System page's OS-image panel when this host isn't a
+/// bootc system, so the control is previewable on test builds.
+const DUMMY_BOOTC_STATUS: &str = "\
+Current booted image: git.onetick.ninja/flan/tendril:latest
+        Digest: sha256:9f3c…a1b2  (version 0.13.1, 2026-07-07)
+Current staged image: none
+    Available update: none — you're on the latest image
+Rollback image: git.onetick.ninja/flan/tendril:0.13.0  (bootable fallback)";
+
 pub async fn system() -> Markup {
     let status = ui::run_stdout("bootc", &["status"]);
     ui::page(
@@ -393,10 +424,6 @@ pub async fn system() -> Markup {
                             hx-confirm="Shut down the host now? All running stations will be stopped." { "Shut down" }
                     }
                     div #power-result style="margin-top:10px" {}
-                    div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
-                        div.sub style="font-weight:600; margin-bottom:8px" { "Automatic OS updates" }
-                        (auto_fragment())
-                    }
                 }
             }))
             @if let Some(s) = status {
@@ -409,14 +436,30 @@ pub async fn system() -> Markup {
                                 hx-confirm="Download and stage the latest OS image? It applies on the next reboot." { "Update now" }
                         }
                         div #update-result style="margin-top:12px" {}
+                        div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
+                            div.sub style="font-weight:600; margin-bottom:8px" { "Automatic updates" }
+                            (auto_fragment())
+                        }
                     }
                 }))
             } @else {
                 (ui::panel("OS image", None, html! {
-                    div.pad { p.muted {
-                        "This host isn't running bootc, so atomic OS image updates aren't managed here. On a "
-                        "Tendril install this shows the image version and an Update-now button."
-                    } }
+                    div.pad {
+                        div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap" {
+                            span.badge title="This host isn't bootc — shown as a preview" { "demo" }
+                            span.sub { "Preview of what a real Tendril (bootc) install shows here." }
+                        }
+                        pre.mono style="margin:0; overflow-x:auto; white-space:pre-wrap; font-size:12.5px" { (DUMMY_BOOTC_STATUS) }
+                        div.btnrow style="margin-top:14px" {
+                            button.btn hx-post="/system/check" hx-target="#update-result" hx-swap="innerHTML" { "Check for updates" }
+                            button.btn.primary hx-post="/system/update" hx-target="#update-result" hx-swap="innerHTML" { "Update now" }
+                        }
+                        div #update-result style="margin-top:12px" {}
+                        div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
+                            div.sub style="font-weight:600; margin-bottom:8px" { "Automatic updates" }
+                            (auto_fragment())
+                        }
+                    }
                 }))
             }
             (ui::panel("Host", None, host_info()))
@@ -500,23 +543,22 @@ pub async fn logs_download(Query(q): Query<LogQuery>) -> impl IntoResponse {
     )
 }
 
-/// Journal text, optionally filtered to station-relevant sources (libvirt/qemu/vfio/tendril).
+/// Journal text. Always drops SELinux `audit`/AVC spam (never actionable here); when `stations_only`
+/// is set, further narrows to station-relevant sources (libvirt/qemu/vfio/tendril).
 fn journal_text(stations_only: bool, lines: &str) -> String {
-    if stations_only {
-        ui::run_stdout(
-            "sh",
-            &["-c", &format!(
-                "journalctl --no-pager -n {lines} -o short-iso | grep -iE 'libvirt|qemu|virt|vfio|hostdev|tendril|station' || true"
-            )],
+    // Fetch extra lines before de-noising so the view still fills after audit spam is dropped.
+    let fetch: u32 = lines.parse::<u32>().unwrap_or(300).saturating_mul(2);
+    let denoise = r"grep -avE 'audit\[[0-9]+\]:|avc:  denied|audit: type=1[0-9]{3}'";
+    let pipeline = if stations_only {
+        format!(
+            "journalctl --no-pager -n {fetch} -o short-iso | {denoise} | grep -iE 'libvirt|qemu|virt|vfio|hostdev|tendril|station' | tail -n {lines} || true"
         )
-        .unwrap_or_default()
     } else {
-        ui::run_stdout(
-            "journalctl",
-            &["--no-pager", "-n", lines, "-o", "short-iso"],
+        format!(
+            "journalctl --no-pager -n {fetch} -o short-iso | {denoise} | tail -n {lines} || true"
         )
-        .unwrap_or_default()
-    }
+    };
+    ui::run_stdout("sh", &["-c", &pipeline]).unwrap_or_default()
 }
 
 fn logs_fragment(stations_only: bool) -> Markup {
@@ -559,6 +601,9 @@ pub async fn system_shutdown() -> Markup {
 }
 
 pub async fn system_check() -> Markup {
+    if !is_bootc() {
+        return html! { div.banner.ok { span.badge { "demo" } " On a real bootc host this checks the registry for a newer image. This host isn't bootc, so there's nothing to check." } };
+    }
     match ui::run_stdout("bootc", &["upgrade", "--check"]) {
         Some(out) if !out.trim().is_empty() => {
             html! { div.banner.ok { pre.mono style="margin:0; white-space:pre-wrap" { (out.trim()) } } }
@@ -571,6 +616,9 @@ pub async fn system_check() -> Markup {
 }
 
 pub async fn system_update() -> Markup {
+    if !is_bootc() {
+        return html! { div.banner.ok { span.badge { "demo" } " On a real bootc host this stages the latest image and applies it on reboot. Nothing to update on this non-bootc host." } };
+    }
     match Command::new("bootc").arg("upgrade").output() {
         Ok(o) if o.status.success() => html! {
             div.banner.ok { "Update staged. Reboot to apply it (System stays on the current image until you do)." }

@@ -127,10 +127,26 @@ pub async fn forceoff(Path(n): Path<String>) -> Markup {
     act(|lv| lv.destroy(&n))
 }
 pub async fn delete(Path(n): Path<String>) -> Markup {
-    act(|lv| {
+    // Capture any vGPU mdev this station holds before the definition is gone, then tear it down too.
+    let mdev = station_mdev_uuid(&n);
+    let out = act(|lv| {
         let _ = lv.destroy(&n); // force off if running (ignored if already stopped)
         lv.undefine(&n)
-    })
+    });
+    if let Some(uuid) = mdev {
+        crate::vgpu::remove_mdev(&uuid);
+    }
+    out
+}
+
+/// The UUID of a station's attached mediated device (vGPU), if it has one, read from its domain XML.
+pub(crate) fn station_mdev_uuid(name: &str) -> Option<String> {
+    let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;
+    // Find `<address uuid='...'/>` inside the mdev hostdev.
+    let after = xml.split("type='mdev'").nth(1)?;
+    let start = after.find("uuid='")? + "uuid='".len();
+    let end = after[start..].find('\'')? + start;
+    Some(after[start..end].to_string())
 }
 
 fn act(f: impl FnOnce(&Libvirt) -> std::io::Result<()>) -> Markup {
@@ -178,16 +194,30 @@ fn create_form(error: Option<&str>) -> Markup {
                         }
                     }
                     div.field.wide {
-                        label { "GPU (passed through whole IOMMU group)" }
+                        label { "GPU" }
                         select name="gpu" {
                             option value="" { "None — headless / attach later" }
                             @for g in matrix.passthrough_capable() {
                                 option value=(g.gpu.address) {
                                     (ui::vendor(g.gpu.vendor)) " "
-                                    (g.gpu.model.as_deref().unwrap_or("GPU")) " [" (g.gpu.address) "]"
+                                    (g.gpu.model.as_deref().unwrap_or("GPU")) " [" (g.gpu.address) "] — whole GPU"
+                                }
+                            }
+                            // vGPU: one option per available mdev profile (a slice of a shared GPU).
+                            @for g in matrix.vgpu_capable() {
+                                @for t in &g.vgpu.mdev_types {
+                                    @if t.available > 0 {
+                                        option value=(format!("{}{}:{}", crate::vgpu::MDEV_PREFIX, g.gpu.address, t.id)) {
+                                            (ui::vendor(g.gpu.vendor)) " "
+                                            (g.gpu.model.as_deref().unwrap_or("GPU"))
+                                            " — vGPU: " (t.name.as_deref().unwrap_or(t.id.as_str()))
+                                            " (" (t.available) " free)"
+                                        }
+                                    }
                                 }
                             }
                         }
+                        span.hint { "Pick a whole GPU for full passthrough, or a vGPU profile to hand a station one slice of a shared GPU (requires an mdev-capable driver, e.g. NVIDIA vGPU). SR-IOV virtual functions appear here as whole GPUs once enabled on the Hardware page." }
                     }
                     div.field { label { "Username" } input name="username" value="player"; }
                     div.field { label { "Password" } input name="password" value="tendril"; }
@@ -296,6 +326,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         if let Err(e) = create_overlay(FsPath::new(&disk), FsPath::new(&base_path)) {
             return create_form(Some(&format!("Cloning the image failed: {e}"))).into_response();
         }
+        let assign = match assign_gpu(&get("gpu")) {
+            Ok(a) => a,
+            Err(e) => return create_form(Some(&e)).into_response(),
+        };
         let (dram, dvcpus, _) = resource_defaults();
         let req = StationRequest {
             name: name.clone(),
@@ -306,7 +340,8 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             vcpus: get("vcpus").parse().unwrap_or(dvcpus),
             memory_mib: get("memory_mib").parse().unwrap_or(dram),
             native_hardware: checked("native"),
-            passthrough_addresses: passthrough_for(&get("gpu")),
+            passthrough_addresses: assign.passthrough.clone(),
+            mdev_uuid: assign.mdev_uuid.clone(),
             media: InstallMedia::default(), // no install media — the domain boots from the cloned disk
             usb_devices,
             define: true,
@@ -315,7 +350,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
             Ok(_) => Redirect::to(&format!("/stations/{name}")).into_response(),
-            Err(e) => create_form(Some(&format!("Provisioning failed: {e}"))).into_response(),
+            Err(e) => {
+                assign.cleanup();
+                create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
+            }
         };
     }
 
@@ -353,7 +391,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     } else {
         None
     };
-    let req = StationRequest {
+    let mut req = StationRequest {
         name: name.clone(),
         guest,
         disk_path: disk.clone(),
@@ -362,7 +400,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         vcpus: get("vcpus").parse().unwrap_or(dvcpus),
         memory_mib: get("memory_mib").parse().unwrap_or(dram),
         native_hardware: checked("native"),
-        passthrough_addresses: passthrough_for(&get("gpu")),
+        // GPU is resolved below, after media validation, so a vGPU mdev isn't created before a
+        // possible early return.
+        passthrough_addresses: Vec::new(),
+        mdev_uuid: None,
         media: InstallMedia {
             install_iso,
             virtio_iso,
@@ -390,11 +431,21 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         }
     }
 
+    // Resolve the GPU now that everything that could fail cheaply has passed — creating a vGPU mdev
+    // (if chosen) just before we commit to provisioning.
+    let assign = match assign_gpu(&get("gpu")) {
+        Ok(a) => a,
+        Err(e) => return create_form(Some(&e)).into_response(),
+    };
+    req.passthrough_addresses = assign.passthrough.clone();
+    req.mdev_uuid = assign.mdev_uuid.clone();
+
     // Auto-fetch the OS install media if the default ISO(s) aren't downloaded yet. The fetch runs in
     // the background (it can be several GB and verifies as it goes); the station is provisioned only
     // once the media has arrived AND passed verification.
     if using_default_media(&req.media, guest) && media_missing(&req.media, guest) {
         let Some(script) = crate::pages::locate_script(fetch_script(guest)) else {
+            assign.cleanup();
             return create_form(Some(
                 "The install media isn't downloaded yet and the fetch script wasn't found — \
                  download it from the Media page first.",
@@ -416,7 +467,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             }
             Redirect::to(&format!("/stations/{name}")).into_response()
         }
-        Err(e) => create_form(Some(&format!("Provisioning failed: {e}"))).into_response(),
+        Err(e) => {
+            assign.cleanup();
+            create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
+        }
     }
 }
 
@@ -467,14 +521,26 @@ fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
                 "station {}: install media {p} missing or failed verification — not provisioning",
                 req.name
             );
+            // Don't strand a vGPU mdev we created for this station.
+            if let Some(u) = &req.mdev_uuid {
+                crate::vgpu::remove_mdev(u);
+            }
             return;
         }
     }
     let _ = guest; // media set already reflects the guest; kept for signature symmetry
     let lv = Libvirt::system();
-    if let Ok(report) = provision(&req, &lv) {
-        if report.started && req.needs_boot_prompt_clear() {
-            Libvirt::system().clear_boot_prompt(&req.name);
+    match provision(&req, &lv) {
+        Ok(report) => {
+            if report.started && req.needs_boot_prompt_clear() {
+                Libvirt::system().clear_boot_prompt(&req.name);
+            }
+        }
+        Err(e) => {
+            eprintln!("station {}: provisioning failed: {e}", req.name);
+            if let Some(u) = &req.mdev_uuid {
+                crate::vgpu::remove_mdev(u);
+            }
         }
     }
 }
@@ -562,6 +628,41 @@ fn passthrough_for(addr: &str) -> Vec<String> {
                 .bind_addresses
         }
         None => vec![addr.to_string()],
+    }
+}
+
+/// How a station is wired to a GPU: a whole-GPU (or SR-IOV VF) passthrough group, and/or a freshly
+/// created vGPU mediated device. Resolving a vGPU selection **creates the mdev as a side effect**, so
+/// call [`GpuAssignment::cleanup`] if provisioning then fails.
+#[derive(Default)]
+struct GpuAssignment {
+    passthrough: Vec<String>,
+    mdev_uuid: Option<String>,
+}
+
+impl GpuAssignment {
+    /// Tear down anything this assignment created on the host (the mdev), on a failed provision.
+    fn cleanup(&self) {
+        if let Some(u) = &self.mdev_uuid {
+            crate::vgpu::remove_mdev(u);
+        }
+    }
+}
+
+/// Resolve the wizard's `gpu` selection into a [`GpuAssignment`], creating a vGPU mdev if one was
+/// chosen. Returns an error string (already user-facing) if mdev creation fails.
+fn assign_gpu(sel: &str) -> Result<GpuAssignment, String> {
+    if let Some((parent, type_id)) = crate::vgpu::parse_mdev_selection(sel) {
+        let uuid = crate::vgpu::create_mdev(&parent, &type_id)?;
+        Ok(GpuAssignment {
+            passthrough: Vec::new(),
+            mdev_uuid: Some(uuid),
+        })
+    } else {
+        Ok(GpuAssignment {
+            passthrough: passthrough_for(sel),
+            mdev_uuid: None,
+        })
     }
 }
 

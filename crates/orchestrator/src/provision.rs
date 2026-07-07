@@ -26,8 +26,12 @@ pub struct StationRequest {
     pub vcpus: u32,
     pub memory_mib: u64,
     pub native_hardware: bool,
-    /// The GPU's whole IOMMU group to pass through (empty = headless / no GPU).
+    /// The GPU's whole IOMMU group to pass through (empty = headless / no GPU). Also carries an
+    /// SR-IOV virtual function, which is just another PCI address.
     pub passthrough_addresses: Vec<String>,
+    /// A pre-created mediated device (vGPU) to attach, by UUID (empty = none). Set instead of
+    /// `passthrough_addresses` when the station gets a vGPU slice rather than a whole GPU.
+    pub mdev_uuid: Option<String>,
     /// Install media (install ISO, virtio-win, unattended seed) — already resolved/built.
     pub media: InstallMedia,
     /// USB devices to pass through (a seat's keyboard/mouse/controller), by vendor/product id.
@@ -97,6 +101,7 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
         memory_mib: req.memory_mib,
         disk_path: req.disk_path.clone(),
         passthrough_addresses: req.passthrough_addresses.clone(),
+        mdev_uuid: req.mdev_uuid.clone(),
         media: req.media.clone(),
         usb_devices: req.usb_devices.clone(),
     };
@@ -128,6 +133,7 @@ mod tests {
             memory_mib: 16384,
             native_hardware: false,
             passthrough_addresses: vec![],
+            mdev_uuid: None,
             media: InstallMedia::none(),
             usb_devices: vec![],
             define: false,

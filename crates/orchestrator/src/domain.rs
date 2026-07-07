@@ -26,8 +26,11 @@ pub struct DomainSpec<'a> {
     pub memory_mib: u64,
     /// Path to the VM's disk image (qcow2).
     pub disk_path: String,
-    /// PCI addresses to pass through — the GPU's whole IOMMU group.
+    /// PCI addresses to pass through — the GPU's whole IOMMU group, or an SR-IOV virtual function.
     pub passthrough_addresses: Vec<String>,
+    /// A pre-created mediated device (vGPU) to attach, by UUID. Mutually exclusive with a whole-GPU
+    /// `passthrough_addresses` group in practice, though the XML permits both.
+    pub mdev_uuid: Option<String>,
     /// Install media (OS ISO, plus virtio-win for Windows); empty once the disk is installed.
     pub media: InstallMedia,
     /// USB devices to pass through by id (per-seat keyboard/mouse); may be empty.
@@ -136,13 +139,22 @@ pub fn render(spec: &DomainSpec) -> String {
     // interfaces so the web console's proxy — and a native VNC viewer on the LAN — can reach it.
     xml.push_str("    <graphics type='vnc' port='-1' listen='0.0.0.0'/>\n");
     xml.push_str("    <video>\n      <model type='virtio'/>\n    </video>\n");
-    // GPU passthrough: the whole IOMMU group as one unit.
+    // GPU passthrough: the whole IOMMU group as one unit (also an SR-IOV VF, which is a plain PCI fn).
     for addr in &spec.passthrough_addresses {
         if let Some(src) = pci_address_xml(addr) {
             xml.push_str("    <hostdev mode='subsystem' type='pci' managed='yes'>\n");
             let _ = writeln!(xml, "      <source>\n        {src}\n      </source>");
             xml.push_str("    </hostdev>\n");
         }
+    }
+    // vGPU: a mediated device, attached by UUID (created on the host before the domain starts).
+    if let Some(uuid) = &spec.mdev_uuid {
+        xml.push_str("    <hostdev mode='subsystem' type='mdev' model='vfio-pci'>\n");
+        let _ = writeln!(
+            xml,
+            "      <source>\n        <address uuid='{uuid}'/>\n      </source>"
+        );
+        xml.push_str("    </hostdev>\n");
     }
     // Per-device USB passthrough (a seat's keyboard/mouse), by vendor/product id.
     for usb in &spec.usb_devices {
@@ -193,6 +205,7 @@ mod tests {
             memory_mib: 16384,
             disk_path: "/var/lib/tendril/s1.qcow2".to_string(),
             passthrough_addresses: vec!["0000:83:00.0".to_string(), "0000:83:00.1".to_string()],
+            mdev_uuid: None,
             media: InstallMedia::none(),
             usb_devices: vec![],
         };
@@ -219,6 +232,7 @@ mod tests {
             memory_mib: 8192,
             disk_path: "/d.qcow2".to_string(),
             passthrough_addresses: vec![],
+            mdev_uuid: None,
             media: InstallMedia::none(),
             usb_devices: vec![],
         };
@@ -237,6 +251,7 @@ mod tests {
             memory_mib: 8192,
             disk_path: "/d.qcow2".to_string(),
             passthrough_addresses: vec![],
+            mdev_uuid: None,
             media: InstallMedia {
                 install_iso: Some("/isos/win11.iso".to_string()),
                 virtio_iso: Some("/isos/virtio-win.iso".to_string()),
@@ -263,6 +278,7 @@ mod tests {
             memory_mib: 8192,
             disk_path: "/d.qcow2".to_string(),
             passthrough_addresses: vec![],
+            mdev_uuid: None,
             media: InstallMedia::none(),
             usb_devices: vec![UsbPassthrough {
                 vendor_id: 0x046d,
@@ -273,6 +289,25 @@ mod tests {
         assert!(xml.contains("type='usb'"));
         assert!(xml.contains("<vendor id='0x046d'/>"));
         assert!(xml.contains("<product id='0xc52b'/>"));
+    }
+
+    #[test]
+    fn mdev_uuid_renders_as_mdev_hostdev() {
+        let st = station(false, GuestOs::Windows);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+            mdev_uuid: Some("f2c0d6a4-1111-2222-3333-444455556666".to_string()),
+            media: InstallMedia::none(),
+            usb_devices: vec![],
+        };
+        let xml = render(&spec);
+        assert!(xml.contains("type='mdev' model='vfio-pci'"));
+        assert!(xml.contains("<address uuid='f2c0d6a4-1111-2222-3333-444455556666'/>"));
+        assert_eq!(xml.matches("<hostdev").count(), 1); // just the mdev, no PCI group
     }
 
     #[test]

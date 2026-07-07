@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **vGPU: split one GPU across multiple stations.** Two mechanisms, detected per-GPU from sysfs:
+  - **Mediated devices (mdev)** — the NVIDIA vGPU / `vgpu_unlock` / Intel GVT-g path. The capability
+    engine reads each GPU's `mdev_supported_types`; the create-station wizard lists every available
+    profile ("… — vGPU: GRID RTX6000-4Q (2 free)"), and choosing one creates a persistent mediated
+    device (`mdevctl define --auto` + `start`) and attaches it to the station as
+    `<hostdev type='mdev'>`. The mdev is torn down when the station is deleted (or if provisioning
+    fails), and the **Hardware** page's "Used by" shows which stations hold a slice.
+  - **SR-IOV** — for GPUs that advertise `sriov_totalvfs` (AMD MxGPU, Intel Data Center GPU). An inline
+    control on the **Hardware** page enables *N* virtual functions; the VFs then appear as their own
+    GPUs and are passed through with the existing whole-GPU path.
+
+  Tendril **detects and guides** — it consumes an mdev/SR-IOV-capable host driver but doesn't install
+  proprietary vGPU drivers. **Station disks and whole-GPU passthrough are unchanged.**
+
 ## [0.15.0] - 2026-07-07
 
 Shared storage and reusable golden images — the groundwork for clustering — plus a public demo.

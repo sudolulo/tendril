@@ -100,6 +100,7 @@ fn main() {
         memory_mib,
         native_hardware: has_flag("--native-hardware"),
         passthrough_addresses,
+        mdev_uuid: None,
         media,
         usb_devices: Vec::new(),
         define,

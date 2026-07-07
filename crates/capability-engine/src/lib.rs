@@ -10,11 +10,13 @@ pub mod iommu;
 pub mod matrix;
 pub mod pci;
 pub mod usb;
+pub mod vgpu;
 
 pub use iommu::{IommuGroup, PassthroughViability};
 pub use matrix::{Capability, CapabilityMatrix, GpuCapability};
 pub use pci::{GpuDevice, GpuVendor};
 pub use usb::{UsbController, UsbDevice};
+pub use vgpu::{MdevType, VgpuSupport};
 
 /// Detect all display devices on the live host and classify each into a [`CapabilityMatrix`].
 pub fn detect() -> CapabilityMatrix {

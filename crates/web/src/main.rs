@@ -15,6 +15,7 @@ mod seats;
 mod stations;
 mod storage;
 mod ui;
+mod vgpu;
 
 use axum::extract::Path;
 use axum::http::{header, StatusCode};
@@ -57,6 +58,7 @@ async fn main() {
         // hardware
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))
+        .route("/hardware/:addr/sriov", post(hardware::sriov))
         .route("/seats", post(seats::create))
         .route("/seats/delete", post(seats::delete))
         // media + network

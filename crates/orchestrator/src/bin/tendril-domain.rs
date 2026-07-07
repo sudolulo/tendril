@@ -35,6 +35,7 @@ fn main() {
         memory_mib: 16384,
         disk_path: "/var/lib/tendril/station1.qcow2".to_string(),
         passthrough_addresses: plan.bind_addresses,
+        mdev_uuid: None,
         media: InstallMedia::none(),
         usb_devices: Vec::new(),
     };

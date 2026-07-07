@@ -344,6 +344,7 @@ fn menu_create_station() {
         memory_mib,
         native_hardware,
         passthrough_addresses: passthrough,
+        mdev_uuid: None,
         media: InstallMedia {
             install_iso,
             virtio_iso,

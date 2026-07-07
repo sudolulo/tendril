@@ -2,6 +2,7 @@
 
 use crate::iommu::{self, IommuGroup, PassthroughViability};
 use crate::pci::{GpuDevice, GpuVendor};
+use crate::vgpu::{self, VgpuSupport};
 
 /// What a given GPU supports on this host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,9 @@ pub struct GpuCapability {
     pub capability: Capability,
     /// Detail behind the capability (e.g. whether an ACS override is needed).
     pub viability: PassthroughViability,
+    /// vGPU mechanisms the GPU advertises (mdev profiles and/or SR-IOV). A GPU can be *both* whole-GPU
+    /// passthrough-capable and vGPU-capable — the wizard offers the choice.
+    pub vgpu: VgpuSupport,
 }
 
 /// The full set of GPU capabilities for the host.
@@ -38,6 +42,11 @@ impl CapabilityMatrix {
             .iter()
             .filter(|g| matches!(g.capability, Capability::Passthrough))
     }
+
+    /// GPUs that can be split into multiple stations via vGPU (mdev profiles or SR-IOV VFs).
+    pub fn vgpu_capable(&self) -> impl Iterator<Item = &GpuCapability> {
+        self.gpus.iter().filter(|g| g.vgpu.is_capable())
+    }
 }
 
 /// Build a capability matrix from enumerated GPUs and IOMMU groups.
@@ -47,10 +56,12 @@ pub fn build(gpus: Vec<GpuDevice>, groups: &[IommuGroup]) -> CapabilityMatrix {
         .map(|gpu| {
             let viability = iommu::assess(&gpu, groups);
             let capability = classify(&gpu, viability);
+            let vgpu = vgpu::probe(&gpu.address);
             GpuCapability {
                 gpu,
                 capability,
                 viability,
+                vgpu,
             }
         })
         .collect();

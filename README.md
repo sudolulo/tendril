@@ -67,7 +67,7 @@ installs, the console, and the web control plane (incl. networking) are **done**
 | Area | Capability | Status |
 |---|---|---|
 | vGPU | >1 VM per GPU — mdev (official + `vgpu_unlock`) & SR-IOV — see **[docs/VGPU.md](docs/VGPU.md)** | 🧪 Experimental (needs hardware validation) |
-| Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |
+| Clustering | Manage stations across machines; GPU-aware scheduling — see **[docs/CLUSTERING.md](docs/CLUSTERING.md)** | 📐 Planned |
 | Streaming | Sunshine/Moonlight for headless / remote play | 🔭 Future |
 
 Full architecture, decisions, and phase detail: **[docs/PLAN.md](docs/PLAN.md)**.

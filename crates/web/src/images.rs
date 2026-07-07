@@ -73,6 +73,15 @@ fn os_label(os: GuestOs) -> &'static str {
     }
 }
 
+/// Human OS label for the images list; "—" when an image has no recorded OS.
+pub(crate) fn os_display(name: &str) -> &'static str {
+    match image_os(name) {
+        Some(GuestOs::Windows) => "Windows 11",
+        Some(GuestOs::SteamOs) => "SteamOS",
+        None => "—",
+    }
+}
+
 /// A station's guest OS, inferred from its domain XML clock (Windows uses localtime, SteamOS UTC).
 fn station_guest(name: &str) -> Option<GuestOs> {
     let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;
@@ -363,11 +372,12 @@ pub fn panel() -> Markup {
                     p.muted { "No saved images yet. Open a station that's shut off and use " strong { "Save as image" } " to capture its installed disk as a reusable template." }
                 } @else {
                     div.scroll { table {
-                        thead { tr { th { "Image" } th { "Integrity" } th.right { "Size" } th.right { "" } } }
+                        thead { tr { th { "Image" } th { "OS" } th { "Integrity" } th.right { "Size" } th.right { "" } } }
                         tbody {
                             @for (n, sz) in &imgs {
                                 tr {
                                     td.mono { (n) }
+                                    td { (os_display(n)) }
                                     td { (integrity_cell(n)) }
                                     td.right.num { (sz) }
                                     td.right {
@@ -381,6 +391,7 @@ pub fn panel() -> Markup {
                             @for n in &caps {
                                 tr {
                                     td.mono { (n) " " span.sub { "(capturing…)" } }
+                                    td { span.sub { "—" } }
                                     td { span.sub { "—" } }
                                     td.right.num { span.sub { "—" } }
                                     td.right { span.sub { "capturing…" } }

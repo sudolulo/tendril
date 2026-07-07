@@ -456,7 +456,7 @@ pub async fn new_page() -> Markup {
                             label { "Base image (clone — the OS comes from the image)" }
                             select name="base_image" {
                                 option value="" { "None — install fresh" }
-                                @for (n, sz) in &images { option value=(n) { (n) " (" (sz) ")" } }
+                                @for (n, sz) in &images { option value=(n) { (n) " (" (sz) ") · " (crate::images::os_display(n)) } }
                             }
                             span.hint { "Golden images on the shared store are visible to every node. Cloning is instant and needs no install media." }
                         }

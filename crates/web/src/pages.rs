@@ -22,11 +22,16 @@ const ISO_DIR: &str = "/var/lib/tendril/isos";
 
 pub async fn dashboard() -> Markup {
     let lv = Libvirt::system();
-    let names = lv.list();
-    let running = names
-        .iter()
-        .filter(|n| matches!(lv.state(n), DomainState::Running))
-        .count();
+    let (n_stations, running) = if ui::is_demo() {
+        crate::demo::counts()
+    } else {
+        let names = lv.list();
+        let r = names
+            .iter()
+            .filter(|n| matches!(lv.state(n), DomainState::Running))
+            .count();
+        (names.len(), r)
+    };
     let matrix = detect();
     let ready = matrix.passthrough_capable().count();
     let (threads, mem_gib) = host_capacity();
@@ -36,7 +41,7 @@ pub async fn dashboard() -> Markup {
         "Dashboard",
         html! {
             section.summary {
-                (stat("Stations", &names.len().to_string(), false, None))
+                (stat("Stations", &n_stations.to_string(), false, None))
                 (stat("Running", &running.to_string(), true, None))
                 (stat("GPUs · passthrough-ready", &ready.to_string(), false, Some(&format!("/ {}", matrix.gpus.len()))))
                 (stat("Host capacity", &threads.to_string(), false, Some(&format!("threads · {mem_gib} GB RAM"))))
@@ -176,8 +181,10 @@ fn media_page(note: Option<Markup>) -> Markup {
             @if let Some(n) = note { (n) }
             (ui::panel("Install media", Some(ISO_DIR), html! {
                 div.pad {
-                    @let isos = list_isos();
-                    @if isos.is_empty() {
+                    @let isos = if ui::is_demo() { Vec::new() } else { list_isos() };
+                    @if ui::is_demo() {
+                        (crate::demo::media_table())
+                    } @else if isos.is_empty() {
                         p.sub { "No ISOs yet. Fetch one below, or drop files into " span.mono { (ISO_DIR) } "." }
                     } @else {
                         div.scroll {
@@ -244,7 +251,7 @@ enum VerifyState {
 
 /// Where a known install ISO comes from and how it's trustworthy — shown on the Media page so the
 /// media never looks like it appeared from nowhere.
-fn provenance(iso: &str) -> Option<&'static str> {
+pub fn provenance(iso: &str) -> Option<&'static str> {
     let n = iso.to_lowercase();
     if n.starts_with("win11") {
         Some("Source: assembled by UUP dump from Microsoft's Windows Update CDN. Every component is \

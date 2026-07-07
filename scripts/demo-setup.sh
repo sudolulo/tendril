@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# Stand up a permanent Tendril DEMO: seeds representative data and runs tendril-web in read-only demo
-# mode (no login; every action is disabled and returns a banner) as a systemd service. Binds all
-# interfaces by default so it's reachable across your LAN; put it behind a reverse proxy if you like.
-# Run once:  sudo bash scripts/demo-setup.sh   (override the bind with ADDR=127.0.0.1:8091 for proxy-only)
+# Stand up a permanent Tendril DEMO: runs tendril-web in read-only demo mode (no login; every action
+# is disabled and returns a banner) as a systemd service. Demo mode shows self-contained canned data
+# — it touches no real host state, so it can't collide with a real Tendril instance on the same box.
+# Binds all interfaces by default so it's reachable across your LAN; put it behind a reverse proxy if
+# you like. Run once:  sudo bash scripts/demo-setup.sh   (override with ADDR=127.0.0.1:8091 for proxy-only)
 set -euo pipefail
 ADDR="${ADDR:-0.0.0.0:8202}"
 BIN="${BIN:-/usr/local/bin/tendril-web}"
-REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 PORT="${ADDR##*:}"
-
-echo "==> seeding demo data"
-bash "$REPO/scripts/demo-seed.sh"
 
 echo "==> installing tendril-demo.service on $ADDR"
 cat > /etc/systemd/system/tendril-demo.service <<EOF
 [Unit]
-Description=Tendril public demo (read-only, actions disabled)
-After=network-online.target libvirtd.service
+Description=Tendril public demo (read-only, canned data, actions disabled)
+After=network-online.target
 [Service]
 Environment=TENDRIL_DEMO=1
 Environment=TENDRIL_WEB_ADDR=$ADDR

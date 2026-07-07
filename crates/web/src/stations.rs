@@ -29,6 +29,9 @@ const DISK_DIR: &str = "/var/lib/tendril";
 
 /// The self-refreshing stations panel (HTMX polls it; actions swap it).
 pub fn fragment(lv: &Libvirt) -> Markup {
+    if ui::is_demo() {
+        return crate::demo::stations_fragment();
+    }
     let names = lv.list();
     html! {
         div #stations hx-get="/stations/fragment" hx-trigger="every 6s" hx-swap="outerHTML" {
@@ -566,6 +569,9 @@ fn parse_usb_id(s: &str) -> Option<UsbPassthrough> {
 // ── detail + console ────────────────────────────────────────────────────────────────────────
 
 pub async fn detail(Path(name): Path<String>) -> Response {
+    if ui::is_demo() {
+        return crate::demo::station_detail(&name).into_response();
+    }
     let lv = Libvirt::system();
     let state = lv.state(&name);
     if matches!(state, DomainState::Absent) {

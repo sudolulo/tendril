@@ -88,6 +88,9 @@ pub fn devices_of(name: &str) -> Vec<UsbPassthrough> {
 
 /// The Seats management panel (list + create form); swapped in place by create/delete.
 pub fn panel() -> Markup {
+    if crate::ui::is_demo() {
+        return crate::demo::seats_panel();
+    }
     let seats = load();
     let usb = usb::devices();
     let friendly = |v: u16, p: u16| {

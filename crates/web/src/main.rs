@@ -6,6 +6,7 @@
 //! are baked into the binary, so the appliance serves everything offline.
 
 mod auth;
+mod demo;
 mod hardware;
 mod network;
 mod pages;

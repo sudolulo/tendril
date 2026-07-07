@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Public demo mode.** Running `tendril-web` with `TENDRIL_DEMO=1` serves a read-only showcase: no
-  login, a DEMO badge in the header, and every mutating action disabled (returns a friendly banner) —
-  safe to expose behind a reverse proxy. `scripts/demo-seed.sh` + `scripts/demo-setup.sh` seed
-  representative stations/media and install it as a systemd service. Live at demo.onetick.ninja.
+  login, a DEMO badge in the header, and every mutating action disabled (returns a friendly banner).
+  It shows **self-contained canned data** (stations, media, seats) that touches no real host state, so
+  a demo can run **alongside a real Tendril instance on the same box without colliding**.
+  `scripts/demo-setup.sh` installs it as a LAN-reachable systemd service. Live at demo.onetick.ninja.
 
 ## [0.14.0] - 2026-07-07
 

@@ -84,11 +84,18 @@ CI runs the same checks; running them locally saves a round-trip.
 ## Releases — SemVer
 
 - Versions follow [SemVer](https://semver.org): `MAJOR.MINOR.PATCH`.
-- **Cutting a release:** open a PR from `dev` into `main`, merge it, then tag the merge on `main`:
-  `git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
-- Tagging triggers the release pipeline (build + publish the bootc image). Pre-1.0 the API/layout may
-  change between minor versions; roadmap phases (see [docs/PLAN.md](docs/PLAN.md)) map roughly to
-  minor milestones.
+- **`main` is release-only.** Merging `dev → main` **is** a release — don't do it between milestones
+  (see *Changelog & versioning* below). Keep everyday work on `dev`.
+- **Cutting a release:** roll `[Unreleased]` into a `## [X.Y.Z] - YYYY-MM-DD` changelog section, bump
+  `version` in the workspace `Cargo.toml`, then open a `dev → main` PR and rebase-merge it. The push to
+  `main` triggers `.gitea/workflows/release.yml`, which **builds + pushes** the bootc image (registry
+  `:X.Y.Z` and `:latest`), **publishes the installer ISO** to dl.onetick.ninja, and **creates the
+  Gitea release + `vX.Y.Z` tag** — all automatically. No manual tagging.
+- **CI gotcha:** the release job authenticates to the container registry with the **`REGISTRY_TOKEN`**
+  repo secret (a real PAT). Gitea's built-in Actions token is rejected by the registry even with
+  `packages: write`, so that secret must exist for releases to publish.
+- Pre-1.0 the API/layout may change between minor versions; roadmap phases (see
+  [docs/PLAN.md](docs/PLAN.md)) map roughly to minor milestones.
 
 ## Changelog & versioning
 
@@ -106,9 +113,21 @@ reserved for something a user can actually get value from:
 - **`1.0.0`** = production / stable.
 
 Everything below the next milestone just accumulates under `[Unreleased]`. Pre-1.0 tags are
-development previews; nothing is installable until the first-installable milestone. To cut a release:
-roll `[Unreleased]` into a new `## [X.Y.Z] - YYYY-MM-DD` section, bump `version` in the workspace
-`Cargo.toml`, and tag (see *Releases* above).
+development previews. To cut a release, follow *Releases — SemVer* above (roll the changelog, bump the
+workspace `Cargo.toml` version, `dev → main`).
+
+> **Cadence discipline.** It's tempting during rapid iteration to cut a release per feature batch —
+> resist it. Batch changes on `dev` and cut at a milestone. (We drifted to several releases in a day
+> once; the version number should track maturity, not commits.)
+
+## Public demo
+
+`tendril-web` run with `TENDRIL_DEMO=1` is a **read-only showcase**: no login, a DEMO badge, every
+mutating action disabled behind a banner, and **self-contained canned data** (from
+`crates/web/src/demo.rs`) — it touches no real host state, so a demo can run beside a real instance on
+the same box. `scripts/demo-setup.sh` installs it as `tendril-demo.service` (binds all interfaces for
+LAN by default; override with `ADDR=127.0.0.1:PORT` for proxy-only) and opens the firewall port. Keep
+demo content canned — never make demo mode depend on real libvirt/media/host state.
 
 ## Version pinning
 

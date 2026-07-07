@@ -24,11 +24,13 @@ Per-seat USB, live install progress, a branded installer, and a release pipeline
   the login banner points at the web UI. `build-installer.sh` gains `--rootfs xfs|btrfs` (the
   installed system's root filesystem) and `--config` to select the installer config.
 
-### Fixed
-- **The installer ISO builds again.** `bootc-image-builder:latest` (2026-06-18) regressed with
-  `grub2-probe: failed to get canonical path of /dev/mapper/fedora-root`; the build is now pinned to
-  the known-good prior digest, so `main` reliably produces an ISO. The release workflow also **creates
-  the matching Gitea release** (linking the container image and the verified ISO) automatically.
+### Changed
+- **Reproducible, reliable ISO builds.** `build-installer.sh` now pins `bootc-image-builder` to a
+  verified-good digest (override with `$BIB`), so a surprise `:latest` push can't break the release
+  build, and the release workflow **creates the matching Gitea release** automatically (linking the
+  container image and the verified ISO). The prior ISO-build failures were disk-exhaustion during the
+  compose, not the builder; the `grub2-probe: … /dev/mapper/fedora-root` line in the log is a
+  harmless RPM-scriptlet warning and the ISO completes regardless.
 
 ## [0.10.0] - 2026-07-07
 

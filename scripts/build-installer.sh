@@ -18,9 +18,11 @@ OUTPUT="./out"
 ROOTFS="xfs"          # root filesystem of the installed system: xfs (default) or btrfs
 # BIB installer config (branding + simplified interactive kickstart). Empty ⇒ don't pass one.
 CONFIG="image/installer/config.toml"
-# Pin bootc-image-builder to a known-good digest. `:latest` from 2026-06-18 regressed the ISO build
-# with `grub2-probe: failed to get canonical path of /dev/mapper/fedora-root`; this is the immediately
-# prior (2026-05-29) multi-arch index, which builds our xfs-rootfs ISO cleanly. Override with $BIB.
+# Pin bootc-image-builder to a verified-good digest so CI is reproducible and a surprise `:latest`
+# push can't break the release build. This is the 2026-05-29 multi-arch index, confirmed to build our
+# xfs-rootfs ISO end to end. (Note: the build logs a non-fatal `grub2-probe: failed to get canonical
+# path of /dev/mapper/fedora-root` from an RPM scriptlet in the anaconda environment — it's harmless
+# and the ISO completes regardless.) Override with $BIB to try a newer builder.
 BIB="${BIB:-quay.io/centos-bootc/bootc-image-builder@sha256:7ae88b8d6f2cabfa971d7836b96d6cac19cd1384e658031bd154f9687e929905}"
 
 while [ $# -gt 0 ]; do

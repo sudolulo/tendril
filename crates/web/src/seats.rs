@@ -21,6 +21,17 @@ pub struct Seat {
 }
 
 pub fn load() -> Vec<Seat> {
+    // In the demo, return the canned seats (matching the Hardware → Seats panel) so the create-station
+    // wizard's seat selector shows up even though the host has no real seats file.
+    if crate::ui::is_demo() {
+        return crate::demo::seats()
+            .into_iter()
+            .map(|(name, _)| Seat {
+                name: name.to_string(),
+                devices: vec![(0x046d, 0xc52b), (0x045e, 0x028e)],
+            })
+            .collect();
+    }
     std::fs::read_to_string(seats_file())
         .map(|txt| txt.lines().filter_map(parse_line).collect())
         .unwrap_or_default()

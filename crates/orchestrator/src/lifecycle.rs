@@ -248,12 +248,9 @@ fn parse_pci_hostdevs(xml: &str) -> Vec<String> {
             let end = src[i..].find('\'')? + i;
             u32::from_str_radix(src[i..end].trim_start_matches("0x"), 16).ok()
         };
-        if let (Some(d), Some(b), Some(s), Some(f)) = (
-            attr("domain"),
-            attr("bus"),
-            attr("slot"),
-            attr("function"),
-        ) {
+        if let (Some(d), Some(b), Some(s), Some(f)) =
+            (attr("domain"), attr("bus"), attr("slot"), attr("function"))
+        {
             out.push(format!("{d:04x}:{b:02x}:{s:02x}.{f:x}"));
         }
     }

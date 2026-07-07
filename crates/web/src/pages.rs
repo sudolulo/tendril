@@ -356,7 +356,7 @@ fn human(bytes: u64) -> String {
     format!("{v:.1} {u}")
 }
 
-fn locate_script(name: &str) -> Option<String> {
+pub fn locate_script(name: &str) -> Option<String> {
     for base in ["/usr/libexec/tendril", "scripts", "./scripts"] {
         let p = format!("{base}/{name}");
         if FsPath::new(&p).exists() {

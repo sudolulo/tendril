@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Auto-fetch install media on station create.** If you create a station whose default install ISO
+  isn't downloaded yet (Windows 11 + virtio-win, or Bazzite), Tendril fetches it in the background and
+  then provisions the station automatically once it's ready. Media is **verified against the
+  publisher's checksum as it downloads**, and a station is **never created from media that fails
+  verification** (a checksum mismatch). Media with no upstream checksum (e.g. the locally-assembled
+  Windows ISO) is fine to use.
+
+### Changed
+- Network page: dropped the "may drop the link, use the console" warning (the 60-second test-and-revert
+  makes it safe) and now lists only physical NICs — podman/docker/libvirt bridges are hidden.
+
 ## [0.12.0] - 2026-07-07
 
 Configure the network from the browser — with a TrueNAS-style safety net.

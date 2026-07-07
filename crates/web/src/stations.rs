@@ -314,6 +314,39 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         start: checked("start"),
     };
 
+    // Refuse install media that failed checksum verification (a `.mismatch` marker). Media with no
+    // upstream checksum — only a recorded `.sha256`, e.g. the locally-assembled Windows ISO — is fine.
+    for p in [
+        req.media.install_iso.as_deref(),
+        req.media.virtio_iso.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if FsPath::new(p).exists() && verification_failed(p) {
+            return create_form(Some(&format!(
+                "{p} failed checksum verification — not using it. Re-fetch it from the Media page."
+            )))
+            .into_response();
+        }
+    }
+
+    // Auto-fetch the OS install media if the default ISO(s) aren't downloaded yet. The fetch runs in
+    // the background (it can be several GB and verifies as it goes); the station is provisioned only
+    // once the media has arrived AND passed verification.
+    if using_default_media(&req.media, guest) && media_missing(&req.media, guest) {
+        let Some(script) = crate::pages::locate_script(fetch_script(guest)) else {
+            return create_form(Some(
+                "The install media isn't downloaded yet and the fetch script wasn't found — \
+                 download it from the Media page first.",
+            ))
+            .into_response();
+        };
+        let req = req.clone();
+        std::thread::spawn(move || fetch_then_provision(script, req, guest));
+        return fetching_page(&name, guest).into_response();
+    }
+
     let lv = Libvirt::system();
     match provision(&req, &lv) {
         Ok(report) => {
@@ -326,6 +359,89 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         }
         Err(e) => create_form(Some(&format!("Provisioning failed: {e}"))).into_response(),
     }
+}
+
+/// A media file whose checksum verification failed (has a `.mismatch` marker). No marker, or a
+/// `.verified` / `.sha256` marker, is acceptable — it's fine to use media with no upstream checksum.
+fn verification_failed(path: &str) -> bool {
+    FsPath::new(&format!("{path}.mismatch")).exists()
+}
+
+fn fetch_script(guest: GuestOs) -> &'static str {
+    match guest {
+        GuestOs::Windows => "fetch-windows-media.sh",
+        GuestOs::SteamOs => "fetch-steamos-media.sh",
+    }
+}
+
+/// True when the request's install media are the OS defaults, so we know which fetcher produces them.
+fn using_default_media(media: &InstallMedia, guest: GuestOs) -> bool {
+    media.install_iso.as_deref() == Some(default_iso(guest).as_str())
+}
+
+/// True if a required install-media file isn't on disk yet.
+fn media_missing(media: &InstallMedia, guest: GuestOs) -> bool {
+    let absent = |p: &Option<String>| {
+        p.as_deref()
+            .map(|p| !FsPath::new(p).exists())
+            .unwrap_or(false)
+    };
+    absent(&media.install_iso) || (matches!(guest, GuestOs::Windows) && absent(&media.virtio_iso))
+}
+
+/// Background worker: download the OS media (the fetch script verifies as it goes), then provision
+/// the station — but only if every media file arrived and none is flagged as a checksum mismatch.
+fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
+    let _ = std::process::Command::new(&script)
+        .arg("--dest")
+        .arg(ISO_DIR)
+        .status();
+    for p in [
+        req.media.install_iso.as_deref(),
+        req.media.virtio_iso.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !FsPath::new(p).exists() || verification_failed(p) {
+            eprintln!(
+                "station {}: install media {p} missing or failed verification — not provisioning",
+                req.name
+            );
+            return;
+        }
+    }
+    let _ = guest; // media set already reflects the guest; kept for signature symmetry
+    let lv = Libvirt::system();
+    if let Ok(report) = provision(&req, &lv) {
+        if report.started && req.needs_boot_prompt_clear() {
+            Libvirt::system().clear_boot_prompt(&req.name);
+        }
+    }
+}
+
+/// Shown after an auto-download kicks off: the station is created once its media is ready & verified.
+fn fetching_page(name: &str, guest: GuestOs) -> Markup {
+    let os = match guest {
+        GuestOs::Windows => "Windows 11 + virtio-win",
+        GuestOs::SteamOs => "Bazzite (SteamOS-style)",
+    };
+    ui::page(
+        "stations",
+        "Downloading media",
+        html! {
+            (ui::panel("Preparing station", None, html! {
+                div.pad {
+                    div.banner.ok { "Downloading " (os) " install media for station " strong { (name) } " — several GB." }
+                    p { "The media is checked against the publisher's checksum as it downloads. Once it's ready "
+                        "and verified, " strong { (name) } " is created automatically (and started, if you chose that). "
+                        "If verification fails, the station is not created." }
+                    p.sub { "Track progress on the " a href="/media" { "Media" } " page; the station appears under "
+                        a href="/stations" { "Stations" } " when it's ready." }
+                }
+            }))
+        },
+    )
 }
 
 fn build_seed(

@@ -8,6 +8,7 @@
 mod auth;
 mod demo;
 mod hardware;
+mod images;
 mod network;
 mod pages;
 mod seats;
@@ -49,7 +50,9 @@ async fn main() {
         .route("/stations/:name/usb/remove/:id", post(stations::usb_remove))
         .route("/stations/:name/sendenter", post(stations::send_enter))
         .route("/stations/:name/progress", get(stations::progress))
+        .route("/stations/:name/save-image", post(images::save))
         .route("/stations/:name/vnc", get(stations::vnc_ws))
+        .route("/images/delete", post(images::delete))
         // hardware
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))

@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use tendril_capability_engine::{detect, iommu, pci, usb};
-use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso};
+use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso, create_overlay};
 use tendril_orchestrator::{
     provision, DomainState, GuestOs, InstallMedia, KickstartSpec, Libvirt, StationRequest,
     UnattendSpec, UsbPassthrough,
@@ -159,6 +159,17 @@ fn create_form(error: Option<&str>) -> Markup {
                 @let (ram, vcpus, disk) = resource_defaults();
                 form.grid.pad method="post" action="/stations" {
                     div.field { label { "Station name" } input name="name" value="station1" required; }
+                    @let img_list = crate::images::list();
+                    @if !img_list.is_empty() {
+                        div.field.wide {
+                            label { "Base image (clone a ready-to-play station instantly)" }
+                            select name="base_image" {
+                                option value="" { "None — install the OS fresh" }
+                                @for (n, sz) in &img_list { option value=(n) { (n) " (" (sz) ")" } }
+                            }
+                            span.hint { "Pick a saved image to clone it (copy-on-write, instant); leave as None to install from media below." }
+                        }
+                    }
                     div.field {
                         label { "Guest OS" }
                         select name="os" {
@@ -271,6 +282,42 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             d
         }
     };
+
+    // Clone-from-image path: if a base image is chosen, the disk is a copy-on-write overlay of it and
+    // there's no install step — just define the VM (which boots straight from the cloned disk).
+    let base_image = get("base_image");
+    if !base_image.is_empty() {
+        let Some(base_path) = crate::images::path_of(&base_image) else {
+            return create_form(Some("The selected base image no longer exists.")).into_response();
+        };
+        if FsPath::new(&disk).exists() {
+            return create_form(Some(&format!("A disk already exists at {disk}."))).into_response();
+        }
+        if let Err(e) = create_overlay(FsPath::new(&disk), FsPath::new(&base_path)) {
+            return create_form(Some(&format!("Cloning the image failed: {e}"))).into_response();
+        }
+        let (dram, dvcpus, _) = resource_defaults();
+        let req = StationRequest {
+            name: name.clone(),
+            guest,
+            disk_path: disk.clone(),
+            size_gib: 0,
+            create_disk: false,
+            vcpus: get("vcpus").parse().unwrap_or(dvcpus),
+            memory_mib: get("memory_mib").parse().unwrap_or(dram),
+            native_hardware: checked("native"),
+            passthrough_addresses: passthrough_for(&get("gpu")),
+            media: InstallMedia::default(), // no install media — the domain boots from the cloned disk
+            usb_devices,
+            define: true,
+            start: checked("start"),
+        };
+        let lv = Libvirt::system();
+        return match provision(&req, &lv) {
+            Ok(_) => Redirect::to(&format!("/stations/{name}")).into_response(),
+            Err(e) => create_form(Some(&format!("Provisioning failed: {e}"))).into_response(),
+        };
+    }
 
     let seed_iso = if checked("unattend") {
         match build_seed(
@@ -626,6 +673,20 @@ pub async fn detail(Path(name): Path<String>) -> Response {
             }
         }))
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
+        (ui::panel("Save as image", Some("capture this station's disk as a reusable golden image"), html! {
+            div.pad {
+                @if running {
+                    p.muted { "Shut the station down first — a consistent image can only be captured from a stopped disk." }
+                } @else {
+                    form hx-post=(format!("/stations/{name}/save-image")) hx-target="#save-result" hx-swap="innerHTML" {
+                        div.field { label { "Image name" } input name="image_name" value=(format!("{name}-image")) required; }
+                        button.btn.primary type="submit" style="margin-top:8px" { "Save as image" }
+                    }
+                    div #save-result style="margin-top:10px" {}
+                    p.sub style="margin-top:8px" { "Flattened + compressed into " span.mono { (crate::images::images_dir()) } ". New stations can then clone it instantly from the create wizard." }
+                }
+            }
+        }))
     })
     .into_response()
 }

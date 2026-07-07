@@ -212,6 +212,7 @@ fn media_page(note: Option<Markup>) -> Markup {
                     div #media-note style="margin-top:12px" {}
                 }
             }))
+            (ui::panel("Station images", Some("golden templates you can clone into new stations"), crate::images::panel()))
         },
     )
 }

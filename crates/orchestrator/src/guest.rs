@@ -36,6 +36,44 @@ pub fn create_disk(path: &Path, size_gib: u32) -> io::Result<()> {
     }
 }
 
+/// Create a qcow2 **overlay** at `path` backed by `base` (copy-on-write). The base image is shared,
+/// not copied — new stations cloned from a golden image cost only their own writes. Fails if `path`
+/// exists or `base` is missing. NOTE: the overlay references `base` by path, so the base must stay put
+/// (and, for clustering later, exist at the same path on each node).
+pub fn create_overlay(path: &Path, base: &Path) -> io::Result<()> {
+    if path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("disk already exists: {}", path.display()),
+        ));
+    }
+    if !base.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("base image not found: {}", base.display()),
+        ));
+    }
+    let out = Command::new("qemu-img")
+        .args([
+            "create",
+            "-f",
+            "qcow2",
+            "-F",
+            "qcow2",
+            "-b",
+            &base.to_string_lossy(),
+            &path.to_string_lossy(),
+        ])
+        .output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
+    }
+}
+
 /// The install media a station needs to bring up its guest OS.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallMedia {

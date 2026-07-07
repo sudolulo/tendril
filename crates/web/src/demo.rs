@@ -212,6 +212,14 @@ pub fn media_table() -> Markup {
     }
 }
 
+/// Demo saved images (golden templates): (name, human size).
+pub fn images() -> Vec<(String, String)> {
+    vec![
+        ("windows11-base".to_string(), "18.4 GB".to_string()),
+        ("bazzite-gaming".to_string(), "12.1 GB".to_string()),
+    ]
+}
+
 /// Demo seats (named USB device groups).
 pub fn seats() -> Vec<(&'static str, &'static str)> {
     vec![

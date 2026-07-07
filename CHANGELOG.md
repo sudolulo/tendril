@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Save & clone station images (clustering groundwork).** Capture an installed station's disk as a
+  reusable **golden image** ("Save as image" on the station page — flattened + compressed into
+  `/var/lib/tendril/images`, listed under **Media → Station images**), then **create a new station from
+  it** via the wizard's **Base image** picker. Clones are qcow2 **copy-on-write overlays** — instant
+  and deduplicated (the base is shared, not copied) — and boot straight to the installed OS with no
+  install step. This is the basis for shipping a built station to other machines (clustering).
 - **Public demo mode.** Running `tendril-web` with `TENDRIL_DEMO=1` serves a read-only showcase: no
   login, a DEMO badge in the header, and every mutating action disabled (returns a friendly banner).
   It shows **self-contained canned data** (stations, media, seats) that touches no real host state, so

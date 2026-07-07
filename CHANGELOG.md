@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-07
+
+Shared storage and reusable golden images — the groundwork for clustering — plus a public demo.
+
 ### Added
 - **Remote media storage (NFS / SMB).** Point Tendril's ISOs and golden images at a mounted **NFS or
   SMB/CIFS** share from **Media → Storage**, so every node — and every station-image clone — sees the
@@ -380,7 +384,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.5.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...HEAD
+[0.15.0]: https://git.onetick.ninja/flan/tendril/compare/v0.14.0...v0.15.0
 [0.5.0]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...v0.5.0
 [0.4.0]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.onetick.ninja/flan/tendril/compare/v0.2.0...v0.3.0

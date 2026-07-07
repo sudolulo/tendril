@@ -175,7 +175,6 @@ fn create_form(error: Option<&str>) -> Markup {
                             }
                         }
                     }
-                    div.field.check.wide { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } }
                     div.field { label { "Username" } input name="username" value="player"; }
                     div.field { label { "Password" } input name="password" value="tendril"; }
                     @let seat_list = crate::seats::load();
@@ -206,6 +205,7 @@ fn create_form(error: Option<&str>) -> Markup {
                     details.advanced.wide {
                         summary { "Advanced options" }
                         div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
+                            div.field.check { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } span.hint { "On by default — installs the guest OS without prompts using the account above. Uncheck for a manual install." } }
                             div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
                             div.field.check { input type="checkbox" name="start" id="start"; label for="start" { "Start now (begins the install immediately)" } span.hint { "Off by default — the station is created stopped so you're never left staring at an empty VM. Start it when you're ready." } }
                         }

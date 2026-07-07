@@ -22,8 +22,8 @@ use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
 use crate::ui;
 
-const ISO_DIR: &str = "/var/lib/tendril/isos";
-const DISK_DIR: &str = "/var/lib/tendril";
+const DISK_DIR: &str = "/var/lib/tendril"; // station disks stay local (per-node, fast)
+                                           // ISO paths resolve through `storage::iso_dir()` (local, or a mounted NFS/SMB share).
 
 // ── list & dashboard fragment ───────────────────────────────────────────────────────────────
 
@@ -228,8 +228,8 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: (host threads − 1) ÷ GPUs" } }
                             div.field { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
                             div.field { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
-                            div.field.wide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{ISO_DIR}/win11.iso · bazzite-deck-nvidia.iso")); }
-                            div.field.wide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{ISO_DIR}/virtio-win.iso")); }
+                            div.field.wide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
+                            div.field.wide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
                             div.field.wide { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
                         }
                     }
@@ -346,7 +346,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     let virtio_iso = if matches!(guest, GuestOs::Windows) {
         let v = get("virtio_iso");
         Some(if v.is_empty() {
-            format!("{ISO_DIR}/virtio-win.iso")
+            format!("{}/virtio-win.iso", crate::storage::iso_dir())
         } else {
             v
         })
@@ -453,7 +453,7 @@ fn media_missing(media: &InstallMedia, guest: GuestOs) -> bool {
 fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
     let _ = std::process::Command::new(&script)
         .arg("--dest")
-        .arg(ISO_DIR)
+        .arg(crate::storage::iso_dir())
         .status();
     for p in [
         req.media.install_iso.as_deref(),
@@ -599,8 +599,8 @@ fn resource_defaults() -> (u64, u32, u32) {
 /// Default install ISO for a guest OS (used when the create form's ISO field is left blank).
 fn default_iso(guest: GuestOs) -> String {
     match guest {
-        GuestOs::Windows => format!("{ISO_DIR}/win11.iso"),
-        GuestOs::SteamOs => format!("{ISO_DIR}/bazzite-deck-nvidia.iso"),
+        GuestOs::Windows => format!("{}/win11.iso", crate::storage::iso_dir()),
+        GuestOs::SteamOs => format!("{}/bazzite-deck-nvidia.iso", crate::storage::iso_dir()),
     }
 }
 

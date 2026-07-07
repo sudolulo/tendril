@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Remote media storage (NFS / SMB).** Point Tendril's ISOs and golden images at a mounted **NFS or
+  SMB/CIFS** share from **Media → Storage**, so every node — and every station-image clone — sees the
+  same media and templates (the shared store behind clustering). The mount is persisted to
+  `/etc/fstab` (`nofail,_netdev`) so it reconnects on boot; SMB credentials are written to a root-only
+  file. `iso_dir()`/`image_dir()` resolve to the share when it's mounted and fall back to local
+  (`/var/lib/tendril/{isos,images}`) otherwise. **Station disks stay local** (fast, per-node); only
+  media and images move to shared storage.
 - **Save & clone station images (clustering groundwork).** Capture an installed station's disk as a
   reusable **golden image** ("Save as image" on the station page — flattened + compressed into
   `/var/lib/tendril/images`, listed under **Media → Station images**), then **create a new station from

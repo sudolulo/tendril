@@ -14,9 +14,10 @@ use tendril_orchestrator::{DomainState, Libvirt};
 
 use crate::ui;
 
-/// Where golden images live (env-overridable so the demo/tests can point elsewhere).
+/// Where golden images live — resolves to a mounted remote store's `images/` when configured, else
+/// local (see `storage::image_dir`).
 pub fn images_dir() -> String {
-    std::env::var("TENDRIL_IMAGE_DIR").unwrap_or_else(|_| "/var/lib/tendril/images".to_string())
+    crate::storage::image_dir()
 }
 
 /// Saved images as (name, human-readable size). Names are the `.qcow2` basename.

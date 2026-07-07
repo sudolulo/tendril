@@ -16,7 +16,7 @@ use tendril_orchestrator::{DomainState, Libvirt};
 use crate::stations;
 use crate::ui;
 
-const ISO_DIR: &str = "/var/lib/tendril/isos";
+// ISO/image storage locations resolve through `storage` (local, or a mounted NFS/SMB share).
 
 // ── dashboard ───────────────────────────────────────────────────────────────────────────────
 
@@ -179,13 +179,15 @@ fn media_page(note: Option<Markup>) -> Markup {
         "Media",
         html! {
             @if let Some(n) = note { (n) }
-            (ui::panel("Install media", Some(ISO_DIR), html! {
+            @let iso_dir = crate::storage::iso_dir();
+            (ui::panel("Storage", Some("where ISOs and station images live (local or a remote share)"), crate::storage::panel()))
+            (ui::panel("Install media", Some(iso_dir.as_str()), html! {
                 div.pad {
                     @let isos = if ui::is_demo() { Vec::new() } else { list_isos() };
                     @if ui::is_demo() {
                         (crate::demo::media_table())
                     } @else if isos.is_empty() {
-                        p.sub { "No ISOs yet. Fetch one below, or drop files into " span.mono { (ISO_DIR) } "." }
+                        p.sub { "No ISOs yet. Fetch one below, or drop files into " span.mono { (iso_dir) } "." }
                     } @else {
                         div.scroll {
                             table {
@@ -223,10 +225,11 @@ pub async fn fetch(axum::extract::Path(which): axum::extract::Path<String>) -> M
         "steamos" => "fetch-steamos-media.sh",
         _ => return html! { div.banner.error { "Unknown media type." } },
     };
+    let iso_dir = crate::storage::iso_dir();
     match locate_script(script) {
-        Some(path) => match Command::new(&path).arg("--dest").arg(ISO_DIR).spawn() {
+        Some(path) => match Command::new(&path).arg("--dest").arg(&iso_dir).spawn() {
             Ok(_) => {
-                html! { div.banner.ok { "Started downloading in the background (several GB). Refresh this page to see files appear in " span.mono { (ISO_DIR) } "." } }
+                html! { div.banner.ok { "Started downloading in the background (several GB). Refresh this page to see files appear in " span.mono { (iso_dir) } "." } }
             }
             Err(e) => html! { div.banner.error { "Could not start " (path) ": " (e) } },
         },
@@ -273,7 +276,7 @@ pub fn provenance(iso: &str) -> Option<&'static str> {
 
 fn list_isos() -> Vec<(String, String)> {
     let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(ISO_DIR) {
+    if let Ok(rd) = std::fs::read_dir(crate::storage::iso_dir()) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if name.ends_with(".iso") {
@@ -289,7 +292,8 @@ fn list_isos() -> Vec<(String, String)> {
 }
 
 fn verify_state(name: &str) -> VerifyState {
-    let read = |ext: &str| std::fs::read_to_string(format!("{ISO_DIR}/{name}.{ext}")).ok();
+    let dir = crate::storage::iso_dir();
+    let read = |ext: &str| std::fs::read_to_string(format!("{dir}/{name}.{ext}")).ok();
     let short = |c: String| {
         c.split_whitespace()
             .next()
@@ -353,7 +357,7 @@ fn guard_iso(iso: &str) -> Option<String> {
     if iso.contains('/') || !iso.ends_with(".iso") {
         return None;
     }
-    let path = format!("{ISO_DIR}/{iso}");
+    let path = format!("{}/{iso}", crate::storage::iso_dir());
     FsPath::new(&path).exists().then_some(path)
 }
 

@@ -13,6 +13,7 @@ mod network;
 mod pages;
 mod seats;
 mod stations;
+mod storage;
 mod ui;
 
 use axum::extract::Path;
@@ -63,6 +64,8 @@ async fn main() {
         .route("/media/fetch/:which", post(pages::fetch))
         .route("/media/verify/:iso", post(pages::verify))
         .route("/media/verifystatus/:iso", get(pages::verify_status))
+        .route("/storage/configure", post(storage::configure))
+        .route("/storage/unmount", post(storage::unmount))
         .route("/network", get(network::page))
         .route("/network/apply", post(network::apply))
         .route("/network/confirm", post(network::confirm))

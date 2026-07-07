@@ -121,7 +121,34 @@ pub struct SaveForm {
     image_name: String,
 }
 
-/// Capture a (shut-off) station's disk as a compressed standalone golden image.
+/// Hidden temp path a capture writes to before it's atomically renamed to `<name>.qcow2`. The leading
+/// dot and non-`.qcow2` suffix keep it out of [`list`] / [`path_of`], so a half-written image is never
+/// listed or cloneable.
+fn partial_path(dir: &str, name: &str) -> String {
+    format!("{dir}/.{name}.qcow2.partial")
+}
+
+/// Names of captures currently in progress (a `.qcow2.partial` temp exists).
+pub fn in_progress() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(images_dir()) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if let Some(mid) = n
+                .strip_prefix('.')
+                .and_then(|s| s.strip_suffix(".qcow2.partial"))
+            {
+                out.push(mid.to_string());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Capture a (shut-off) station's disk as a compressed standalone golden image. Runs in the
+/// background (a multi-GB compress takes minutes): it writes to a hidden temp and only renames it to
+/// the final name once complete, so the image can't be listed or cloned mid-capture.
 pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Markup {
     let name = sanitize(&f.image_name);
     if name.is_empty() {
@@ -139,24 +166,41 @@ pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Marku
     };
     let dir = images_dir();
     let dest = format!("{dir}/{name}.qcow2");
+    let tmp = partial_path(&dir, &name);
     if FsPath::new(&dest).exists() {
         return note(false, "An image with that name already exists.");
     }
-    let _ = std::fs::create_dir_all(&dir);
-    // Flatten + compress into a portable standalone image (no backing chain).
-    match ui::run_result("qemu-img", &["convert", "-c", "-O", "qcow2", &src, &dest]) {
-        Ok(_) => {
-            // Record the guest OS so cloning re-uses it and can't be paired with the wrong install.
-            if let Some(os) = station_guest(&station) {
-                let _ = std::fs::write(os_sidecar(&name), os_label(os));
-            }
-            note(
-                true,
-                &format!("Saved image \u{201c}{name}\u{201d}. Pick it as a base in the create-station wizard."),
-            )
-        }
-        Err(e) => note(false, &format!("Save failed: {e}")),
+    if FsPath::new(&tmp).exists() {
+        return note(false, "A capture with that name is already in progress.");
     }
+    let _ = std::fs::create_dir_all(&dir);
+    // Record the guest OS now (needs the still-defined domain), applied after a successful capture.
+    let guest = station_guest(&station);
+    let nm = name.clone();
+    std::thread::spawn(move || {
+        // Flatten + compress into a portable standalone image (no backing chain), to a temp path.
+        match ui::run_result("qemu-img", &["convert", "-c", "-O", "qcow2", &src, &tmp]) {
+            Ok(_) => {
+                // Atomic publish: the image only becomes visible/cloneable at this rename.
+                if std::fs::rename(&tmp, &dest).is_ok() {
+                    if let Some(os) = guest {
+                        let _ = std::fs::write(os_sidecar(&nm), os_label(os));
+                    }
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                    eprintln!("image {nm}: could not finalize capture");
+                }
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                eprintln!("image {nm}: capture failed: {e}");
+            }
+        }
+    });
+    note(
+        true,
+        &format!("Capturing \u{201c}{name}\u{201d}\u{2026} it'll appear under Station images once complete."),
+    )
 }
 
 #[derive(Deserialize)]
@@ -178,32 +222,53 @@ fn note(ok: bool, msg: &str) -> Markup {
 
 // ── UI ──────────────────────────────────────────────────────────────────────────────────────
 
+/// GET handler so the panel can self-refresh while a capture is running.
+pub async fn panel_route() -> Markup {
+    panel()
+}
+
 /// The saved-images panel for the Media page.
 pub fn panel() -> Markup {
     let imgs = list();
+    let caps = if ui::is_demo() {
+        Vec::new()
+    } else {
+        in_progress()
+    };
+    // Poll while a capture is in progress so it flips to a real image (or vanishes) when done.
+    let poll = !caps.is_empty();
     html! {
-        div #images {
+        div #images hx-get=[poll.then_some("/images/panel")] hx-trigger=[poll.then_some("every 4s")] hx-swap="outerHTML" {
             div.pad {
-                @if imgs.is_empty() {
+                @if imgs.is_empty() && caps.is_empty() {
                     p.muted { "No saved images yet. Open a station that's shut off and use " strong { "Save as image" } " to capture its installed disk as a reusable template." }
                 } @else {
                     div.scroll { table {
                         thead { tr { th { "Image" } th.right { "Size" } th.right { "" } } }
-                        tbody { @for (n, sz) in &imgs {
-                            tr {
-                                td.mono { (n) }
-                                td.right.num { (sz) }
-                                td.right {
-                                    button.btn.sm.danger
-                                        hx-post=(format!("/images/delete?name={}", urlencode(n)))
-                                        hx-target="#images" hx-swap="outerHTML"
-                                        hx-confirm=(format!("Delete image '{n}'? Stations cloned from it (overlays) depend on it and will break.")) { "Delete" }
+                        tbody {
+                            @for (n, sz) in &imgs {
+                                tr {
+                                    td.mono { (n) }
+                                    td.right.num { (sz) }
+                                    td.right {
+                                        button.btn.sm.danger
+                                            hx-post=(format!("/images/delete?name={}", urlencode(n)))
+                                            hx-target="#images" hx-swap="outerHTML"
+                                            hx-confirm=(format!("Delete image '{n}'? Stations cloned from it (overlays) depend on it and will break.")) { "Delete" }
+                                    }
                                 }
                             }
-                        } }
+                            @for n in &caps {
+                                tr {
+                                    td.mono { (n) " " span.sub { "(capturing…)" } }
+                                    td.right.num { span.sub { "—" } }
+                                    td.right { span.sub { "capturing…" } }
+                                }
+                            }
+                        }
                     } }
                 }
-                p.sub style="margin-top:10px" { "Golden images are qcow2 templates. New stations clone them as copy-on-write overlays — instant and deduplicated (the base is shared, not copied) — which is the groundwork for shipping a built station to other machines." }
+                p.sub style="margin-top:10px" { "Golden images are qcow2 templates. New stations clone them as copy-on-write overlays — instant and deduplicated (the base is shared, not copied) — which is the groundwork for shipping a built station to other machines. A capture only becomes usable once fully written." }
             }
         }
     }

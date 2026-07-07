@@ -181,39 +181,7 @@ fn media_page(note: Option<Markup>) -> Markup {
             @if let Some(n) = note { (n) }
             @let iso_dir = crate::storage::iso_dir();
             (ui::panel("Storage", Some("where ISOs and station images live (local or a remote share)"), crate::storage::panel()))
-            (ui::panel("Install media", Some(iso_dir.as_str()), html! {
-                div.pad {
-                    @let isos = if ui::is_demo() { Vec::new() } else { list_isos() };
-                    @if ui::is_demo() {
-                        (crate::demo::media_table())
-                    } @else if isos.is_empty() {
-                        p.sub { "No ISOs yet. Fetch one below, or drop files into " span.mono { (iso_dir) } "." }
-                    } @else {
-                        div.scroll {
-                            table {
-                                thead { tr { th { "File" } th { "Verification" } th.right { "Size" } } }
-                                tbody { @for (f, sz) in &isos {
-                                    tr {
-                                        td {
-                                            span.mono { (f) }
-                                            @if let Some(p) = provenance(f) {
-                                                span.info title=(p) style="margin-left:6px; cursor:help; color:var(--muted); border-bottom:1px dotted var(--muted)" { "\u{24D8} source" }
-                                            }
-                                        }
-                                        td { (verify_cell(f)) }
-                                        td.right.num { (sz) }
-                                    }
-                                } }
-                            }
-                        }
-                    }
-                    div.btnrow style="margin-top:16px" {
-                        button.btn hx-post="/media/fetch/windows" hx-target="#media-note" hx-swap="innerHTML" { "Fetch Windows 11 + virtio" }
-                        button.btn hx-post="/media/fetch/steamos" hx-target="#media-note" hx-swap="innerHTML" { "Fetch SteamOS (Bazzite)" }
-                    }
-                    div #media-note style="margin-top:12px" {}
-                }
-            }))
+            (ui::panel("Install media", Some(iso_dir.as_str()), media_isos_fragment()))
             (ui::panel("Station images", Some("golden templates you can clone into new stations"), crate::images::panel()))
         },
     )
@@ -271,6 +239,88 @@ pub fn provenance(iso: &str) -> Option<&'static str> {
               SHA-256 CHECKSUM.")
     } else {
         None
+    }
+}
+
+/// GET handler so the install-media list can self-refresh while a download is in progress.
+pub async fn media_isos() -> Markup {
+    media_isos_fragment()
+}
+
+/// Target names of downloads currently in progress (a hidden `.<name>.part` temp exists in the ISO
+/// dir). Fetch scripts download to a `.part` and only rename to the final `.iso` when complete, so a
+/// partial download is never listed or usable.
+fn downloads_in_progress() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(crate::storage::iso_dir()) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if let Some(mid) = n.strip_prefix('.').and_then(|s| s.strip_suffix(".part")) {
+                out.push(mid.to_string());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The install-media table + fetch buttons, as a fragment that polls while a download runs so a
+/// finished ISO appears (and its "downloading…" row disappears) on its own.
+fn media_isos_fragment() -> Markup {
+    let iso_dir = crate::storage::iso_dir();
+    let isos = if ui::is_demo() {
+        Vec::new()
+    } else {
+        list_isos()
+    };
+    let dls = if ui::is_demo() {
+        Vec::new()
+    } else {
+        downloads_in_progress()
+    };
+    let poll = !dls.is_empty();
+    html! {
+        div #media-isos hx-get=[poll.then_some("/media/isos")] hx-trigger=[poll.then_some("every 3s")] hx-swap="outerHTML" {
+            div.pad {
+                @if ui::is_demo() {
+                    (crate::demo::media_table())
+                } @else if isos.is_empty() && dls.is_empty() {
+                    p.sub { "No ISOs yet. Fetch one below, or drop files into " span.mono { (iso_dir) } "." }
+                } @else {
+                    div.scroll {
+                        table {
+                            thead { tr { th { "File" } th { "Verification" } th.right { "Size" } } }
+                            tbody {
+                                @for (f, sz) in &isos {
+                                    tr {
+                                        td {
+                                            span.mono { (f) }
+                                            @if let Some(p) = provenance(f) {
+                                                span.info title=(p) style="margin-left:6px; cursor:help; color:var(--muted); border-bottom:1px dotted var(--muted)" { "\u{24D8} source" }
+                                            }
+                                        }
+                                        td { (verify_cell(f)) }
+                                        td.right.num { (sz) }
+                                    }
+                                }
+                                @for f in &dls {
+                                    tr {
+                                        td { span.mono { (f) } " " span.sub { "(downloading…)" } }
+                                        td { span.sub { "waiting for download" } }
+                                        td.right.num { span.sub { "—" } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                div.btnrow style="margin-top:16px" {
+                    button.btn hx-post="/media/fetch/windows" hx-target="#media-note" hx-swap="innerHTML" { "Fetch Windows 11 + virtio" }
+                    button.btn hx-post="/media/fetch/steamos" hx-target="#media-note" hx-swap="innerHTML" { "Fetch SteamOS (Bazzite)" }
+                }
+                div #media-note style="margin-top:12px" {}
+            }
+        }
     }
 }
 

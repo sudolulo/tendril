@@ -35,8 +35,11 @@ url="https://download.bazzite.gg/${name}"
 out="$DEST/bazzite-${VARIANT:-base}.iso"
 
 echo "==> Downloading $name (several GB; boots to Steam gaming mode)"
-# -C - resumes a partial download if re-run.
-curl -fSL -C - --retry 3 -o "$out" "$url"
+# Download to a hidden .part file and only rename to the final name when complete, so a partial
+# download is never listed or usable as a station's install media. -C - resumes if re-run.
+tmp="$DEST/.$(basename "$out").part"
+curl -fSL -C - --retry 3 -o "$tmp" "$url"
+mv -f "$tmp" "$out"
 
 # Verify the download against Bazzite's published SHA-256 (records the result next to the ISO).
 "$(dirname "$0")/verify-media.sh" "$out" || {

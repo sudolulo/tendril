@@ -55,6 +55,7 @@ async fn main() {
         .route("/stations/:name/save-image", post(images::save))
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         .route("/images/delete", post(images::delete))
+        .route("/images/panel", get(images::panel_route))
         // hardware
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))
@@ -63,6 +64,7 @@ async fn main() {
         .route("/seats/delete", post(seats::delete))
         // media + network
         .route("/media", get(pages::media))
+        .route("/media/isos", get(pages::media_isos))
         .route("/media/fetch/:which", post(pages::fetch))
         .route("/media/verify/:iso", post(pages::verify))
         .route("/media/verifystatus/:iso", get(pages::verify_status))

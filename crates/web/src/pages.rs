@@ -399,7 +399,6 @@ pub async fn system() -> Markup {
                     }
                 }
             }))
-            (ui::panel("Host", None, host_info()))
             @if let Some(s) = status {
                 (ui::panel("OS image", None, html! {
                     div.pad {
@@ -420,6 +419,7 @@ pub async fn system() -> Markup {
                     } }
                 }))
             }
+            (ui::panel("Host", None, host_info()))
             (ui::panel("Logs", Some("live · filterable · downloadable"), logs_fragment(false)))
         },
     )

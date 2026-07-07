@@ -73,5 +73,29 @@ jobs:
             h="$(sha256sum "$name" | awk '{print $1}')"
             printf '%s  %s\n%s  %s\n' "$h" "$name" "$h" "$latest" > SHA256SUMS )
           chcon -R -t httpd_sys_content_t "$DL_DIR" 2>/dev/null || true
-
+          ISO_SHA="$(sha256sum "$DL_DIR/$name" | awk '{print $1}')"
           echo "Published $name → https://dl.onetick.ninja/$name"
+
+          # 5. Create the Gitea release for tag v$V (idempotent — skip if it already exists).
+          api="https://${REG}/api/v1/repos/${REPO}"
+          auth="Authorization: token ${TOKEN}"
+          tag="v$V"
+          if curl -fsS -H "$auth" "$api/releases/tags/$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — leaving it as-is."
+          else
+            notes="$(printf 'Tendril %s\n\nContainer image: `%s/%s/tendril:%s` (also `:latest`)\n\nInstaller ISO: https://dl.onetick.ninja/%s\nSHA-256: `%s`\n\nVerify: `sha256sum -c SHA256SUMS` against https://dl.onetick.ninja/SHA256SUMS' "$V" "$REG" "$OWNER" "$V" "$name" "$ISO_SHA")"
+            body="$(TAG="$tag" V="$V" NOTES="$notes" SHA="$SHA" python3 - <<'PY'
+import json, os
+print(json.dumps({
+    "tag_name": os.environ["TAG"],
+    "target_commitish": os.environ["SHA"],
+    "name": "Tendril " + os.environ["V"],
+    "body": os.environ["NOTES"],
+    "draft": False,
+    "prerelease": True,
+}))
+PY
+)"
+            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
+              -d "$body" "$api/releases" >/dev/null && echo "Created Gitea release $tag."
+          fi

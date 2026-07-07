@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-07
+
+Per-seat USB, live install progress, a branded installer, and a release pipeline that always builds.
+
+### Added
+- **Seats — named USB device groups.** Group a player's keyboard/mouse/controller under a friendly
+  name (managed under **Hardware → Seats**), then assign the whole seat to a station in one pick from
+  the create-station wizard. Persisted at `/etc/tendril/seats.conf`; a station still supports picking
+  individual USB devices when you don't want a saved group.
+- **Live install progress.** A station installing its guest OS shows bytes written to the guest disk,
+  polling every 5 seconds — so you can watch an unattended Windows/Bazzite install make headway.
+- **Branded installer.** The OS now identifies as **Tendril** (os-release), and the installer ISO
+  ships a simplified, guided kickstart (`image/installer/config.toml`): keyboard/timezone/networking
+  are pre-answered while **language, destination disk, and the admin password stay interactive**, and
+  the login banner points at the web UI. `build-installer.sh` gains `--rootfs xfs|btrfs` (the
+  installed system's root filesystem) and `--config` to select the installer config.
+
+### Fixed
+- **The installer ISO builds again.** `bootc-image-builder:latest` (2026-06-18) regressed with
+  `grub2-probe: failed to get canonical path of /dev/mapper/fedora-root`; the build is now pinned to
+  the known-good prior digest, so `main` reliably produces an ISO. The release workflow also **creates
+  the matching Gitea release** (linking the container image and the verified ISO) automatically.
+
 ## [0.10.0] - 2026-07-07
 
 The web control plane hardens up: login-gated, smarter defaults, and live host stats.

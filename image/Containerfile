@@ -38,6 +38,15 @@ RUN dnf -y install \
     && dnf clean all \
     && systemctl enable libvirtd.service
 
+# Brand the OS as Tendril (keeps ID=fedora for package/tooling compatibility, à la other bootc
+# spins). Surfaces in the installer summary, `bootc status`, and the login banner.
+RUN sed -i \
+        -e 's/^NAME=.*/NAME="Tendril"/' \
+        -e 's/^PRETTY_NAME=.*/PRETTY_NAME="Tendril (Fedora bootc 42)"/' \
+        -e '/^VARIANT=/d' -e '/^VARIANT_ID=/d' \
+        /usr/lib/os-release \
+    && printf 'VARIANT="Tendril"\nVARIANT_ID=tendril\n' >> /usr/lib/os-release
+
 # IOMMU on + reserve vfio-pci early, via a bootc kernel-argument drop-in.
 COPY image/kargs.d/00-tendril.toml /usr/lib/bootc/kargs.d/00-tendril.toml
 

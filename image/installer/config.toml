@@ -1,0 +1,30 @@
+# bootc-image-builder installer config for the Tendril ISO.
+#
+# Goal: a simple, guided install. We pre-answer the boring, unopinionated bits (keyboard, timezone,
+# networking) and deliberately leave the three things a person actually cares about interactive:
+#   • Language        — the language spoke stays open (no `lang` line below).
+#   • Destination disk — no partitioning directives, so the installer requires a disk selection.
+#   • Admin login      — no `rootpw`/`user`, so the user-creation spoke requires a password.
+# The root filesystem (xfs or btrfs) is chosen at ISO build time via `build-installer.sh --rootfs`.
+
+[customizations.installer.kickstart]
+contents = """
+# --- Tendril defaults (everything not set here stays interactive in Anaconda) ---
+keyboard --xlayouts='us'
+timezone UTC --utc
+network --bootproto=dhcp --activate --hostname=tendril
+# Reboot into the installed system when the install finishes.
+reboot --eject
+
+%post --erroronfail
+# A friendly banner on the text VTs (tty1 lands in the `tendril` console; others get a shell).
+cat > /etc/motd <<'MOTD'
+
+  Tendril — one machine, many tendrils.
+
+  Web UI:   http://<this-host>/         (set the admin password on first visit)
+  Console:  the `tendril` menu on the primary display (tty1)
+
+MOTD
+%end
+"""

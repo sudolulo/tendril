@@ -22,14 +22,15 @@ driver binding, VM setup — so you don't hand-edit GRUB and `vfio.conf` to get 
 
 ## What works today
 
-**v0.10.0 — web control plane + console.** Tendril now has a **web UI** (Axum + HTMX) served on the
+**v0.11.0 — web control plane + console.** Tendril now has a **web UI** (Axum + HTMX) served on the
 host: a dashboard, a create-station wizard, station management, a live in-browser console (noVNC),
 GPU binding, media, and network — all over the same provisioning core as the CLI. There's also the
 **`tendril` console**, a TrueNAS-style menu the OS launches on the primary display. Under both: a
 flashable installer ISO, the full host-side provisioning pipeline, libvirt orchestration, and a
 station that installs its guest OS **unattended** — Windows 11 (past the virtio "no drives" and
 Microsoft-account walls) or a SteamOS-style Bazzite image (Anaconda kickstart, boots to Steam gaming
-mode) — then boots from disk.
+mode) — then boots from disk. This release adds **seats** (named USB device groups you assign to a
+station in one pick), **live install progress**, and a **branded, simplified installer**.
 
 Create a station from the browser — pick the OS, GPU, and unattended account, and Tendril builds the
 disk, the answer-file/kickstart seed, and the VM, then installs it hands-off:
@@ -71,7 +72,7 @@ podman build -f image/Containerfile -t tendril:dev .
 ```
 
 Or deploy the **published image** with [`bootc`](https://containers.github.io/bootc/) — it's pushed
-to Tendril's own registry at `git.onetick.ninja/flan/tendril` (tags `latest` and `0.10.0`). Fresh
+to Tendril's own registry at `git.onetick.ninja/flan/tendril` (tags `latest` and `0.11.0`). Fresh
 install to a disk, or switch an existing Fedora bootc system over:
 
 ```bash
@@ -109,7 +110,7 @@ cargo run --bin tendril-detect
 | Guest OS install | Unattended Windows (virtio + no-OOBE) **and** SteamOS/Bazzite (kickstart), boot from disk | ✅ Done |
 | Console menu | Interactive `tendril` console over every function (OS boots into it) | ✅ Done |
 | Web control plane | Axum + HTMX UI: dashboard, create/manage stations, live noVNC console, GPU/media/network | ✅ Done |
-| Web polish | Auth, live install progress, richer host stats, per-seat USB assignment | 🔨 Next |
+| Web polish | Auth, live install progress, richer host stats, per-seat USB (seats) | ✅ Done |
 | Network config | Configure interfaces, DNS, and static IP from the web UI (today: read-only view + console `nmtui`) | 📋 Planned |
 | vGPU | >1 VM per GPU (official + `vgpu_unlock`) | 🔭 Future |
 | Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |

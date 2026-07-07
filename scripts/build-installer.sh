@@ -15,13 +15,22 @@ set -euo pipefail
 IMAGE="localhost/tendril:dev"
 TYPE="iso"
 OUTPUT="./out"
-BIB="quay.io/centos-bootc/bootc-image-builder:latest"
+ROOTFS="xfs"          # root filesystem of the installed system: xfs (default) or btrfs
+# BIB installer config (branding + simplified interactive kickstart). Empty ⇒ don't pass one.
+CONFIG="image/installer/config.toml"
+# Pin bootc-image-builder to a known-good digest. `:latest` from 2026-06-18 regressed the ISO build
+# with `grub2-probe: failed to get canonical path of /dev/mapper/fedora-root`; this is the immediately
+# prior (2026-05-29) multi-arch index, which builds our xfs-rootfs ISO cleanly. Override with $BIB.
+BIB="${BIB:-quay.io/centos-bootc/bootc-image-builder@sha256:7ae88b8d6f2cabfa971d7836b96d6cac19cd1384e658031bd154f9687e929905}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --image) IMAGE="$2"; shift 2 ;;
     --type) TYPE="$2"; shift 2 ;;
     --output) OUTPUT="$2"; shift 2 ;;
+    --rootfs) ROOTFS="$2"; shift 2 ;;
+    --config) CONFIG="$2"; shift 2 ;;
+    --no-config) CONFIG=""; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -36,12 +45,21 @@ if ! podman image exists "$IMAGE"; then
   podman build -f image/Containerfile -t "$IMAGE" .
 fi
 
-echo "==> Building '$TYPE' installer from $IMAGE with bootc-image-builder"
+config_mount=()
+if [ -n "$CONFIG" ]; then
+  [ -f "$CONFIG" ] || { echo "installer config not found: $CONFIG (use --no-config to skip)" >&2; exit 1; }
+  # BIB reads /config.toml from inside the container by default.
+  config_mount=(-v "$(realpath "$CONFIG")":/config.toml:ro)
+  echo "==> Using installer config $CONFIG"
+fi
+
+echo "==> Building '$TYPE' installer ($ROOTFS root) from $IMAGE with bootc-image-builder"
 sudo podman run --rm --privileged \
   --security-opt label=type:unconfined_t \
   -v "$(realpath "$OUTPUT")":/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
-  "$BIB" --type "$TYPE" --rootfs xfs "$IMAGE"
+  "${config_mount[@]}" \
+  "$BIB" --type "$TYPE" --rootfs "$ROOTFS" "$IMAGE"
 
 echo "==> Done. Artifacts:"
 find "$OUTPUT" -type f \( -iname '*.iso' -o -iname '*.raw' \) -print

@@ -152,6 +152,22 @@ pub fn run_stdout(cmd: &str, args: &[&str]) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
+/// Run a mutating command: `Ok(stdout)` on success, `Err(stderr or error)` on failure.
+pub fn run_result(cmd: &str, args: &[&str]) -> Result<String, String> {
+    match Command::new(cmd).args(args).output() {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => {
+            let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            Err(if e.is_empty() {
+                format!("{cmd} exited {}", o.status)
+            } else {
+                e
+            })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 pub const CSS: &str = r#"
 :root {
   --bg:#0e1217; --surface:#161c24; --surface-2:#1b232d; --line:#273240;
@@ -288,6 +304,10 @@ details.advanced[open] { padding-bottom:14px; }
 .banner { padding:.7rem .9rem; border-radius:8px; margin-bottom:14px; font-size:13.5px; }
 .banner.error { background:var(--crit-soft); border:1px solid var(--crit); color:var(--crit); }
 .banner.ok { background:var(--ok-soft); border:1px solid var(--ok); color:var(--ok); }
+.banner.warn { background:var(--info-soft); border:1px solid var(--info); color:var(--info); }
+
+.netform .netrow { margin:2px 0 10px; }
+.netgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:10px 0; }
 
 .console { width:100%; aspect-ratio:16/10; max-height:72vh; background:#000; border-radius:8px; overflow:hidden; }
 .console #screen { width:100%; height:100%; }

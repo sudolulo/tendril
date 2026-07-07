@@ -7,6 +7,7 @@
 
 mod auth;
 mod hardware;
+mod network;
 mod pages;
 mod seats;
 mod stations;
@@ -58,7 +59,8 @@ async fn main() {
         .route("/media/fetch/:which", post(pages::fetch))
         .route("/media/verify/:iso", post(pages::verify))
         .route("/media/verifystatus/:iso", get(pages::verify_status))
-        .route("/network", get(pages::network))
+        .route("/network", get(network::page))
+        .route("/network/apply", post(network::apply))
         // system / OS updates
         .route("/system", get(pages::system))
         .route("/system/check", post(pages::system_check))

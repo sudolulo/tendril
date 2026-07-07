@@ -116,7 +116,7 @@ cargo run --bin tendril-detect
 | Console menu | Interactive `tendril` console over every function (OS boots into it) | ✅ Done |
 | Web control plane | Axum + HTMX UI: dashboard, create/manage stations, live noVNC console, GPU/media/network | ✅ Done |
 | Web polish | Auth, live install progress, richer host stats, per-seat USB (seats) | ✅ Done |
-| Network config | Configure interfaces, DNS, and static IP from the web UI (today: read-only view + console `nmtui`) | 📋 Planned |
+| Network config | Configure interfaces, DNS, and static IP from the web UI (DHCP ↔ static via NetworkManager) | ✅ Done |
 | vGPU | >1 VM per GPU (official + `vgpu_unlock`) | 🔭 Future |
 | Clustering | Manage stations across machines; GPU-aware scheduling | 🔭 Future |
 | Streaming | Sunshine/Moonlight for headless / remote play | 🔭 Future |

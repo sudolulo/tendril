@@ -366,35 +366,7 @@ fn locate_script(name: &str) -> Option<String> {
     None
 }
 
-// ── network ─────────────────────────────────────────────────────────────────────────────────
-
-pub async fn network() -> Markup {
-    ui::page(
-        "network",
-        "Network",
-        html! {
-            (ui::panel("Interfaces", None, html! {
-                pre.pad.mono style="margin:0; overflow-x:auto" { (ui::run_stdout("ip", &["-brief", "addr"]).unwrap_or_default()) }
-            }))
-            (ui::panel("Routes", None, html! {
-                pre.pad.mono style="margin:0; overflow-x:auto" { (ui::run_stdout("ip", &["route"]).unwrap_or_default()) }
-            }))
-            (ui::panel("DNS", None, html! {
-                pre.pad.mono style="margin:0; overflow-x:auto" { (dns()) }
-            }))
-            p.sub { "Editing the network from the browser is intentionally disabled (you're likely connected over it). Change it from the console menu (" span.mono { "tendril" } " → Configure network → nmtui)." }
-        },
-    )
-}
-
-fn dns() -> String {
-    std::fs::read_to_string("/etc/resolv.conf")
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| l.starts_with("nameserver") || l.starts_with("search"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+// Network configuration lives in the `network` module (nmcli-backed, editable).
 
 // ── system / OS updates (bootc) ───────────────────────────────────────────────────────────────
 

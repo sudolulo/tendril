@@ -1,7 +1,8 @@
 # Installing Tendril
 
-> ⚠️ **Pre-1.0.** There's a bootable installer ISO (below), but no graphical VM wizard yet — for
-> testers and contributors. Expect rough edges.
+> ⚠️ **Pre-1.0.** For testers and contributors — expect rough edges. Tendril ships a bootable
+> installer ISO (below), a **web control plane** with a create-station wizard, and a TrueNAS-style
+> on-screen console.
 
 ## 0. Install from the release ISO (easiest)
 

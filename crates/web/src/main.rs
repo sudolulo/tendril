@@ -61,6 +61,8 @@ async fn main() {
         .route("/media/verifystatus/:iso", get(pages::verify_status))
         .route("/network", get(network::page))
         .route("/network/apply", post(network::apply))
+        .route("/network/confirm", post(network::confirm))
+        .route("/network/revert", post(network::revert))
         // system / OS updates
         .route("/system", get(pages::system))
         .route("/system/check", post(pages::system_check))

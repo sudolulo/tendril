@@ -10,8 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Configurable network from the web UI.** The Network page is now editable: each active
   NetworkManager connection can be switched between **DHCP and a static** address/gateway/DNS and
-  applied live (`nmcli`), alongside the existing read-only interface/route/DNS view. A warning notes
-  that changing the interface you're connected over can drop the page (recover from the console).
+  applied live (`nmcli`). Changes are applied **on a 60-second trial (TrueNAS-style)** — a
+  server-side timer automatically reverts to the previous config unless you click **Keep these
+  settings**, so a bad change that cuts off your own access heals itself. Non-essential controls
+  (gateway, DNS, and the read-only interface/route/DNS view) are tucked behind **Advanced** toggles.
 
 ## [0.11.0] - 2026-07-07
 

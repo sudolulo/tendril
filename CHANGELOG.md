@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-07
+
+Auto-fetched media, hardware-usage visibility, better logs, and much saner station defaults.
+
 ### Added
 - **Auto-fetch install media on station create.** If you create a station whose default install ISO
   isn't downloaded yet (Windows 11 + virtio-win, or Bazzite), Tendril fetches it in the background and

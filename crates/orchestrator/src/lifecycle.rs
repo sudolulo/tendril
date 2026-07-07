@@ -297,6 +297,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_pci_hostdev_source_address() {
+        // The source address (07:00.x) must win over the sibling guest-side <address> (05:00.0),
+        // and USB hostdevs must be ignored.
+        let xml = "\
+<domain><devices>\
+ <hostdev mode='subsystem' type='pci' managed='yes'>\
+  <driver name='vfio'/>\
+  <source><address domain='0x0000' bus='0x07' slot='0x00' function='0x0'/></source>\
+  <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>\
+ </hostdev>\
+ <hostdev mode='subsystem' type='pci' managed='yes'>\
+  <source><address domain='0x0000' bus='0x07' slot='0x00' function='0x1'/></source>\
+ </hostdev>\
+ <hostdev mode='subsystem' type='usb'><source><vendor id='0x046d'/><product id='0xc52b'/></source></hostdev>\
+</devices></domain>";
+        assert_eq!(parse_pci_hostdevs(xml), vec!["0000:07:00.0", "0000:07:00.1"]);
+        assert!(parse_pci_hostdevs("<domain><devices/></domain>").is_empty());
+    }
+
+    #[test]
     fn parses_domain_states() {
         assert_eq!(DomainState::parse("running\n"), DomainState::Running);
         assert_eq!(DomainState::parse("shut off"), DomainState::ShutOff);

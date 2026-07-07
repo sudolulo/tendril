@@ -169,6 +169,9 @@ fingerprint-reduction overlay (read the ToS warnings in the README first).
 
 ## What's not here yet
 
-The graphical "create a gaming station" wizard, multi-seat peripheral binding, vGPU (>1 VM per GPU),
-and clustering are on the [roadmap](../README.md#roadmap) but not implemented. The CLIs above already
-take a host from bare metal to a running, self-installed Windows station.
+The graphical "create a gaming station" wizard and multi-seat peripheral binding are implemented (see
+the README's "What works today"). **vGPU** (>1 VM per GPU, via mdev or SR-IOV) is implemented but
+experimental and needs validation on real vGPU hardware — see **[docs/VGPU.md](VGPU.md)** for the
+supported-card list and setup. **Clustering** is on the [roadmap](../README.md#roadmap) but not
+implemented. The CLIs above already take a host from bare metal to a running, self-installed Windows
+station.

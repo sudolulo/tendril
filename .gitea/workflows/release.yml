@@ -21,6 +21,9 @@ on:
 jobs:
   release:
     runs-on: host
+    # The image + ISO build is slow (bootc-image-builder); give it plenty of headroom so it's never
+    # killed mid-build.
+    timeout-minutes: 120
     # The built-in Actions token needs package-write to push to the container registry (login is
     # rejected as "invalid username/password" without it) and repo-read to clone.
     permissions:
@@ -73,7 +76,9 @@ jobs:
           # 3. Build the installer ISO.
           rm -rf out
           bash scripts/build-installer.sh --type iso --output ./out
-          iso="$(find ./out -iname '*.iso' | head -1)"
+          # `-print -quit` stops find at the first match itself — no `| head`, which under pipefail
+          # SIGPIPEs find (exit 141) and aborted the job right after the ISO was built.
+          iso="$(find ./out -type f -iname '*.iso' -print -quit)"
           [ -n "$iso" ] || { echo "no ISO produced" >&2; exit 1; }
 
           # 4. Publish it to dl.onetick.ninja (served by nginx from /srv/tendril-dl).

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Auto-update toggle moved next to the power buttons** on the System page (under "Automatic OS
+  updates"). On a non-bootc host it now renders as a clickable **demo** (labelled as such) instead of
+  being hidden, so the control is visible everywhere; on a real bootc host it drives the systemd timer.
+
 ### Fixed
 - **Network test-and-revert race.** The 60-second trial now reserves its backup *before* touching the
   connection profile, so two overlapping applies (a double-submit or a second tab) can no longer

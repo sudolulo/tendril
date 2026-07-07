@@ -2,6 +2,7 @@
 
 use std::path::Path as FsPath;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::extract::Query;
 use axum::http::header;
@@ -392,6 +393,10 @@ pub async fn system() -> Markup {
                             hx-confirm="Shut down the host now? All running stations will be stopped." { "Shut down" }
                     }
                     div #power-result style="margin-top:10px" {}
+                    div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
+                        div.sub style="font-weight:600; margin-bottom:8px" { "Automatic OS updates" }
+                        (auto_fragment())
+                    }
                 }
             }))
             (ui::panel("Host", None, host_info()))
@@ -407,12 +412,11 @@ pub async fn system() -> Markup {
                         div #update-result style="margin-top:12px" {}
                     }
                 }))
-                (ui::panel("Automatic updates", None, auto_fragment()))
             } @else {
-                (ui::panel("OS updates", None, html! {
+                (ui::panel("OS image", None, html! {
                     div.pad { p.muted {
-                        "This host isn't running bootc, so atomic OS updates aren't managed here. On a Tendril "
-                        "install this shows the image version and lets you update the whole OS."
+                        "This host isn't running bootc, so atomic OS image updates aren't managed here. On a "
+                        "Tendril install this shows the image version and an Update-now button."
                     } }
                 }))
             }
@@ -580,11 +584,27 @@ pub async fn system_update() -> Markup {
 }
 
 /// Toggle the auto-update timer, then re-render the panel.
+/// Demo auto-update state — only consulted when this host isn't bootc, so the toggle is still
+/// visible and clickable on non-appliance test builds. On a real bootc host the systemd timer is
+/// authoritative and this is ignored.
+static DEMO_AUTO_UPDATE: AtomicBool = AtomicBool::new(false);
+
+/// Whether this host is a bootc system (so OS updates are real).
+fn is_bootc() -> bool {
+    ui::run_stdout("bootc", &["status"]).is_some()
+}
+
 pub async fn system_auto() -> Markup {
-    let action = if auto_enabled() { "disable" } else { "enable" };
-    let _ = Command::new("systemctl")
-        .args([action, "--now", AUTO_TIMER])
-        .status();
+    if is_bootc() {
+        let action = if auto_enabled() { "disable" } else { "enable" };
+        let _ = Command::new("systemctl")
+            .args([action, "--now", AUTO_TIMER])
+            .status();
+    } else {
+        // No bootc timer to flip — just toggle the in-memory demo state so the UI responds.
+        let cur = DEMO_AUTO_UPDATE.load(Ordering::Relaxed);
+        DEMO_AUTO_UPDATE.store(!cur, Ordering::Relaxed);
+    }
     auto_fragment()
 }
 
@@ -595,23 +615,28 @@ fn auto_enabled() -> bool {
 }
 
 fn auto_fragment() -> Markup {
-    let on = auto_enabled();
+    let bootc = is_bootc();
+    let on = if bootc {
+        auto_enabled()
+    } else {
+        DEMO_AUTO_UPDATE.load(Ordering::Relaxed)
+    };
     html! {
         div #autoupd {
-            div.pad {
-                div style="display:flex; align-items:center; gap:12px" {
-                    @if on {
-                        span.pill.running { span.led {} "on" }
-                        button.btn hx-post="/system/auto" hx-target="#autoupd" hx-swap="outerHTML" { "Disable" }
-                    } @else {
-                        span.pill.off { span.led {} "off" }
-                        button.btn.primary hx-post="/system/auto" hx-target="#autoupd" hx-swap="outerHTML" { "Enable" }
-                    }
+            div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap" {
+                @if on {
+                    span.pill.running { span.led {} "on" }
+                    button.btn hx-post="/system/auto" hx-target="#autoupd" hx-swap="outerHTML" { "Disable" }
+                } @else {
+                    span.pill.off { span.led {} "off" }
+                    button.btn.primary hx-post="/system/auto" hx-target="#autoupd" hx-swap="outerHTML" { "Enable" }
                 }
-                p.sub style="margin:10px 0 0" {
-                    "When on, the host fetches and stages new OS images on a timer ("
-                    span.mono { (AUTO_TIMER) } "); they apply on the next reboot."
-                }
+                @if !bootc { span.badge title="This host isn't bootc — the toggle is a preview and changes no real timer" { "demo" } }
+            }
+            p.sub style="margin:10px 0 0" {
+                "When on, the host fetches and stages new OS images on a timer ("
+                span.mono { (AUTO_TIMER) } "); they apply on the next reboot."
+                @if !bootc { " — preview only on this non-bootc host." }
             }
         }
     }

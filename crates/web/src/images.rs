@@ -114,6 +114,117 @@ fn station_disk(name: &str) -> Option<String> {
     })
 }
 
+// ── integrity (SHA-256) ─────────────────────────────────────────────────────────────────────────
+
+fn sha_path(name: &str) -> String {
+    format!("{}/{}.qcow2.sha256", images_dir(), sanitize(name))
+}
+fn verifying_path(name: &str) -> String {
+    format!("{}/{}.qcow2.verifying", images_dir(), sanitize(name))
+}
+fn mismatch_path(name: &str) -> String {
+    format!("{}/{}.qcow2.mismatch", images_dir(), sanitize(name))
+}
+
+/// A file's SHA-256 (first token of `sha256sum` output).
+fn sha256_of(path: &str) -> Option<String> {
+    let out = ui::run_result("sha256sum", &[path]).ok()?;
+    out.split_whitespace().next().map(str::to_string)
+}
+
+/// The recorded SHA-256 of an image, if any.
+pub fn image_sha(name: &str) -> Option<String> {
+    std::fs::read_to_string(sha_path(name))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+enum Integrity {
+    None,
+    Recorded(String),
+    Verifying,
+    Mismatch,
+}
+
+fn integrity(name: &str) -> Integrity {
+    if FsPath::new(&verifying_path(name)).exists() {
+        Integrity::Verifying
+    } else if FsPath::new(&mismatch_path(name)).exists() {
+        Integrity::Mismatch
+    } else if let Some(h) = image_sha(name) {
+        Integrity::Recorded(h)
+    } else {
+        Integrity::None
+    }
+}
+
+fn short(h: &str) -> String {
+    h.chars().take(12).collect()
+}
+
+fn cell_id(name: &str) -> String {
+    format!("iv-{}", sanitize(name).replace('.', "-"))
+}
+
+/// Kick off a background integrity check: recompute the image's SHA-256 and compare it to the recorded
+/// value. A mismatch flags the image so it isn't silently cloned. If no hash was recorded yet (e.g. an
+/// image dropped in by hand), this records the current hash.
+pub async fn verify(Query(q): Query<NameQuery>) -> Markup {
+    if path_of(&q.name).is_some() {
+        let name = sanitize(&q.name);
+        let _ = std::fs::write(verifying_path(&name), "");
+        let nm = name.clone();
+        std::thread::spawn(move || {
+            let dest = format!("{}/{}.qcow2", images_dir(), nm);
+            match (image_sha(&nm), sha256_of(&dest)) {
+                (Some(e), Some(a)) if e == a => {
+                    let _ = std::fs::remove_file(mismatch_path(&nm));
+                }
+                (Some(_), Some(_)) => {
+                    let _ = std::fs::write(mismatch_path(&nm), "");
+                }
+                (None, Some(a)) => {
+                    // Backfill a missing hash.
+                    let _ = std::fs::write(sha_path(&nm), a);
+                    let _ = std::fs::remove_file(mismatch_path(&nm));
+                }
+                _ => {}
+            }
+            let _ = std::fs::remove_file(verifying_path(&nm));
+        });
+    }
+    integrity_cell(&q.name)
+}
+
+pub async fn verify_status(Query(q): Query<NameQuery>) -> Markup {
+    integrity_cell(&q.name)
+}
+
+/// The integrity cell for one image: current state + a verify button; polls while verifying.
+fn integrity_cell(name: &str) -> Markup {
+    let st = integrity(name);
+    let id = cell_id(name);
+    let poll = matches!(st, Integrity::Verifying);
+    html! {
+        span id=(id)
+            hx-get=[poll.then(|| format!("/images/verifystatus?name={}", urlencode(name)))]
+            hx-trigger=[poll.then_some("every 2s")] hx-swap="outerHTML" {
+            @match &st {
+                Integrity::Verifying => span.sub { "verifying…" },
+                Integrity::Mismatch => span.badge title="No longer matches its recorded hash — corrupt or tampered. Don't clone it." style="color:var(--crit)" { "⚠ mismatch" },
+                Integrity::Recorded(h) => span.sub.mono title=(h) { "✓ " (short(h)) },
+                Integrity::None => span.sub { "—" },
+            }
+            @if !poll {
+                " "
+                button.btn.sm hx-post=(format!("/images/verify?name={}", urlencode(name)))
+                    hx-target=(format!("#{id}")) hx-swap="outerHTML" { "verify" }
+            }
+        }
+    }
+}
+
 // ── handlers ──────────────────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -186,6 +297,11 @@ pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Marku
                     if let Some(os) = guest {
                         let _ = std::fs::write(os_sidecar(&nm), os_label(os));
                     }
+                    // Record the SHA-256 so any node can verify the image's integrity before cloning
+                    // or re-homing from it (the sidecar travels with the image on the shared store).
+                    if let Some(h) = sha256_of(&dest) {
+                        let _ = std::fs::write(sha_path(&nm), h);
+                    }
                 } else {
                     let _ = std::fs::remove_file(&tmp);
                     eprintln!("image {nm}: could not finalize capture");
@@ -212,6 +328,9 @@ pub async fn delete(Query(q): Query<NameQuery>) -> Markup {
     if let Some(p) = path_of(&q.name) {
         let _ = std::fs::remove_file(p);
         let _ = std::fs::remove_file(os_sidecar(&q.name));
+        let _ = std::fs::remove_file(sha_path(&q.name));
+        let _ = std::fs::remove_file(mismatch_path(&q.name));
+        let _ = std::fs::remove_file(verifying_path(&q.name));
     }
     panel()
 }
@@ -244,11 +363,12 @@ pub fn panel() -> Markup {
                     p.muted { "No saved images yet. Open a station that's shut off and use " strong { "Save as image" } " to capture its installed disk as a reusable template." }
                 } @else {
                     div.scroll { table {
-                        thead { tr { th { "Image" } th.right { "Size" } th.right { "" } } }
+                        thead { tr { th { "Image" } th { "Integrity" } th.right { "Size" } th.right { "" } } }
                         tbody {
                             @for (n, sz) in &imgs {
                                 tr {
                                     td.mono { (n) }
+                                    td { (integrity_cell(n)) }
                                     td.right.num { (sz) }
                                     td.right {
                                         button.btn.sm.danger
@@ -261,6 +381,7 @@ pub fn panel() -> Markup {
                             @for n in &caps {
                                 tr {
                                     td.mono { (n) " " span.sub { "(capturing…)" } }
+                                    td { span.sub { "—" } }
                                     td.right.num { span.sub { "—" } }
                                     td.right { span.sub { "capturing…" } }
                                 }

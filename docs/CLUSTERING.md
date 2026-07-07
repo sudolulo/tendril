@@ -1,151 +1,128 @@
-# Clustering plan
+# Clustering plan — federation
 
-Status: **design / not implemented.** This is the plan for turning Tendril from a single-box appliance
-into a fleet of boxes managed as one. It records the target architecture, the reasoning that shaped it
-(including what we deliberately *aren't* building), and a phased build order. Nothing here ships yet.
+Status: **design; integrity tracking in progress.** Tendril "clustering" is **federation**: one web UI
+over a fleet of otherwise-independent nodes, with GPU-aware placement, human-confirmed recovery, and
+verified golden images shared between machines. There is deliberately **no distributed control plane** —
+no shared consensus, quorum, leader election, or fencing.
 
-## Goal
+## Why federation (and not a real cluster)
 
-Manage a fleet of Tendril nodes (target scale: **5–20+ boxes**) from one web UI, and place each station
-on whichever node has a **compatible free GPU**. When a node goes down, make recovering its stations a
-**one-click, human-confirmed** operation.
+The reasoning, following Tendril's own constraints to their conclusion:
 
-Explicitly **not** a goal: guaranteed *unattended automatic failover*. See the reasoning below — for
-Tendril's workload and hardware assumptions, it's high cost and risk for low real value, so it's
-deferred (with the conditions to revisit it spelled out at the end).
+1. **A station *is* its GPU.** Stations own physical GPUs (or vGPU slices), which are node-local, so a
+   running station **cannot live-migrate**. Proxmox's headline feature is simply unavailable.
+2. **We dropped guaranteed auto-failover** (gaming sessions are ephemeral — when a node dies the player
+   is already disconnected; cold-restarting the VM ~a minute faster, automatically, isn't worth
+   fencing/quorum complexity or reserved spare-GPU cost). See "Deferred" below.
+3. **Once the cluster never acts autonomously, it needs no shared consensus state.** Quorum, Raft,
+   distributed locks, and fencing exist to make *autonomous* decisions (auto-failover, auto-rebalance)
+   safe. We don't do those, so none of that machinery is needed.
+4. **Each Tendril node is already an independent, API-driven control plane.** It fully manages its own
+   stations via its own HTTP API + libvirt. The fleet layer is a thin aggregator on top — not a new
+   system that owns the nodes.
 
-## The reasoning (why this shape, not Proxmox's)
+Reusing a heavyweight platform (KubeVirt, Incus, oVirt, Nomad) was rejected: each either **owns the VM
+lifecycle** — surrendering the low-level control that is Tendril's product (Secure Boot + TPM, the
+noVNC console, USB seats, the native-hardware overlay) — or is far too heavy for a bootc appliance, or
+(Nomad/Consul) is BSL-licensed. The framework we "reuse" is **Tendril itself**: each node's existing API
+and web stack.
 
-We started by looking at Proxmox (compute cluster: corosync quorum + pmxcfs replicated config + watchdog
-fencing + shared-storage live-migration/HA) and TrueNAS (storage appliance: dual-controller failover;
-TrueCommand single-pane management). It's tempting to copy Proxmox. We're not, and here's the chain:
+## Architecture
 
-1. **A station *is* its GPU.** A Tendril station exists to own a physical GPU (or a vGPU slice). GPUs
-   are physical and node-local, so a running station **cannot live-migrate** — you can't copy a GPU's
-   state over the wire. That removes Proxmox's headline feature outright.
+1. **Nodes are unchanged.** Every node runs the same Tendril today: its own web UI, API, and libvirt
+   orchestrator, fully functional standalone. Federation adds nothing a single node depends on.
 
-2. **Failover, if we did it, is inherently cold and GPU-constrained.** A re-homed station *restarts*
-   (no saved state) and only where a **compatible free GPU** exists. GPUs — not nodes — are the unit of
-   redundancy, and they're the expensive part of the box, so spare GPU capacity is a real cost.
+2. **Aggregator / management view.** One node (or any node) runs a fleet view that calls each node's
+   existing API and presents the whole fleet in one place — stations, GPUs, health — read-only to start.
+   No shared mutable state; each node remains the source of truth for its own stations.
 
-3. **The workload is ephemeral gaming sessions.** When a node dies mid-session the player is already
-   disconnected and unsaved progress is gone *regardless*. So the only thing automatic failover buys
-   over a human clicking "re-home" is ~30–90s of unattended recovery on a session that's already broken.
-   That's a poor trade against fencing/quorum complexity and reserved-GPU cost.
+3. **Stateless GPU-aware placement.** To create a station on the fleet, the management layer queries each
+   node's live capability matrix (`capability-engine::detect`), picks a node with a **compatible free
+   GPU** (vendor match required for a given golden image, model preferred), and calls **that node's
+   existing create-station endpoint**. The "scheduler" is a query-and-choose each time — nothing to keep
+   consistent.
 
-4. **Heterogeneous GPUs make *automatic* placement fragile.** We're assuming a mixed pool of cards (see
-   below). A golden image has its GPU vendor's drivers baked in, so a station can only land on a
-   compatible GPU; reliable *unattended* placement across arbitrary mixed hardware is exactly the case
-   that breaks. A human resolving "which compatible GPU" at re-home time is far more robust.
+4. **Lightweight station registry on the shared store.** So the fleet knows what stations exist (and can
+   recover a node that's currently down), each station writes a small JSON record — `{ name, node,
+   gpu/vgpu, golden image, disk location, seat }` — to the shared media/image store. This is read-mostly
+   config, **not** a live consensus state machine, so it needs no consistency protocol.
 
-5. **Therefore the heavy machinery loses its justification.** Raft quorum and watchdog self-fencing
-   exist almost entirely to make *automatic* failover safe. Drop that guarantee and there's nothing left
-   for them to protect — the design collapses to something much simpler.
+5. **Verified golden images shared between machines.** Golden images live on the shared store and carry a
+   recorded **SHA-256** (sidecar). Any node can verify an image's integrity before cloning or re-homing
+   from it — catching corruption or truncation on the shared NFS/SMB path, or a tampered image. See
+   "Golden-image integrity" below.
 
-Net: Tendril clustering is **fleet management + GPU-aware placement + assisted recovery**, built on the
-shared storage we already ship — *not* a consensus-and-fencing cluster.
+6. **Assisted re-home (human-confirmed).** Nodes publish periodic heartbeats (a timestamp file on the
+   shared store); a stale heartbeat marks a node **down** (reachability only, no quorum vote). The
+   management UI then lists that node's stations (from the registry) and offers **one-click cold
+   re-home** to a node with a compatible free GPU — the human confirms the dead node is actually off.
+   - **Local-disk stations (default):** safe — independent disks; state resets to the golden image.
+   - **Shared-disk stations:** re-home requires a "confirm the node is powered off" step to avoid a
+     shared-disk double-mount. Lightweight human-fencing, not automatic fencing.
 
-## What's already in place
+## Golden-image integrity
 
-Two of the three substrates are shipped:
-- **Shared store** — NFS/SMB media/image storage (`storage` module) so every node sees the same media
-  and golden images. This doubles as the cluster's coordination substrate (below).
-- **Portable golden images** — compressed standalone qcow2 templates + copy-on-write cloning
-  (`images` module, `orchestrator::guest::create_overlay`), with recorded guest-OS metadata.
+Golden images are the one thing genuinely shared and *executed* across machines, so their integrity is
+verified rather than assumed:
 
-Missing: the **control plane** — shared cluster state, a scheduler, per-node reconcile, and assisted
-re-home.
+- **On capture**, after the image is finalized, its **SHA-256 is computed and recorded** in a sidecar
+  next to the image on the shared store (`<name>.qcow2.sha256`). The sidecar travels with the image, so
+  every node sees the same expected hash.
+- **Verify** (on demand, and recommended before a cross-node clone / re-home) recomputes the image's
+  hash and compares it to the recorded value; a mismatch marks the image (`<name>.qcow2.mismatch`) and
+  the UI flags it, so a corrupt/tampered image isn't silently cloned into a new station. Verification
+  runs in the background (multi-GB) with a status the UI polls.
+- Because cloning uses a **copy-on-write overlay backing onto the image**, a corrupted base would
+  silently corrupt every station cloned from it — which is exactly why the recorded hash + verify exist.
 
-## Target architecture
+This mirrors the existing **install-media** verification (ISOs carry `.verified`/`.sha256`/`.mismatch`
+markers), extended to golden images and framed for the multi-machine case.
 
-No consensus protocol, no fencing. The shared store *is* the coordination layer.
+## The shared store
 
-1. **Shared cluster state.** Desired-state lives on the shared store (a small SQLite db or a directory
-   of files that every node already mounts): nodes + heartbeats, each node's **GPU capability matrix**
-   (from `capability-engine::detect`, incl. vendor/model and vGPU profiles), and **station objects**
-   `{ name, home_node, gpu/vgpu assignment, golden image, disk location, seat }`. Any node reads it
-   locally.
-
-2. **Write serialization via file locks — no elected coordinator, no quorum.** Cluster mutations
-   (create/move a station) are infrequent, so a writer takes a lock on the shared store, writes, and
-   releases. Any node can do this, so there's **no single point of failure and no leader election** to
-   build. Split-brain is naturally bounded: a station is GPU-pinned, so two nodes can't both run the
-   same station's GPU.
-
-3. **Per-node reconcile loop.** Each node watches shared state and drives its local `libvirt` /
-   `provision()` to match its assigned stations. Reuses the entire existing provisioning path unchanged.
-
-4. **GPU-aware scheduler (heterogeneous-first).** On "create station," pick a node with a compatible
-   free GPU/vGPU profile. Compatibility rules for a heterogeneous pool:
-   - **Same GPU vendor is mandatory** to run a given golden image (drivers are baked in).
-   - **Same model is preferred**; a different model of the same vendor usually works but is ranked lower.
-   - vGPU profiles are matched by parent-GPU capability.
-   The scheduler tracks each node's GPUs and their assignment, and refuses placements with no compatible
-   free GPU.
-
-5. **Health + assisted re-home.** Nodes write periodic heartbeats to the shared store; a stale heartbeat
-   marks a node **down** (reachability only — no quorum vote). The UI then lists that node's stations
-   and offers **one-click cold re-home** to a node with a compatible free GPU, **human-confirmed**. The
-   human is the "fencing": they confirm the node is actually dead before re-homing.
-   - **Local-disk stations (the default):** safe to re-home — the two nodes have independent disks, and
-     the dead node is unreachable anyway. State resets to the golden image (or the last local disk if
-     recoverable).
-   - **Shared-disk stations:** re-home must include a **"confirm the node is powered off"** step to
-     avoid a double-mount of the shared disk. This is lightweight human-fencing, not automatic fencing.
+Everything the fleet shares lives on the existing NFS/SMB media/image store (`storage` module):
+golden images + their SHA-256 sidecars + OS/GPU metadata, the station registry, and node heartbeats.
+It is **read-mostly** and needs no consistency protocol. Existing stations keep running even if the
+store is briefly unreachable; only fleet management/placement/re-home pause.
 
 ## Host GPU requirements
 
-- **Per node:** at least one **passthrough-capable GPU** — IOMMU isolation, clean-ish ACS groups
-  (already assessed by the capability engine).
-- **Heterogeneous pool is supported.** Mixed vendors and models are allowed. The cost is that a station
-  can only run/re-home on a **compatible** GPU (vendor match required, model match preferred), so the
-  scheduler and golden-image metadata must track GPU compatibility. Golden images already record their
-  guest OS; they'll also need to record the **GPU vendor/model** they were built on so placement can
-  match.
-- **Seats (USB) are node-local.** A re-homed station gets its VM back, not its physical keyboard/mouse,
+- **Per node:** at least one passthrough-capable GPU (IOMMU isolation, clean-ish ACS groups — already
+  assessed by the capability engine).
+- **Heterogeneous pool supported.** Mixed vendors/models allowed; a station can only run/re-home on a
+  **compatible** GPU (vendor match required, model preferred), so golden images record the **GPU
+  vendor/model** they were built on (alongside guest OS and SHA-256) for the scheduler to match.
+- **Seats (USB) are node-local** — a re-homed station gets its VM back, not its physical peripherals,
   until a seat is reassigned on the new node.
-- **No reserved spare GPU is required** in this design — recovery is best-effort against whatever
-  compatible GPU is free at the time, decided by a human. (A guaranteed-capacity policy only becomes
-  necessary if we later add automatic failover; see below.)
+- **No reserved spare GPU** is required — recovery is best-effort against whatever compatible GPU is free
+  at the time, chosen by a human.
 
 ## Phased build order
 
-Each phase is independently useful and testable.
-
 | Phase | Delivers |
 |---|---|
-| **A — Fleet state + read-only view** | Shared cluster-state store, node heartbeats + GPU inventory, and a web UI that shows the whole fleet (nodes, GPUs, stations) read-only. |
-| **B — GPU-aware scheduler + remote provision** | Create a station targeted at (or auto-placed on) a node; that node's reconcile loop provisions it. Heterogeneous GPU compatibility matching. |
-| **C — Assisted re-home** | Node-down detection; one-click, human-confirmed cold re-home of a down node's stations to a compatible node (with the shared-disk power-off guard). |
+| **A — Fleet view** | Aggregator management view over the per-node APIs (stations, GPUs, health) + node heartbeats. Read-only. |
+| **B — Placement + remote provision** | Stateless GPU-aware placement: pick a compatible node and call its create endpoint. Station registry on the shared store. |
+| **C — Integrity + assisted re-home** | Golden-image SHA-256 record + verify (started now, standalone); node-down detection; one-click human-confirmed cold re-home (with the shared-disk power-off guard). |
 
-## Deferred: hard automatic failover — when to revisit
+## Deferred: autonomous operation
 
-Guaranteed unattended failover (and the Raft/quorum + watchdog-fencing + reserved-GPU-capacity machinery
-it needs) is **out of scope** for the reasons above. Revisit it only if the constraints change:
-
-- Tendril becomes an **always-on service** (paid cloud-gaming, remote workstations) where unattended
-  uptime has real value — not casual gaming where the session is already broken.
-- The deployment moves to a **homogeneous GPU pool** (identical cards), which is what makes automatic
-  placement reliable and any card able to take any station.
-- The operator is willing to **reserve spare GPU capacity** — via one of: an N+1 hot-spare GPU, **vGPU
-  headroom** (run cards under capacity and absorb an orphaned station as an extra, lower-performance
-  slice — cheapest, leans on the shipped vGPU support), or **priority preemption** (stop a lower-priority
-  station to free its GPU).
-
-At that point the plan grows a consensus layer (`openraft` for quorum + a replicated state machine),
-watchdog **self-fencing** (a node that loses quorum stops its stations within T seconds so survivors can
-safely restart them), and a **failover-capacity policy** — essentially the Proxmox-shaped design, added
-*on top of* the simpler control plane, not instead of it.
+Guaranteed unattended failover or automatic rebalancing — the only features that would need shared
+consensus state and safe fencing — are **out of scope**. Revisit only if Tendril becomes an always-on
+service (paid cloud-gaming / remote workstations) on a **homogeneous** GPU pool with **reserved spare
+capacity** (N+1 hot spare, vGPU headroom, or priority preemption). At that point, reuse a proven
+substrate — **etcd** (Apache-2.0, sidecar) or **openraft** (embedded Rust Raft) for consistent state +
+health, or go all-in on **Nomad** (accepting its BSL license + a custom libvirt task driver) — layered
+*on top of* federation, not instead of it. Do not hand-roll consensus.
 
 ## Open questions / risks
 
-- **Shared store is a hard dependency** (it already is for images). If it's unreachable, scheduling and
-  re-home pause — though existing stations keep running locally.
-- **Write-lock correctness.** Serializing mutations on a network filesystem must handle stale locks
-  (a crashed writer) — bounded lease + takeover, not a hand-rolled forever-lock.
-- **Auth across nodes.** Sessions are per-node in-memory today; a fleet needs shared credentials and
-  either replicated sessions or stateless tokens.
-- **Manual re-home of shared-disk stations** must enforce the power-off/confirm-dead step to avoid a
-  double-mount; local-disk stations (the default) are unaffected.
+- **Shared store is a dependency** (already is, for images). Unreachable → management pauses; running
+  stations are unaffected.
+- **Registry writes** are low-contention config, but still need a stale-lock-safe write (bounded lease),
+  not a hand-rolled forever-lock.
+- **Auth across nodes** — the aggregator needs credentials/tokens to call each node's API.
+- **Shared-disk re-home** must enforce the power-off/confirm-dead step; local-disk stations (default)
+  are unaffected.
 
 See the broader roadmap in [PLAN.md](PLAN.md) and the vGPU capability model in [VGPU.md](VGPU.md).

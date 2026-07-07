@@ -56,6 +56,8 @@ async fn main() {
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         .route("/images/delete", post(images::delete))
         .route("/images/panel", get(images::panel_route))
+        .route("/images/verify", post(images::verify))
+        .route("/images/verifystatus", get(images::verify_status))
         // hardware
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))

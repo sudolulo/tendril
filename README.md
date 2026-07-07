@@ -6,6 +6,11 @@ plug-and-play gaming stations — each running **Windows** or **SteamOS** in a G
 
 > One machine, many tendrils.
 
+> **📍 This GitHub repository is a read-only mirror.** Tendril's canonical home is
+> **[git.onetick.ninja/flan/tendril](https://git.onetick.ninja/flan/tendril)**. Please file **bug
+> reports and issues** on the [Gitea issue tracker](https://git.onetick.ninja/flan/tendril/issues) —
+> issues opened here on the mirror may go unseen.
+
 ![The Tendril web control plane — dashboard with stations and hardware](docs/images/dashboard.png)
 
 ## What is it for?

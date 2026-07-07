@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-06
+
+Web UI depth pass: USB passthrough, station delete, an OS-updates + system page, install-media
+checksum verification, friendly GPU names, a live in-browser console, and an automated release
+pipeline that builds and publishes the image + ISO on every push to `main`.
+
 ### Added
 - **Install-media checksum verification.** `scripts/verify-media.sh` verifies a fetched ISO against
   its upstream-published SHA-256 (Bazzite publishes one; Windows is assembled by UUP dump from

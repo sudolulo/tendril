@@ -259,36 +259,40 @@ pub async fn apply(Form(f): Form<ApplyForm>) -> Markup {
         }));
     }
     let name = f.name.clone();
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::SeqCst);
 
-    // The backup must be the *true* prior config. If a trial is already running for this connection,
-    // reuse its backup rather than snapshotting the already-changed intermediate state.
-    let backup = PENDING
-        .lock()
-        .unwrap()
-        .get(&name)
-        .map(|p| p.backup.clone())
-        .unwrap_or_else(|| ipv4(&name));
+    // Reserve the trial *before* touching the profile. Capturing the backup and inserting the pending
+    // entry under a single lock — ahead of `modify_ipv4`/`up` — means a concurrent apply (double
+    // submit, two tabs) reuses the true prior config instead of snapshotting our half-applied change.
+    let backup = {
+        let mut pend = PENDING.lock().unwrap();
+        let backup = pend
+            .get(&name)
+            .map(|p| p.backup.clone())
+            .unwrap_or_else(|| ipv4(&name));
+        pend.insert(
+            name.clone(),
+            Pending {
+                backup: backup.clone(),
+                token,
+            },
+        );
+        backup
+    };
 
     if let Err(e) = modify_ipv4(&f) {
+        abort_trial(&name, token, &backup);
         return config_panel_note(Some(html! { div.banner.error { "Failed: " (e) } }));
     }
     if let Err(e) = ui::run_result("nmcli", &["connection", "up", &name]) {
-        // Activation failed — put the old config back immediately so we don't leave it half-applied.
-        let _ = restore(&name, &backup);
+        // Activation failed — undo our reservation and put the old config back.
+        abort_trial(&name, token, &backup);
         return config_panel_note(Some(
             html! { div.banner.error { "Failed to activate: " (e) } },
         ));
     }
 
-    // Arm the trial. A unique token lets the timer detect if this trial was confirmed or superseded.
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::SeqCst);
-    PENDING.lock().unwrap().insert(
-        name.clone(),
-        Pending {
-            backup: backup.clone(),
-            token,
-        },
-    );
+    // The trial is armed; the timer below reverts it after TEST_SECS unless confirmed/superseded.
     let revert_name = name.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(TEST_SECS)).await;
@@ -306,6 +310,24 @@ pub async fn apply(Form(f): Form<ApplyForm>) -> Markup {
     });
 
     testing_fragment(&name)
+}
+
+/// Undo a reserved-but-failed trial: drop our pending entry (only if it's still ours — a newer apply
+/// may have superseded it) and restore the backup. No-op if we were superseded.
+fn abort_trial(name: &str, token: u64, backup: &Ipv4Cfg) {
+    let ours = {
+        let mut pend = PENDING.lock().unwrap();
+        match pend.get(name) {
+            Some(p) if p.token == token => {
+                pend.remove(name);
+                true
+            }
+            _ => false,
+        }
+    };
+    if ours {
+        let _ = restore(name, backup);
+    }
 }
 
 /// Write the requested IPv4 settings onto the connection profile (no activation).

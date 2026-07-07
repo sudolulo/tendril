@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Network test-and-revert race.** The 60-second trial now reserves its backup *before* touching the
+  connection profile, so two overlapping applies (a double-submit or a second tab) can no longer
+  snapshot the half-applied config as the "original" — the auto-revert always restores the true prior
+  settings, preserving the safety guarantee for the link you're reconfiguring.
+
 ## [0.13.0] - 2026-07-07
 
 Auto-fetched media, hardware-usage visibility, better logs, and much saner station defaults.

@@ -5,6 +5,7 @@
 //! swaps, and a WebSocket↔VNC proxy driving an embedded noVNC console. All assets — htmx and noVNC —
 //! are baked into the binary, so the appliance serves everything offline.
 
+mod auth;
 mod hardware;
 mod pages;
 mod stations;
@@ -14,7 +15,7 @@ use axum::extract::Path;
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{middleware, Router};
 
 /// htmx, embedded so the appliance needs no CDN.
 const HTMX_JS: &str = include_str!("../assets/htmx.min.js");
@@ -23,6 +24,12 @@ static NOVNC: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/
 
 #[tokio::main]
 async fn main() {
+    // `tendril-web --set-password` (used by the console) reads a password from stdin and stores it.
+    if std::env::args().any(|a| a == "--set-password") {
+        set_password_cli();
+        return;
+    }
+
     let app = Router::new()
         .route("/", get(pages::dashboard))
         // stations
@@ -55,9 +62,15 @@ async fn main() {
         .route("/system/reboot", post(pages::system_reboot))
         .route("/system/shutdown", post(pages::system_shutdown))
         .route("/system/logs", get(pages::logs))
+        // auth
+        .route("/login", get(auth::login_page).post(auth::login))
+        .route("/logout", post(auth::logout))
+        .route("/setup", get(auth::setup_page).post(auth::setup))
         // assets
         .route("/assets/htmx.min.js", get(htmx_js))
-        .route("/assets/novnc/*path", get(novnc_asset));
+        .route("/assets/novnc/*path", get(novnc_asset))
+        // gate everything above behind auth (the middleware lets the auth/asset paths through)
+        .layer(middleware::from_fn(auth::require_auth));
 
     let addr = std::env::var("TENDRIL_WEB_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -65,6 +78,30 @@ async fn main() {
         .unwrap_or_else(|e| panic!("bind {addr}: {e}"));
     println!("Tendril web UI listening on http://{addr}");
     axum::serve(listener, app).await.expect("serve");
+}
+
+/// Read a password from stdin and store it as the admin password (called via `--set-password`).
+fn set_password_cli() {
+    use std::io::Write as _;
+    print!("New Tendril web admin password: ");
+    let _ = std::io::stdout().flush();
+    let mut pw = String::new();
+    if std::io::stdin().read_line(&mut pw).is_err() {
+        eprintln!("could not read password");
+        std::process::exit(1);
+    }
+    let pw = pw.trim();
+    if pw.chars().count() < 6 {
+        eprintln!("password must be at least 6 characters");
+        std::process::exit(1);
+    }
+    match auth::set_password(pw) {
+        Ok(()) => println!("admin password set."),
+        Err(e) => {
+            eprintln!("failed to set password: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn htmx_js() -> impl IntoResponse {

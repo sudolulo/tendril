@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Web UI authentication.** A single admin password (Argon2-hashed at `/etc/tendril/webauth`),
+  server-side sessions via an HttpOnly cookie, and a first-run `/setup` page to create it — every
+  route is gated. An optional reverse-proxy trust mode (`TENDRIL_TRUST_PROXY_HEADER`, e.g.
+  `Remote-User`) lets an SSO front-end (Authelia/NPM) authenticate instead. Set or reset the password
+  from the console (`tendril` → *Set web admin password*) or `tendril-web --set-password`.
+
 ## [0.9.0] - 2026-07-06
 
 Web UI depth pass: USB passthrough, station delete, an OS-updates + system page, install-media

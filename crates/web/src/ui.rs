@@ -64,6 +64,9 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                     @if !host.is_empty() {
                         div.host { span.led {} (host) " · " span.mono { (ip) } }
                     }
+                    form method="post" action="/logout" style="margin:0" {
+                        button.btn.sm type="submit" { "Log out" }
+                    }
                 }
                 main.wrap { (body) }
             }

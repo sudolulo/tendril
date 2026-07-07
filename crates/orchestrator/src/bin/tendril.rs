@@ -31,9 +31,10 @@ fn main() {
         println!("   5) Fetch install media");
         println!("   6) USB devices");
         println!("   7) Configure network");
-        println!("   8) Open Linux shell");
-        println!("   9) Reboot");
-        println!("  10) Shut down");
+        println!("   8) Set web admin password");
+        println!("   9) Open Linux shell");
+        println!("  10) Reboot");
+        println!("  11) Shut down");
         println!("   0) Exit to login");
         match read_line("\nEnter an option: ").as_str() {
             "1" => menu_hardware(),
@@ -43,9 +44,10 @@ fn main() {
             "5" => menu_fetch_media(),
             "6" => menu_usb(),
             "7" => menu_network(),
-            "8" => drop_to_shell(),
-            "9" => power("reboot"),
-            "10" => power("poweroff"),
+            "8" => set_web_password(),
+            "9" => drop_to_shell(),
+            "10" => power("reboot"),
+            "11" => power("poweroff"),
             "0" | "q" | "quit" | "exit" => return,
             "" => {}
             other => println!("Unknown option: {other}"),
@@ -449,6 +451,17 @@ fn menu_fetch_media() {
         Ok(s) if s.success() => println!("\x1b[32mmedia ready in {ISO_DIR}\x1b[0m"),
         Ok(s) => println!("\x1b[31mfetch exited with status {s}\x1b[0m"),
         Err(e) => println!("\x1b[31mcould not run {path}: {e}\x1b[0m"),
+    }
+    pause();
+}
+
+/// Set the web control plane's admin password (delegates to `tendril-web --set-password`).
+fn set_web_password() {
+    header("Web admin password");
+    match Command::new("tendril-web").arg("--set-password").status() {
+        Ok(s) if s.success() => {}
+        Ok(_) => println!("password not changed"),
+        Err(e) => println!("tendril-web not available: {e}"),
     }
     pause();
 }

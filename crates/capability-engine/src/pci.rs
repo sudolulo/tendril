@@ -6,6 +6,9 @@ use std::path::Path;
 /// Default sysfs path holding one directory per PCI device.
 const PCI_DEVICES: &str = "/sys/bus/pci/devices";
 
+/// Where the `hwdata` package installs the PCI id database (the one `lspci` reads).
+const PCI_IDS_PATHS: &[&str] = &["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"];
+
 /// GPU silicon vendor, resolved from the PCI vendor id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuVendor {
@@ -42,9 +45,49 @@ pub struct GpuDevice {
     pub model: Option<String>,
 }
 
-/// Enumerate all display-controller PCI devices on the live host.
+/// Enumerate all display-controller PCI devices on the live host, with friendly model names
+/// resolved from the system `pci.ids` database.
 pub fn enumerate() -> Vec<GpuDevice> {
-    enumerate_from(Path::new(PCI_DEVICES))
+    let mut gpus = enumerate_from(Path::new(PCI_DEVICES));
+    if let Some(ids) = PCI_IDS_PATHS
+        .iter()
+        .find_map(|p| fs::read_to_string(p).ok())
+    {
+        for g in &mut gpus {
+            g.model = lookup_model(&ids, g.vendor_id, g.device_id);
+        }
+    }
+    gpus
+}
+
+/// Look up a device's friendly name in a `pci.ids` database, e.g. `10de:1e84` →
+/// `"TU104 [GeForce RTX 2070 SUPER]"`. Returns `None` if the vendor/device isn't listed.
+///
+/// `pci.ids` is indentation-structured: vendor lines start at column 0, their device lines are
+/// indented one tab, and subsystem lines two tabs — all as `<4-hex-id>  <name>`.
+pub(crate) fn lookup_model(ids: &str, vendor_id: u16, device_id: u16) -> Option<String> {
+    let vhex = format!("{vendor_id:04x}");
+    let dhex = format!("{device_id:04x}");
+    let mut in_vendor = false;
+    for line in ids.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with('\t') {
+            // A vendor line. If we were already inside the target vendor, its block has ended.
+            if in_vendor {
+                break;
+            }
+            in_vendor = line.len() >= 4 && line[..4].eq_ignore_ascii_case(&vhex);
+        } else if in_vendor && !line.starts_with("\t\t") {
+            // A device line under the target vendor (skip the two-tab subsystem lines).
+            let entry = line.trim_start();
+            if entry.len() >= 4 && entry[..4].eq_ignore_ascii_case(&dhex) {
+                return Some(entry[4..].trim().to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Enumerate display-controller devices under an explicit sysfs `devices` directory.
@@ -89,4 +132,45 @@ pub(crate) fn read_hex(path: &Path) -> Option<u32> {
     let trimmed = raw.trim();
     let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);
     u32::from_str_radix(hex, 16).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lookup_model;
+
+    // A trimmed pci.ids sample (tabs are significant): two vendors, devices, and a subsystem line.
+    const IDS: &str = "\
+# comment
+1002  Advanced Micro Devices, Inc. [AMD/ATI]
+\t744c  Navi 31 [Radeon RX 7900 XTX]
+10de  NVIDIA Corporation
+\t1e84  TU104 [GeForce RTX 2070 SUPER]
+\t\t1462 3733  RTX 2070 SUPER GAMING
+\t2482  GA104 [GeForce RTX 3070 Ti]
+8086  Intel Corporation
+";
+
+    #[test]
+    fn resolves_device_name_within_vendor() {
+        assert_eq!(
+            lookup_model(IDS, 0x10de, 0x1e84).as_deref(),
+            Some("TU104 [GeForce RTX 2070 SUPER]")
+        );
+        assert_eq!(
+            lookup_model(IDS, 0x10de, 0x2482).as_deref(),
+            Some("GA104 [GeForce RTX 3070 Ti]")
+        );
+        assert_eq!(
+            lookup_model(IDS, 0x1002, 0x744c).as_deref(),
+            Some("Navi 31 [Radeon RX 7900 XTX]")
+        );
+    }
+
+    #[test]
+    fn unknown_device_or_vendor_is_none() {
+        assert_eq!(lookup_model(IDS, 0x10de, 0xffff), None); // vendor present, device not
+        assert_eq!(lookup_model(IDS, 0x1234, 0x1e84), None); // vendor absent
+                                                             // A device id that only exists under a *different* vendor must not cross over.
+        assert_eq!(lookup_model(IDS, 0x8086, 0x1e84), None);
+    }
 }

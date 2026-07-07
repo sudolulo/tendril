@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Friendly GPU names.** `tendril-detect` and the web UI now resolve the marketing model name from the
+  system `pci.ids` database (`hwdata`) — e.g. `10de:1e84` shows as `TU104 [GeForce RTX 2070 SUPER]`
+  instead of a bare vendor. `hwdata` is included in the image.
 - **Automated release pipeline.** New `.gitea/workflows/release.yml` — on every push to `main` (image,
   crate, or installer-script change) the self-hosted runner builds the bootc image, pushes it to the
   Gitea registry (`:<version>` and `:latest`), builds the installer ISO, and publishes it to

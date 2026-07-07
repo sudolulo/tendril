@@ -5,12 +5,6 @@
 [Fedora bootc](https://docs.fedoraproject.org/en-US/bootc/) appliance you drive from a web UI or an
 on-screen console; it handles IOMMU, VFIO, driver binding, and VM setup so you don't have to.
 
-> One machine, many tendrils.
-
-> **📍 This GitHub repository is a read-only mirror.** Tendril's canonical home is
-> **[git.onetick.ninja/flan/tendril](https://git.onetick.ninja/flan/tendril)** — please file **bug
-> reports and issues** on its [issue tracker](https://git.onetick.ninja/flan/tendril/issues).
-
 > **🎮 Live demo:** click around the real web UI (read-only — actions are disabled) at
 > **[demo.onetick.ninja](https://demo.onetick.ninja)**. No install needed.
 

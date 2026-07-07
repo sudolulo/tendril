@@ -207,7 +207,7 @@ fn create_form(error: Option<&str>) -> Markup {
                         div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
                             div.field.check { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } span.hint { "On by default — installs the guest OS without prompts using the account above. Uncheck for a manual install." } }
                             div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
-                            div.field.check { input type="checkbox" name="start" id="start"; label for="start" { "Start now (begins the install immediately)" } span.hint { "Off by default — the station is created stopped so you're never left staring at an empty VM. Start it when you're ready." } }
+                            div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install immediately)" } }
                         }
                         div.grid style="margin-top:12px" {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: host RAM (minus headroom) ÷ GPUs" } }

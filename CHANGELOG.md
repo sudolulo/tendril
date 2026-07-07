@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Web console rendered black** even while the VM had output — the noVNC canvas container collapsed
+  to zero height. It now fills the console panel and shows the live screen, with a status overlay
+  ("Connecting…" / connection errors) so a genuinely blank VM is distinguishable from a problem.
+- **Delete is now available on running stations** too (it forces the VM off first), from both the
+  list and the station page.
+- Station **VNC now listens on all interfaces**, so a native viewer on the LAN can reach it (the
+  in-browser console worked regardless). Added a **"Send Enter"** button and a longer automatic
+  key-tap window to clear the Windows "press any key to boot from CD" prompt on slow-booting hosts.
+
 ### Added
 - **USB passthrough in the web UI.** Assign a seat's keyboard/mouse/controller to a station by
   friendly name — both in the create wizard and afterward on the station page (hot-plugged live via

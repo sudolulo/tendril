@@ -44,8 +44,10 @@ impl DomainState {
 
 /// Linux input keycode for Enter.
 const KEY_ENTER: u32 = 28;
-/// Enter taps after start — covers firmware POST plus the CD prompt's ~5-second timeout.
-const KEY_ENTER_TAPS: u32 = 18;
+/// Enter taps (1/sec) after start. Generous, because firmware POST can be slow on a loaded host and
+/// the "press any key to boot from CD" prompt has only a ~5-second window — miss it and the install
+/// never starts. Extra taps land harmlessly in WinPE once Setup has taken over.
+const KEY_ENTER_TAPS: u32 = 45;
 
 impl Libvirt {
     /// The system libvirt instance (`qemu:///system`).

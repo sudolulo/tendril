@@ -60,8 +60,8 @@ fn row(lv: &Libvirt, name: &str) -> Markup {
                         (action_btn(name, "stop", "Shut down", true))
                     } @else {
                         (action_btn(name, "start", "Start", false))
-                        (delete_btn(name))
                     }
+                    (delete_btn(name))
                 }
             }
         }
@@ -82,7 +82,7 @@ fn delete_btn(name: &str) -> Markup {
         button.btn.sm.danger
             hx-post=(format!("/stations/{name}/delete"))
             hx-target="#stations" hx-swap="outerHTML"
-            hx-confirm=(format!("Delete station '{name}'? This removes the VM definition. Its disk image is left on disk.")) {
+            hx-confirm=(format!("Delete station '{name}'? If it's running it will be forced off. This removes the VM definition; the disk image is left on disk.")) {
             "Delete"
         }
     }
@@ -117,7 +117,10 @@ pub async fn forceoff(Path(n): Path<String>) -> Markup {
     act(|lv| lv.destroy(&n))
 }
 pub async fn delete(Path(n): Path<String>) -> Markup {
-    act(|lv| lv.undefine(&n))
+    act(|lv| {
+        let _ = lv.destroy(&n); // force off if running (ignored if already stopped)
+        lv.undefine(&n)
+    })
 }
 
 fn act(f: impl FnOnce(&Libvirt) -> std::io::Result<()>) -> Markup {
@@ -398,17 +401,22 @@ pub async fn detail(Path(name): Path<String>) -> Response {
                     (action_btn(&name, "forceoff", "Force off", true))
                 } @else {
                     (action_btn(&name, "start", "Start", false))
-                    (action_btn(&name, "delete", "Delete", true))
                 }
+                (delete_btn(&name))
             }
         }
         (ui::panel("Console", None, html! {
             @if running {
                 @let ep = vnc_endpoint(&name);
                 div.pad {
-                    div.console { div id="screen" {} }
-                    div style="margin:.7rem 0 0; display:flex; gap:16px; flex-wrap:wrap; align-items:center" {
-                        span.sub { "Live VNC — a station with no OS shows a black screen; boot an installer to see it." }
+                    div.console style="position:relative" {
+                        div id="screen" {}
+                        div id="console-status" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#8b97a6; font-size:14px; pointer-events:none" { "Connecting to console\u{2026}" }
+                    }
+                    div style="margin:.7rem 0 0; display:flex; gap:12px; flex-wrap:wrap; align-items:center" {
+                        button.btn.sm hx-post=(format!("/stations/{name}/sendenter")) hx-swap="none"
+                            title="Nudges a Windows installer past the 'press any key to boot from CD' prompt" { "Send Enter" }
+                        span.sub { "A station with no OS (or stuck at firmware) shows black — this is live VNC, not an error." }
                         @if let Some((host, disp, port)) = &ep {
                             span.badge.mono { "VNC " (host) ":" (port) " (display " (disp) ")" }
                         }
@@ -475,6 +483,12 @@ fn usb_fragment(lv: &Libvirt, name: &str) -> Markup {
     }
 }
 
+/// Tap Enter on a station's console (e.g. to clear the "press any key to boot from CD" prompt).
+pub async fn send_enter(Path(name): Path<String>) -> StatusCode {
+    let _ = Libvirt::system().send_key(&name, 28);
+    StatusCode::NO_CONTENT
+}
+
 pub async fn usb_add(Path((name, id)): Path<(String, String)>) -> Markup {
     usb_op(&name, &id, true)
 }
@@ -499,14 +513,22 @@ fn usb_op(name: &str, id: &str, add: bool) -> Markup {
 fn console_script(name: &str) -> String {
     format!(
         r#"import RFB from '/assets/novnc/core/rfb.js';
-const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-const url = proto + location.host + '/stations/{name}/vnc';
-const rfb = new RFB(document.getElementById('screen'), url);
-rfb.scaleViewport = true;
-rfb.addEventListener('disconnect', () => {{
-  document.getElementById('screen').innerHTML =
-    '<div style=\"color:#8b97a6;padding:40px\">Console disconnected.</div>';
-}});
+const screen = document.getElementById('screen');
+const statusEl = document.getElementById('console-status');
+const say = (m) => {{ if (statusEl) statusEl.textContent = m; }};
+try {{
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  const rfb = new RFB(screen, proto + location.host + '/stations/{name}/vnc');
+  rfb.scaleViewport = true;
+  rfb.background = '#000';
+  rfb.addEventListener('connect', () => say(''));
+  rfb.addEventListener('disconnect', (e) =>
+    say((e.detail && e.detail.clean) ? 'Console closed.' : 'Console connection lost — reload to reconnect.'));
+  rfb.addEventListener('securityfailure', (e) =>
+    say('Auth failed: ' + ((e.detail && e.detail.reason) || 'unknown')));
+}} catch (err) {{
+  say('Console failed to start: ' + (err && err.message ? err.message : err));
+}}
 "#
     )
 }

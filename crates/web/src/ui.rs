@@ -278,9 +278,9 @@ input[type=checkbox] { width:auto; accent-color:var(--accent); }
 .banner.error { background:var(--crit-soft); border:1px solid var(--crit); color:var(--crit); }
 .banner.ok { background:var(--ok-soft); border:1px solid var(--ok); color:var(--ok); }
 
-.console { width:100%; background:#000; border-radius:8px; overflow:hidden; min-height:420px;
-  display:flex; align-items:center; justify-content:center; }
-.console canvas { display:block; max-width:100%; }
+.console { width:100%; aspect-ratio:16/10; max-height:72vh; background:#000; border-radius:8px; overflow:hidden; }
+.console #screen { width:100%; height:100%; }
+.console canvas { display:block; }
 .emptybox { padding:40px 18px; text-align:center; color:var(--muted); }
 
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }

@@ -36,6 +36,7 @@ async fn main() {
         .route("/stations/:name/delete", post(stations::delete))
         .route("/stations/:name/usb/add/:id", post(stations::usb_add))
         .route("/stations/:name/usb/remove/:id", post(stations::usb_remove))
+        .route("/stations/:name/sendenter", post(stations::send_enter))
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         // hardware
         .route("/hardware", get(hardware::page))

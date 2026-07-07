@@ -91,7 +91,7 @@ jobs:
             echo "Release $tag already exists — leaving it as-is."
           else
             notes="$(printf 'Tendril %s\n\nContainer image: `%s/%s/tendril:%s` (also `:latest`)\n\nInstaller ISO: https://dl.onetick.ninja/%s\nSHA-256: `%s`\n\nVerify: `sha256sum -c SHA256SUMS` against https://dl.onetick.ninja/SHA256SUMS' "$V" "$REG" "$OWNER" "$V" "$name" "$ISO_SHA")"
-            body="$(TAG="$tag" NAME="Tendril $V" NOTES="$notes" SHA="$SHA" python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":os.environ["SHA"],"name":os.environ["NAME"],"body":os.environ["NOTES"],"draft":False,"prerelease":True}))')"
+            body="$(TAG="$tag" NAME="Tendril $V" NOTES="$notes" SHA="$SHA" python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":os.environ["SHA"],"name":os.environ["NAME"],"body":os.environ["NOTES"],"draft":False,"prerelease":False}))')"
             curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
               -d "$body" "$api/releases" >/dev/null && echo "Created Gitea release $tag."
           fi

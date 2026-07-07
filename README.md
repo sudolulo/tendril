@@ -19,7 +19,7 @@ need it next to a SteamOS VM for everything else.
 - **Passthrough-first:** N GPUs → N independent stations (the reliable path on consumer hardware).
 - **Self-healing host:** atomic bootc images with greenboot auto-rollback — a bad update can't brick the box.
 - **Own libvirt orchestrator:** full control of passthrough, CPU pinning, and Secure Boot + TPM (for Windows 11).
-- **vGPU & clustering later:** more VMs per GPU, and management across multiple machines.
+- **vGPU & federation:** split one GPU across several stations, and manage a fleet of boxes from one UI (new in 0.16, experimental — [vGPU](docs/VGPU.md), [federation](docs/FEDERATION.md)).
 
 ## What works today
 
@@ -36,6 +36,11 @@ media, **live install progress**, per-GPU `vfio-pci` binding, a live in-browser 
 password auth, and **configurable networking** with a 60-second **test-and-revert** safety net.
 
 ![Configurable networking with test-and-revert](docs/images/network.png)
+
+**New in 0.16 (experimental, pending real-hardware validation):** split a single GPU across multiple
+stations with **vGPU** (mdev / SR-IOV — see the [supported-card list](docs/VGPU.md)), save installed
+stations as **golden images** and clone them instantly (integrity-verified by SHA-256), and manage a
+**fleet** of nodes from one UI with GPU-aware placement and one-click re-home ([docs/FEDERATION.md](docs/FEDERATION.md)).
 
 Drive it all from the web UI, the console, or the CLIs — see **[docs/CLI.md](docs/CLI.md)**.
 

@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-07
+
+vGPU, fleet federation, and hardened golden images.
+
 ### Added
+- **Federation: manage a fleet of nodes from one UI.** A new **Fleet** tab (appears once peers are
+  configured) aggregates every node over a JSON API (`/api/node`, shared-token authed), showing each
+  node's stations, GPUs, and health, with reachable/unreachable status. **Create a station on the
+  fleet** with GPU-aware placement — pick a node (or "auto") with a free compatible GPU and it's
+  provisioned there (`/api/provision`). A shared **station registry** on the store lets a **down node's
+  image-backed stations be re-homed** onto a healthy node in one click (human-confirmed). Nodes stay
+  fully independent — no shared consensus, quorum, or fencing (see [docs/FEDERATION.md](docs/FEDERATION.md)).
+- **Golden-image integrity.** Each captured image records a **SHA-256** (a sidecar that travels with it
+  on the shared store); the **Station images** panel shows the hash and a **verify** action that
+  recomputes and flags a **mismatch** — so a corrupt or tampered image isn't silently cloned into a new
+  station (or re-homed across machines).
 - **vGPU: split one GPU across multiple stations.** Two mechanisms, detected per-GPU from sysfs:
   - **Mediated devices (mdev)** — the NVIDIA vGPU / `vgpu_unlock` / Intel GVT-g path. The capability
     engine reads each GPU's `mdev_supported_types`; the create-station wizard lists every available
@@ -21,6 +36,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Tendril **detects and guides** — it consumes an mdev/SR-IOV-capable host driver but doesn't install
   proprietary vGPU drivers. **Station disks and whole-GPU passthrough are unchanged.**
+
+### Changed
+- **Golden images record their OS and capture atomically.** A capture now runs in the background and
+  writes to a hidden temp, publishing the final image only when complete — so a half-written image is
+  never listed or cloneable. The guest OS is recorded on capture and shown in the **Station images**
+  list and the create-station pickers.
+- **Streamlined storage config.** The NFS/SMB form is type-aware (the server/share placeholder switches
+  with NFS vs SMB, SMB credentials appear only for SMB) and tucks mount point + options behind an
+  Advanced toggle with sensible per-type defaults.
+
+### Fixed
+- **Install media isn't usable until fully downloaded.** Fetch scripts download to a `.part` file and
+  rename on completion (the SteamOS fetcher joined the Windows one), and the Media page shows in-flight
+  downloads as "downloading…" — so provisioning can't pick up a partial ISO.
+- **Station creation can't corrupt a golden image, and clone/install are exclusive.** Cloning derives
+  the guest OS from the image (no more mismatched pairing), the wizard hides install-only fields when a
+  base image is chosen, and disk paths/names that would land in the images directory are rejected.
+- **vGPU safety guards.** SR-IOV virtual-function changes are refused while a VF is assigned to a
+  station (which would yank it out from under a running VM), and whole-GPU passthrough vs vGPU on the
+  same physical card are mutually exclusive in the wizard.
 
 ## [0.15.0] - 2026-07-07
 
@@ -399,7 +434,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...HEAD
+[0.16.0]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...v0.16.0
 [0.15.0]: https://git.onetick.ninja/flan/tendril/compare/v0.14.0...v0.15.0
 [0.5.0]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...v0.5.0
 [0.4.0]: https://git.onetick.ninja/flan/tendril/compare/v0.3.0...v0.4.0

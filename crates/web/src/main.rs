@@ -44,12 +44,17 @@ async fn main() {
         // media + network
         .route("/media", get(pages::media))
         .route("/media/fetch/:which", post(pages::fetch))
+        .route("/media/verify/:iso", post(pages::verify))
+        .route("/media/verifystatus/:iso", get(pages::verify_status))
         .route("/network", get(pages::network))
         // system / OS updates
         .route("/system", get(pages::system))
         .route("/system/check", post(pages::system_check))
         .route("/system/update", post(pages::system_update))
         .route("/system/auto", post(pages::system_auto))
+        .route("/system/reboot", post(pages::system_reboot))
+        .route("/system/shutdown", post(pages::system_shutdown))
+        .route("/system/logs", get(pages::logs))
         // assets
         .route("/assets/htmx.min.js", get(htmx_js))
         .route("/assets/novnc/*path", get(novnc_asset));

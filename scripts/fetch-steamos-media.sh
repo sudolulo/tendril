@@ -38,11 +38,11 @@ echo "==> Downloading $name (several GB; boots to Steam gaming mode)"
 # -C - resumes a partial download if re-run.
 curl -fSL -C - --retry 3 -o "$out" "$url"
 
-# Verify against the published checksum when available (non-fatal if absent).
-if curl -fsSL "${url}-CHECKSUM" -o "$out.CHECKSUM" 2>/dev/null; then
-  ( cd "$DEST" && sha256sum -c --ignore-missing "$out.CHECKSUM" ) \
-    && echo "    checksum OK" || echo "    WARNING: checksum did not verify" >&2
-fi
+# Verify the download against Bazzite's published SHA-256 (records the result next to the ISO).
+"$(dirname "$0")/verify-media.sh" "$out" || {
+  echo "==> Checksum verification FAILED — the download may be corrupt. Not using $out." >&2
+  exit 1
+}
 
 echo "==> Done:"
 echo "    $out"

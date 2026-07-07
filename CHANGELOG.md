@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Install-media checksum verification.** `scripts/verify-media.sh` verifies a fetched ISO against
+  its upstream-published SHA-256 (Bazzite publishes one; Windows is assembled by UUP dump from
+  hash-verified components, so its ISO gets a recorded local hash). The fetch scripts run it
+  automatically, and the **Media page shows each ISO's verification state** — verified / mismatch /
+  local — with a **Verify** button whose result appears **live (HTMX polling, no refresh)**.
+- **System page controls.** Reboot and shut down the host, a **live journal log tail** (last 200
+  lines, auto-refreshing), and host info (uptime, load, memory, disk, kernel) — alongside the OS
+  update panel.
+
 ### Fixed
+- **USB passthrough list excludes hubs** (device class 0x09). Root hubs aren't passthrough targets and
+  couldn't be attached by vendor:product anyway (`Multiple USB devices for 1d6b:3` errored).
 - **Web console rendered black** even while the VM had output — the noVNC canvas container collapsed
   to zero height. It now fills the console panel and shows the live screen, with a status overlay
   ("Connecting…" / connection errors) so a genuinely blank VM is distinguishable from a problem.

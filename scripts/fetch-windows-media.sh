@@ -77,6 +77,12 @@ iso=$(find "$work" -maxdepth 1 -iname '*.iso' | head -1)
 [ -n "$iso" ] || { echo "ISO build failed; artifacts left in $work" >&2; trap - EXIT; exit 1; }
 mv "$iso" "$DEST/win11.iso"
 
+# UUP dump verifies each component's hash as aria2 downloads it, so the ISO is assembled from
+# verified parts — but there's no single upstream checksum for the finished ISO (it's built locally).
+# Record local SHA-256s for reference/display.
+"$(dirname "$0")/verify-media.sh" "$DEST/win11.iso" || true
+[ -f "$DEST/virtio-win.iso" ] && "$(dirname "$0")/verify-media.sh" "$DEST/virtio-win.iso" || true
+
 echo "==> Done:"
-echo "    $DEST/win11.iso"
+echo "    $DEST/win11.iso     (assembled from hash-verified UUP components)"
 echo "    $DEST/virtio-win.iso"

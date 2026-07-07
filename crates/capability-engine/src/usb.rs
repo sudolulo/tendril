@@ -86,6 +86,11 @@ pub fn devices_from(usb_dir: &Path) -> Vec<UsbDevice> {
             let path = entry.path();
             let vendor_id = read_hex(&path.join("idVendor"))? as u16;
             let product_id = read_hex(&path.join("idProduct"))? as u16;
+            // Skip hubs (USB device class 0x09) — root hubs and external hubs aren't passthrough
+            // targets, and their duplicate ids can't be attached by vendor:product alone.
+            if read_hex(&path.join("bDeviceClass")).unwrap_or(0) == 0x09 {
+                return None;
+            }
             let product = fs::read_to_string(path.join("product"))
                 .ok()
                 .map(|s| s.trim().to_string());

@@ -312,7 +312,10 @@ mod tests {
  </hostdev>\
  <hostdev mode='subsystem' type='usb'><source><vendor id='0x046d'/><product id='0xc52b'/></source></hostdev>\
 </devices></domain>";
-        assert_eq!(parse_pci_hostdevs(xml), vec!["0000:07:00.0", "0000:07:00.1"]);
+        assert_eq!(
+            parse_pci_hostdevs(xml),
+            vec!["0000:07:00.0", "0000:07:00.1"]
+        );
         assert!(parse_pci_hostdevs("<domain><devices/></domain>").is_empty());
     }
 

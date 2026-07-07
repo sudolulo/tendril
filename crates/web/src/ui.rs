@@ -56,8 +56,8 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                         @for (href, key, label) in NAV {
                             a href=(href) class=(if *key == active { "active" } else { "" }) { (label) }
                         }
-                        @if crate::cluster::enabled() {
-                            a href="/cluster" class=(if active == "fleet" { "active" } else { "" }) { "Fleet" }
+                        @if crate::federation::enabled() {
+                            a href="/fleet" class=(if active == "fleet" { "active" } else { "" }) { "Fleet" }
                         }
                     }
                     div.spacer {}

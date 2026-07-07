@@ -2,7 +2,7 @@
 //! media), then clone new stations from it. Cloning uses a qcow2 overlay (see
 //! `orchestrator::guest::create_overlay`): instant and deduplicated. Saving flattens + compresses the
 //! disk into a standalone, portable image — the basis for shipping a built station to other machines
-//! (clustering).
+//! (federation).
 
 use std::path::Path as FsPath;
 

@@ -1,6 +1,6 @@
 //! Remote media/image storage. Point Tendril's `isos/` and `images/` at a mounted **NFS or SMB**
 //! share so every node (and station-image clone) sees the same media and golden images — the shared
-//! store behind clustering. Station **disks** stay local (fast, per-node); only media + images move.
+//! store behind federation. Station **disks** stay local (fast, per-node); only media + images move.
 //!
 //! Config lives at `/etc/tendril/storage.conf` (`key=value` lines). When a store is configured and
 //! actually mounted, `iso_dir()`/`image_dir()` resolve to `<mount>/isos` and `<mount>/images`;

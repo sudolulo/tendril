@@ -1,7 +1,8 @@
-# Clustering plan — federation
+# Federation plan
 
-Status: **design; integrity tracking in progress.** Tendril "clustering" is **federation**: one web UI
-over a fleet of otherwise-independent nodes, with GPU-aware placement, human-confirmed recovery, and
+Status: **phases A–C shipped; further autonomy deferred.** Tendril's multi-machine story is
+**federation**: one web UI over a fleet of otherwise-independent nodes, with GPU-aware placement,
+human-confirmed recovery, and
 verified golden images shared between machines. There is deliberately **no distributed control plane** —
 no shared consensus, quorum, leader election, or fencing.
 
@@ -14,7 +15,7 @@ The reasoning, following Tendril's own constraints to their conclusion:
 2. **We dropped guaranteed auto-failover** (gaming sessions are ephemeral — when a node dies the player
    is already disconnected; cold-restarting the VM ~a minute faster, automatically, isn't worth
    fencing/quorum complexity or reserved spare-GPU cost). See "Deferred" below.
-3. **Once the cluster never acts autonomously, it needs no shared consensus state.** Quorum, Raft,
+3. **Once the fleet never acts autonomously, it needs no shared consensus state.** Quorum, Raft,
    distributed locks, and fencing exist to make *autonomous* decisions (auto-failover, auto-rebalance)
    safe. We don't do those, so none of that machinery is needed.
 4. **Each Tendril node is already an independent, API-driven control plane.** It fully manages its own
@@ -108,12 +109,12 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 ### Configuration (Phase A)
 
 Federation is off until peers are configured; then a **Fleet** tab appears. Configure each node via env
-(systemd `Environment=`) or `/etc/tendril/cluster.conf` (`key=value` lines):
+(systemd `Environment=`) or `/etc/tendril/federation.conf` (`key=value` lines):
 
 | Setting | Env | conf key | Meaning |
 |---|---|---|---|
 | Node name | `TENDRIL_NODE_NAME` | `name` | This node's label in the fleet (defaults to hostname). |
-| Shared token | `TENDRIL_CLUSTER_TOKEN` | `token` | Secret every node shares; peers present it (`X-Tendril-Cluster`) to read each other's `/api/node`. Also readable from `/etc/tendril/cluster-token`. |
+| Shared token | `TENDRIL_FEDERATION_TOKEN` | `token` | Secret every node shares; peers present it (`X-Tendril-Federation`) to read each other's `/api/node`. Also readable from `/etc/tendril/federation-token`. |
 | Peers | `TENDRIL_PEERS` (comma-sep) | repeated `peer=` | Each peer as `name=http://host:port` or a bare URL. |
 
 The aggregator reads peers over `GET /api/node` (JSON) with a short timeout; an unresponsive peer is

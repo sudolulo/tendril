@@ -2,10 +2,10 @@
 //!
 //! Each node stays a fully self-managing control plane; federation only **reads** peers over their JSON
 //! API (`GET /api/node`) and shows the fleet together — no shared consensus, no quorum, no fencing (see
-//! docs/CLUSTERING.md). Peers are configured explicitly; inter-node calls carry a shared cluster token.
+//! docs/FEDERATION.md). Peers are configured explicitly; inter-node calls carry a shared federation token.
 //!
-//! Config comes from env (`TENDRIL_NODE_NAME`, `TENDRIL_CLUSTER_TOKEN`, `TENDRIL_PEERS`) or
-//! `/etc/tendril/cluster.conf` (`key=value` lines: `name=…`, `token=…`, and repeatable `peer=…`).
+//! Config comes from env (`TENDRIL_NODE_NAME`, `TENDRIL_FEDERATION_TOKEN`, `TENDRIL_PEERS`) or
+//! `/etc/tendril/federation.conf` (`key=value` lines: `name=…`, `token=…`, and repeatable `peer=…`).
 
 use maud::{html, Markup};
 use serde::{Deserialize, Serialize};
@@ -16,11 +16,11 @@ use tendril_orchestrator::Libvirt;
 use crate::ui;
 
 fn conf_path() -> String {
-    std::env::var("TENDRIL_CLUSTER_CONF")
-        .unwrap_or_else(|_| "/etc/tendril/cluster.conf".to_string())
+    std::env::var("TENDRIL_FEDERATION_CONF")
+        .unwrap_or_else(|_| "/etc/tendril/federation.conf".to_string())
 }
 
-/// Parsed cluster.conf: (this node's name, shared token, peer entries).
+/// Parsed federation.conf: (this node's name, shared token, peer entries).
 fn conf() -> (Option<String>, Option<String>, Vec<String>) {
     let mut name = None;
     let mut token = None;
@@ -75,7 +75,7 @@ fn host_of(url: &str) -> String {
         .to_string()
 }
 
-/// Configured peers (from `TENDRIL_PEERS` env, else `cluster.conf`).
+/// Configured peers (from `TENDRIL_PEERS` env, else `federation.conf`).
 pub fn peers() -> Vec<Peer> {
     let entries: Vec<String> = match std::env::var("TENDRIL_PEERS") {
         Ok(v) => v.split(',').map(|s| s.to_string()).collect(),
@@ -100,18 +100,18 @@ pub fn node_name() -> String {
 }
 
 /// The shared token peers present to each other (env, else conf, else a token file).
-fn cluster_token() -> String {
-    std::env::var("TENDRIL_CLUSTER_TOKEN")
+fn federation_token() -> String {
+    std::env::var("TENDRIL_FEDERATION_TOKEN")
         .ok()
         .or_else(|| conf().1)
-        .or_else(|| std::fs::read_to_string("/etc/tendril/cluster-token").ok())
+        .or_else(|| std::fs::read_to_string("/etc/tendril/federation-token").ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
 
 /// True if `presented` matches the configured token (and a token is set).
 pub fn token_ok(presented: &str) -> bool {
-    let t = cluster_token();
+    let t = federation_token();
     !t.is_empty() && presented == t
 }
 
@@ -227,7 +227,7 @@ pub fn local_node_info() -> NodeInfo {
 /// Fetch a peer's info over its API (via `curl`, short timeout), or a down stub if unreachable.
 fn fetch_peer(p: &Peer) -> NodeInfo {
     let url = format!("{}/api/node", p.url.trim_end_matches('/'));
-    let auth = format!("X-Tendril-Cluster: {}", cluster_token());
+    let auth = format!("X-Tendril-Federation: {}", federation_token());
     let parsed = ui::run_result("curl", &["-s", "--max-time", "5", "-H", &auth, &url])
         .ok()
         .and_then(|s| serde_json::from_str::<NodeInfo>(&s).ok());
@@ -284,7 +284,7 @@ fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
         html! {
             @if let Some(n) = note { (n) }
             div.btnrow style="margin-bottom:16px" {
-                a.btn.primary href="/cluster/new" { "+ New fleet station" }
+                a.btn.primary href="/fleet/new" { "+ New fleet station" }
             }
             p.sub style="margin-bottom:16px" {
                 "Every node manages itself; this view aggregates the fleet over each node's API. "
@@ -324,7 +324,7 @@ pub struct ProvisionResult {
 }
 
 /// Remote-provision API: create a station on THIS node (called by the fleet aggregator with the
-/// cluster token). Provisioning is blocking libvirt work, so it runs off the async worker.
+/// federation token). Provisioning is blocking libvirt work, so it runs off the async worker.
 pub async fn api_provision(
     axum::Json(spec): axum::Json<ProvisionSpec>,
 ) -> axum::Json<ProvisionResult> {
@@ -343,11 +343,11 @@ pub async fn api_provision(
     })
 }
 
-/// Post a provision spec to a peer's `/api/provision` over HTTP (curl, cluster token).
+/// Post a provision spec to a peer's `/api/provision` over HTTP (curl, federation token).
 fn remote_provision(url: &str, spec: &ProvisionSpec) -> Result<(), String> {
     let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
     let ep = format!("{}/api/provision", url.trim_end_matches('/'));
-    let auth = format!("X-Tendril-Cluster: {}", cluster_token());
+    let auth = format!("X-Tendril-Federation: {}", federation_token());
     let out = ui::run_result(
         "curl",
         &[
@@ -440,7 +440,7 @@ pub async fn new_page() -> Markup {
         "New fleet station",
         html! {
             (ui::panel("Create a station on the fleet", None, html! {
-                form.grid.pad method="post" action="/cluster/create" {
+                form.grid.pad method="post" action="/fleet/create" {
                     div.field { label { "Station name" } input name="name" value="station1" required; }
                     div.field {
                         label { "Placement" }
@@ -471,7 +471,7 @@ pub async fn new_page() -> Markup {
                     div.field { label { "Memory (MiB, blank = node default)" } input name="memory_mib" inputmode="numeric"; }
                     div.field { label { "vCPUs (blank = node default)" } input name="vcpus" inputmode="numeric"; }
                     div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now" } }
-                    div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create on fleet" } a.btn href="/cluster" { "Cancel" } } }
+                    div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create on fleet" } a.btn href="/fleet" { "Cancel" } } }
                 }
             }))
             p.sub.pad { "A whole GPU is assigned on the chosen node. Seats/USB, vGPU, and unattended options are set on the node's own wizard for now." }
@@ -715,7 +715,7 @@ fn node_card(n: &NodeInfo) -> Markup {
                                     td.mono.sub { (r.base_image.as_deref().unwrap_or("—")) }
                                     td.right {
                                         @if recoverable {
-                                            form method="post" action="/cluster/rehome" style="display:inline"
+                                            form method="post" action="/fleet/rehome" style="display:inline"
                                                 onsubmit=(format!("return confirm('Re-home \"{}\" onto a healthy node? It is recreated from its golden image and started. If {} comes back, delete the duplicate there.')", r.name, n.name)) {
                                                 input type="hidden" name="name" value=(r.name);
                                                 input type="hidden" name="from" value=(n.name);

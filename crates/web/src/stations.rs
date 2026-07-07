@@ -136,7 +136,7 @@ pub async fn delete(Path(n): Path<String>) -> Markup {
     if let Some(uuid) = mdev {
         crate::vgpu::remove_mdev(&uuid);
     }
-    crate::cluster::forget_station(&crate::cluster::node_name(), &n);
+    crate::federation::forget_station(&crate::federation::node_name(), &n);
     out
 }
 
@@ -678,10 +678,10 @@ fn disk_target_ok(disk: &str) -> bool {
 }
 
 /// Provision a station on THIS node from a compact federation spec (used by the remote-provision API
-/// and the fleet create flow). Supports cloning a golden image (the clustering-primary path — images
+/// and the fleet create flow). Supports cloning a golden image (the federation-primary path — images
 /// live on the shared store) or a fresh install with an explicit GPU address. Seats/USB, unattended
 /// tuning, native-hardware, and vGPU are left to the local wizard for now.
-pub(crate) fn provision_spec(s: &crate::cluster::ProvisionSpec) -> Result<(), String> {
+pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(), String> {
     if !valid_station_name(&s.name) {
         return Err("invalid station name (letters, numbers, - _ . only)".into());
     }
@@ -753,7 +753,7 @@ fn record_local(name: &str, guest: GuestOs, base_image: Option<&str>) {
         GuestOs::Windows => "windows",
         GuestOs::SteamOs => "steamos",
     };
-    crate::cluster::record_station(&crate::cluster::node_name(), name, os, base_image);
+    crate::federation::record_station(&crate::federation::node_name(), name, os, base_image);
 }
 
 pub(crate) fn passthrough_for(addr: &str) -> Vec<String> {

@@ -6,8 +6,8 @@
 //! are baked into the binary, so the appliance serves everything offline.
 
 mod auth;
-mod cluster;
 mod demo;
+mod federation;
 mod hardware;
 mod images;
 mod network;
@@ -41,12 +41,12 @@ async fn main() {
         .route("/", get(pages::dashboard))
         .route("/stats", get(pages::stats))
         // federation
-        .route("/cluster", get(cluster::page))
-        .route("/cluster/new", get(cluster::new_page))
-        .route("/cluster/create", post(cluster::create))
-        .route("/cluster/rehome", post(cluster::rehome))
-        .route("/api/node", get(cluster::api_node))
-        .route("/api/provision", post(cluster::api_provision))
+        .route("/fleet", get(federation::page))
+        .route("/fleet/new", get(federation::new_page))
+        .route("/fleet/create", post(federation::create))
+        .route("/fleet/rehome", post(federation::rehome))
+        .route("/api/node", get(federation::api_node))
+        .route("/api/provision", post(federation::api_provision))
         // stations
         .route("/stations", get(stations::list_page).post(stations::create))
         .route("/stations/fragment", get(stations::fragment_route))

@@ -8,6 +8,7 @@
 mod auth;
 mod demo;
 mod federation;
+mod fedtls;
 mod hardware;
 mod images;
 mod licensing;
@@ -38,6 +39,10 @@ async fn main() {
         set_password_cli();
         return;
     }
+
+    // Install the process-wide rustls crypto provider once, up front — both the federation mTLS
+    // listener and the browser HTTPS server build rustls configs that require it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let app = Router::new()
         .route("/", get(pages::dashboard))
@@ -120,6 +125,30 @@ async fn main() {
         federation::heartbeat();
         std::thread::sleep(std::time::Duration::from_secs(30));
     });
+
+    // Federation mTLS listener: a separate port that requires a client cert signed by the shared
+    // federation CA (and presents this node's cert). Runs alongside the browser UI so node-to-node
+    // calls are mutually authenticated. Only starts when this node has a CA-issued identity (a shared
+    // store, or TENDRIL_FED_CA_DIR); otherwise federation falls back to token + plain TLS.
+    if let Some(fed_cfg) = fedtls::server_config() {
+        let fed_app = app.clone();
+        let fed_addr = fedtls::fed_addr();
+        tokio::spawn(async move {
+            match fed_addr.parse::<std::net::SocketAddr>() {
+                Ok(sock) => {
+                    let cfg = axum_server::tls_rustls::RustlsConfig::from_config(fed_cfg);
+                    println!("Tendril federation mTLS on https://{fed_addr}");
+                    if let Err(e) = axum_server::bind_rustls(sock, cfg)
+                        .serve(fed_app.into_make_service())
+                        .await
+                    {
+                        eprintln!("federation mTLS server error: {e}");
+                    }
+                }
+                Err(e) => eprintln!("bad TENDRIL_FED_ADDR {fed_addr}: {e}"),
+            }
+        });
+    }
 
     let addr = std::env::var("TENDRIL_WEB_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
 

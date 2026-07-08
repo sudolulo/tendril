@@ -499,21 +499,21 @@ pub(crate) fn pull_from(name: &str, from_url: &str, token: &str) -> Result<(), S
         from_url.trim_end_matches('/'),
         urlencode(&clean)
     );
-    ui::run_result(
-        "curl",
-        &[
-            "-sk",
-            "--fail",
-            "--max-time",
-            "3600",
-            "-H",
-            &auth,
-            "-o",
-            &tmp,
-            &src,
-        ],
-    )
-    .map_err(|e| {
+    // mTLS (our client cert + CA) when this node has a federation identity; else `-sk`. The caller
+    // passes the source's mTLS endpoint to match (see `distribute`).
+    let sec = crate::fedtls::client_args();
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend([
+        "--fail",
+        "--max-time",
+        "3600",
+        "-H",
+        &auth,
+        "-o",
+        &tmp,
+        &src,
+    ]);
+    ui::run_result("curl", &args).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("pull failed: {e}")
     })?;
@@ -534,7 +534,13 @@ pub async fn distribute(Query(q): Query<PushQuery>) -> Markup {
             html! { div.banner.error { "That image isn't on this node — distribute from a node that has it." } },
         ));
     }
-    let source = crate::federation::advertise_url();
+    // Peers pull from our mTLS endpoint when we have an identity (so the transfer is mutually
+    // authenticated), else from the plain-TLS UI URL.
+    let source = if crate::fedtls::available() {
+        crate::fedtls::fed_advertise_url()
+    } else {
+        crate::federation::advertise_url()
+    };
     let nodes = tokio::task::spawn_blocking(crate::federation::fleet)
         .await
         .unwrap_or_default();

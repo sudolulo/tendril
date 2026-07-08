@@ -49,6 +49,8 @@ fn conf() -> (Option<String>, Option<String>, Vec<String>) {
 pub struct Peer {
     pub name: String,
     pub url: String,
+    /// The peer's mTLS federation endpoint, if it advertises one (auto-discovered peers only).
+    pub fed: Option<String>,
 }
 
 /// Parse a peer entry: `name=http://host:port` or bare `http://host:port` (name derived from host).
@@ -61,7 +63,11 @@ fn parse_peer(entry: &str) -> Option<Peer> {
         Some((n, u)) => (n.trim().to_string(), u.trim().to_string()),
         None => (host_of(entry), entry.to_string()),
     };
-    (!url.is_empty()).then_some(Peer { name, url })
+    (!url.is_empty()).then_some(Peer {
+        name,
+        url,
+        fed: None,
+    })
 }
 
 /// A display name from a URL: the host part, e.g. `http://10.0.0.2:8080/` → `10.0.0.2`.
@@ -93,6 +99,9 @@ struct Presence {
     name: String,
     url: String,
     ts: u64,
+    /// The node's mTLS federation endpoint, when it serves one (absent on token-only nodes).
+    #[serde(default)]
+    fed: Option<String>,
 }
 
 /// The base URL peers should reach this node at: explicit override, else `http://<lan-ip>:<port>`.
@@ -127,6 +136,7 @@ pub fn heartbeat() {
         name: node_name(),
         url: advertise_url(),
         ts: now_secs(),
+        fed: crate::fedtls::available().then(crate::fedtls::fed_advertise_url),
     };
     if let Ok(j) = serde_json::to_string(&rec) {
         let _ = std::fs::write(format!("{dir}/{}.json", safe_component(&node_name())), j);
@@ -151,6 +161,7 @@ pub fn peers() -> Vec<Peer> {
                                 out.push(Peer {
                                     name: p.name,
                                     url: p.url,
+                                    fed: p.fed,
                                 });
                             }
                         }
@@ -373,11 +384,14 @@ pub fn local_node_info() -> NodeInfo {
 
 /// Fetch a peer's info over its API (via `curl`, short timeout), or a down stub if unreachable.
 fn fetch_peer(p: &Peer) -> NodeInfo {
-    let url = format!("{}/api/node", p.url.trim_end_matches('/'));
+    // mTLS to the peer's federation endpoint when both sides support it (verifies the peer via our
+    // shared CA); else plain TLS (`-k`) + the shared token — still encrypted.
+    let (base, sec) = crate::fedtls::transport(&p.url, p.fed.as_deref());
+    let url = format!("{base}/api/node");
     let auth = format!("X-Tendril-Federation: {}", federation_token());
-    // `-k`: accept the peer's self-signed cert. Transitional — the mTLS phase replaces this with
-    // `--cacert <peer's store-published cert>` for real pinning; for now HTTPS gives encryption.
-    let parsed = ui::run_result("curl", &["-sk", "--max-time", "5", "-H", &auth, &url])
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend(["--max-time", "5", "-H", &auth, &url]);
+    let parsed = ui::run_result("curl", &args)
         .ok()
         .and_then(|s| serde_json::from_str::<NodeInfo>(&s).ok());
     match parsed {
@@ -503,25 +517,24 @@ pub async fn api_provision(
 }
 
 /// Post a provision spec to a peer's `/api/provision` over HTTP (curl, federation token).
-fn remote_provision(url: &str, spec: &ProvisionSpec) -> Result<(), String> {
+fn remote_provision(url: &str, fed: Option<&str>, spec: &ProvisionSpec) -> Result<(), String> {
     let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
-    let ep = format!("{}/api/provision", url.trim_end_matches('/'));
+    let (base, sec) = crate::fedtls::transport(url, fed);
+    let ep = format!("{base}/api/provision");
     let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let out = ui::run_result(
-        "curl",
-        &[
-            "-sk",
-            "--max-time",
-            "120",
-            "-H",
-            &auth,
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            &ep,
-        ],
-    )?;
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend([
+        "--max-time",
+        "120",
+        "-H",
+        &auth,
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        &body,
+        &ep,
+    ]);
+    let out = ui::run_result("curl", &args)?;
     let res: ProvisionResult =
         serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
     if res.ok {
@@ -564,12 +577,11 @@ fn dispatch(target: &str, spec: &ProvisionSpec) -> Result<(), String> {
     if target == node_name() {
         crate::stations::provision_spec(spec)
     } else {
-        let url = peers()
+        let peer = peers()
             .into_iter()
             .find(|p| p.name == target)
-            .map(|p| p.url)
             .ok_or("unknown peer node")?;
-        remote_provision(&url, spec)
+        remote_provision(&peer.url, peer.fed.as_deref(), spec)
     }
 }
 
@@ -609,13 +621,13 @@ pub fn reimage_dispatch(node: &str, station: &str, image: &str) -> Result<(), St
         let path = crate::images::path_of(image).ok_or("image not found on this node")?;
         crate::images::reimage_station(station, &path)
     } else {
-        let url = peers()
+        let peer = peers()
             .into_iter()
             .find(|p| p.name == node)
-            .map(|p| p.url)
             .ok_or("unknown peer node")?;
         remote_reimage(
-            &url,
+            &peer.url,
+            peer.fed.as_deref(),
             &ReimageSpec {
                 station: station.to_string(),
                 image: image.to_string(),
@@ -624,25 +636,24 @@ pub fn reimage_dispatch(node: &str, station: &str, image: &str) -> Result<(), St
     }
 }
 
-fn remote_reimage(url: &str, spec: &ReimageSpec) -> Result<(), String> {
+fn remote_reimage(url: &str, fed: Option<&str>, spec: &ReimageSpec) -> Result<(), String> {
     let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
-    let ep = format!("{}/api/reimage", url.trim_end_matches('/'));
+    let (base, sec) = crate::fedtls::transport(url, fed);
+    let ep = format!("{base}/api/reimage");
     let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let out = ui::run_result(
-        "curl",
-        &[
-            "-sk",
-            "--max-time",
-            "60",
-            "-H",
-            &auth,
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            &ep,
-        ],
-    )?;
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend([
+        "--max-time",
+        "60",
+        "-H",
+        &auth,
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        &body,
+        &ep,
+    ]);
+    let out = ui::run_result("curl", &args)?;
     let res: ProvisionResult =
         serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
     if res.ok {
@@ -710,33 +721,31 @@ pub fn distribute_dispatch(node: &str, name: &str, source_url: &str) -> Result<(
             Err("image not present on the source node".into())
         };
     }
-    let url = peers()
+    let peer = peers()
         .into_iter()
         .find(|p| p.name == node)
-        .map(|p| p.url)
         .ok_or("unknown peer node")?;
     let body = serde_json::to_string(&ImagePull {
         name: name.to_string(),
         from: source_url.to_string(),
     })
     .map_err(|e| e.to_string())?;
-    let ep = format!("{}/api/image-pull", url.trim_end_matches('/'));
+    let (base, sec) = crate::fedtls::transport(&peer.url, peer.fed.as_deref());
+    let ep = format!("{base}/api/image-pull");
     let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let out = ui::run_result(
-        "curl",
-        &[
-            "-sk",
-            "--max-time",
-            "3600",
-            "-H",
-            &auth,
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            &ep,
-        ],
-    )?;
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend([
+        "--max-time",
+        "3600",
+        "-H",
+        &auth,
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        &body,
+        &ep,
+    ]);
+    let out = ui::run_result("curl", &args)?;
     let res: ProvisionResult =
         serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
     if res.ok {

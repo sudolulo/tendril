@@ -974,6 +974,7 @@ dependencies = [
  "include_dir",
  "maud",
  "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "tendril-capability-engine",

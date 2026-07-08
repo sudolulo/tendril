@@ -27,3 +27,4 @@ argon2 = "0.5"
 # generated with the `openssl` CLI (avoids the rcgen→time dependency tree; matches our shell-out style).
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"

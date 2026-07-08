@@ -121,6 +121,26 @@ The aggregator reads peers over `GET /api/node` (JSON) with a short timeout; an 
 shown as **unreachable** (its stations keep running — it's just not manageable until it's back). Nodes
 otherwise stay fully independent; there is no shared state in Phase A.
 
+### Transport security: mTLS
+
+Node-to-node calls are **mutually authenticated with certificates** when a shared **federation CA** is
+available — on its own listener so the browser UI is unaffected:
+
+- The CA is auto-managed on the shared store at `<store>/ca/` (generated once, race-safe — exactly like
+  the fleet token). Every node that mounts the store trusts the same CA and **self-issues** its own node
+  cert from it (the CA key is readable there — the shared store *is* the trust boundary). Override the CA
+  location with `TENDRIL_FED_CA_DIR`.
+- Each node serves an mTLS endpoint on `TENDRIL_FED_ADDR` (default `:8444`), presenting its CA-signed
+  cert and **requiring** a client cert signed by the same CA. It advertises this endpoint in its presence
+  record (`fed`), and peers call it with `--cacert`/`--cert`/`--key` — verifying each other instead of
+  `-k`. A client cert not signed by the CA is refused at the TLS handshake.
+- Config: `TENDRIL_FED_ADVERTISE_URL` (how peers reach this node's mTLS endpoint; default
+  `https://<lan-ip>:<fed-port>`), `TENDRIL_FED_IDENTITY_DIR` (where the node key/cert live; default
+  `/var/lib/tendril/fedtls` — set a distinct path for co-located instances).
+- **No CA (no shared store, no `TENDRIL_FED_CA_DIR`)** → mTLS is unavailable and calls fall back to the
+  shared token over plain TLS (`-k`), still encrypted. The shared token is always required regardless, as
+  a second factor.
+
 ## Deferred: autonomous operation
 
 Guaranteed unattended failover or automatic rebalancing — the only features that would need shared

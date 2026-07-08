@@ -362,6 +362,7 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field.check.install-only { input type="checkbox" name="app_steam" id="app_steam" checked; label for="app_steam" { "Install Steam" } }
                             div.field.check.install-only { input type="checkbox" name="app_sunshine" id="app_sunshine" checked; label for="app_sunshine" { "Sunshine — stream to Moonlight" } span.hint { "Recommended for a seatless station — otherwise there's no low-latency way to see it. Installs on Windows, enables Bazzite's on Linux." } }
                             div.field.check.install-only { input type="checkbox" name="app_discord" id="app_discord" checked; label for="app_discord" { "Install Discord" } }
+                            div.field.check.install-only { input type="checkbox" name="app_moonlight" id="app_moonlight"; label for="app_moonlight" { "Moonlight — receive streams" } span.hint { "Installs the Moonlight client so this station can also play another station's games over the LAN (the receiver to Sunshine's host)." } }
                             @if crate::storage::store_root().is_some() {
                                 div.field.check.install-only { input type="checkbox" name="steam_library" id="steam_library"; label for="steam_library" { "Shared Steam library (experimental)" } span.hint { "Shares the fleet store's steam-library/ folder into this station over virtio-fs — install games once, read from many. Update from one station at a time. See docs/STEAM-GAMES.md." } }
                             }
@@ -531,6 +532,9 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         }
         if checked("app_discord") {
             apps.push(GuestApp::Discord);
+        }
+        if checked("app_moonlight") {
+            apps.push(GuestApp::Moonlight);
         }
         match build_seed(
             guest,

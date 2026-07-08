@@ -190,6 +190,31 @@ systemctl enable tendril-vgpu-guest.service
         );
     }
 
+    // Shared Steam library over virtio-fs (tag `tendril-steamlib`), when the station attaches one.
+    // `nofail` keeps boot clean on stations without a shared library, so this is safe to always emit.
+    // The mount is automatic; the station user then adds /var/mnt/steamlib as a Steam library folder
+    // (Steam → Settings → Storage → Add Drive). See docs/STEAM-GAMES.md.
+    let _ = write!(
+        ks,
+        r#"
+%post --erroronfail
+mkdir -p /var/mnt/steamlib
+cat >/etc/systemd/system/var-mnt-steamlib.mount <<'EOF'
+[Unit]
+Description=Tendril shared Steam library (virtio-fs)
+[Mount]
+What=tendril-steamlib
+Where=/var/mnt/steamlib
+Type=virtiofs
+Options=nofail,ro
+[Install]
+WantedBy=local-fs.target
+EOF
+systemctl enable var-mnt-steamlib.mount
+%end
+"#,
+    );
+
     if spec.enable_sunshine {
         // Pre-enable the Sunshine game-stream host. Zero idle cost — it only captures + NVENC-encodes
         // when a Moonlight client connects, on the GPU's dedicated encoder, so game framerate is

@@ -36,20 +36,19 @@ share you added under Storage). Games are downloaded once and read by all statio
   once (it locks and can corrupt `steamapps` state), so don't run installs/updates from two stations
   into one shared library simultaneously.
 
-Under the hood the toggle **attaches** the host store's `steam-library/` folder to the station over
-virtio-fs — it appears inside the guest as the virtio-fs tag **`tendril-steamlib`**. What's automated
-today is the *attach* (verified in the domain XML). Mounting it in the guest and adding it as a Steam
-library folder is currently a **manual step** (auto-mount + auto-register on first boot is a planned
-follow-up):
+Under the hood the toggle shares the host store's `steam-library/` folder to the station over
+virtio-fs (tag `tendril-steamlib`), and the station **mounts it automatically** on first boot:
 
-- **Bazzite/SteamOS:** `sudo mount -t virtiofs tendril-steamlib /mnt/steamlib` (add an fstab line to
-  persist), then in Steam → Settings → Storage → *Add Drive* → `/mnt/steamlib`.
-- **Windows:** needs the virtio-fs service from the virtio-win tools Tendril installs (WinFsp +
-  `VirtioFsSvc`); once running the share shows up as a drive, then Steam → Settings → Storage → *Add
-  Drive*. (Windows virtio-fs is finicky — validate before relying on it.)
+- **Bazzite/SteamOS:** auto-mounted at **`/var/mnt/steamlib`** (a `nofail` systemd mount unit, so it's
+  harmless on stations without a shared library). Add it in **Steam → Settings → Storage → Add Drive
+  → `/var/mnt/steamlib`** (one time per account).
+- **Windows:** the first-logon setup starts the virtio-fs service (`VirtioFsSvc`, from the virtio-win
+  tools Tendril installs) so the share appears as a drive; add it via **Steam → Settings → Storage →
+  Add Drive**.
 
-This whole path is **experimental** and hasn't been validated end-to-end with a real Steam sign-in.
-For anything you depend on, use the golden-image approach above.
+Only the one-time "Add Drive" in Steam is manual (registering a library folder programmatically is
+fragile across Steam versions). This path is **experimental** and hasn't been validated end-to-end
+with a real Steam sign-in — for anything you depend on, use the golden-image approach above.
 
 ## 3. Per-station download (baseline)
 

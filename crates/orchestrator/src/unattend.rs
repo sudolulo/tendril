@@ -28,6 +28,10 @@ pub enum GuestApp {
     Sunshine,
     /// Discord.
     Discord,
+    /// [Moonlight](https://moonlight-stream.org) — the GameStream **client**, so a station can also
+    /// *receive* a stream (e.g. play another station's games on this one). Installed via winget, since
+    /// its GitHub release asset is versioned (no stable direct-download URL like Sunshine's).
+    Moonlight,
 }
 
 impl GuestApp {
@@ -37,34 +41,38 @@ impl GuestApp {
             GuestApp::Steam => "Steam",
             GuestApp::Sunshine => "Sunshine (game streaming host)",
             GuestApp::Discord => "Discord",
+            GuestApp::Moonlight => "Moonlight (game-stream client)",
         }
     }
-    /// Official download URL for the installer.
-    fn url(self) -> &'static str {
+    /// The first-logon CommandLine that installs this app, already XML-escaped for the answer file.
+    fn command(self) -> String {
+        // URL apps: fetch the official installer to %TEMP% and run it silently. `&amp;` is cmd's
+        // separator (XML-escaped); the URL is XML-escaped too (Discord's has a raw `&` in its query).
+        let url_app = |url: &str, exe: &str, args: &str| {
+            format!(
+                "cmd /c curl.exe -fL \"{url}\" -o \"%TEMP%\\{exe}\" &amp; start /wait \"\" \"%TEMP%\\{exe}\" {args}",
+                url = xml_escape(url)
+            )
+        };
         match self {
-            GuestApp::Steam => "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe",
-            GuestApp::Sunshine => {
-                "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.exe"
-            }
-            GuestApp::Discord => {
-                "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64"
-            }
-        }
-    }
-    /// Local filename to save the installer as (under `%TEMP%`).
-    fn exe(self) -> &'static str {
-        match self {
-            GuestApp::Steam => "SteamSetup.exe",
-            GuestApp::Sunshine => "SunshineSetup.exe",
-            GuestApp::Discord => "DiscordSetup.exe",
-        }
-    }
-    /// Silent-install switch(es) for the installer.
-    fn silent_args(self) -> &'static str {
-        match self {
-            // Steam: NSIS silent. Sunshine: NSIS silent. Discord: Squirrel silent.
-            GuestApp::Steam | GuestApp::Sunshine => "/S",
-            GuestApp::Discord => "-s",
+            GuestApp::Steam => url_app(
+                "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe",
+                "SteamSetup.exe",
+                "/S",
+            ),
+            GuestApp::Sunshine => url_app(
+                "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.exe",
+                "SunshineSetup.exe",
+                "/S",
+            ),
+            GuestApp::Discord => url_app(
+                "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64",
+                "DiscordSetup.exe",
+                "-s",
+            ),
+            // Moonlight's release asset is versioned (no stable direct URL), so use winget — present on
+            // Windows 11. Accept the agreements so it runs non-interactively.
+            GuestApp::Moonlight => "winget install --id MoonlightGameStreamingProject.Moonlight -e --silent --accept-package-agreements --accept-source-agreements".to_string(),
         }
     }
 }
@@ -196,6 +204,16 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
         r"cmd /c for %d in (D E F G) do @if exist %d:\virtio-win-guest-tools.exe start /wait %d:\virtio-win-guest-tools.exe /install /passive /norestart",
     );
     let mut order = 2;
+    // Bring up the virtio-fs service so a shared Steam library (if the station attaches one) mounts as
+    // a drive. Harmless when there's no share — the service just starts. The user then adds it in Steam
+    // (Settings → Storage → Add Drive). See docs/STEAM-GAMES.md.
+    first_logon += &logon_cmd(
+        order,
+        "Start virtio-fs service (shared Steam library, if attached)",
+        // `&` is XML-escaped — the answer file is parsed as XML (see the ampersand test).
+        r#"cmd /c sc config VirtioFsSvc start= auto &amp; net start VirtioFsSvc"#,
+    );
+    order += 1;
     if let Some(exe) = &spec.vgpu_driver_exe {
         // NVIDIA's DCH installer supports a silent, no-reboot install; the vGPU binds after the
         // station's next boot. The seed disc's drive letter isn't deterministic, so probe the likely ones.
@@ -226,16 +244,7 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
     for app in &spec.apps {
         // Fetch the official installer to %TEMP% and run it silently. The `&amp;` is the cmd separator;
         // the URL is XML-escaped separately (Discord's has raw `&` in its query string).
-        first_logon += &logon_cmd(
-            order,
-            &format!("Install {}", app.label()),
-            &format!(
-                "cmd /c curl.exe -fL \"{url}\" -o \"%TEMP%\\{exe}\" &amp; start /wait \"\" \"%TEMP%\\{exe}\" {args}",
-                url = xml_escape(app.url()),
-                exe = app.exe(),
-                args = app.silent_args(),
-            ),
-        );
+        first_logon += &logon_cmd(order, &format!("Install {}", app.label()), &app.command());
         order += 1;
     }
 
@@ -428,7 +437,7 @@ mod tests {
         assert!(!xml.contains("ClientConfigToken"));
         assert!(!xml.contains("SteamSetup.exe"));
         // Only the virtio guest-tools command — nothing follows it.
-        assert_eq!(logon_count(&xml), 1);
+        assert_eq!(logon_count(&xml), 2);
     }
 
     #[test]
@@ -439,8 +448,8 @@ mod tests {
         });
         assert!(xml.contains("Install NVIDIA vGPU guest driver"));
         assert!(xml.contains(r"%d:\nvidia-vgpu-guest.exe -s -noreboot"));
-        // virtio + driver.
-        assert_eq!(logon_count(&xml), 2);
+        // virtio + virtio-fs + driver.
+        assert_eq!(logon_count(&xml), 3);
     }
 
     #[test]
@@ -460,7 +469,7 @@ mod tests {
             xml.find("Install NVIDIA vGPU guest driver").unwrap()
                 < xml.find("client_config_token.tok").unwrap()
         );
-        assert_eq!(logon_count(&xml), 3);
+        assert_eq!(logon_count(&xml), 4);
     }
 
     #[test]
@@ -476,7 +485,7 @@ mod tests {
         assert!(xml.contains("DiscordSetup.exe\" -s"));
         // Steam before Sunshine before Discord; virtio + 3 apps = 4 commands.
         assert!(xml.find("Install Steam").unwrap() < xml.find("Install Discord").unwrap());
-        assert_eq!(logon_count(&xml), 4);
+        assert_eq!(logon_count(&xml), 5);
     }
 
     #[test]
@@ -507,8 +516,8 @@ mod tests {
             apps: vec![GuestApp::Steam],
             ..Default::default()
         });
-        // virtio + driver + token + steam.
-        assert_eq!(logon_count(&xml), 4);
+        // virtio + virtio-fs + driver + token + steam.
+        assert_eq!(logon_count(&xml), 5);
         assert!(xml.find("client_config_token.tok").unwrap() < xml.find("Install Steam").unwrap());
     }
 }

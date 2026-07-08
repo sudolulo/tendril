@@ -106,6 +106,7 @@ pub async fn list_page() -> Markup {
             "stations",
             "Stations",
             html! {
+                (crate::pages::overview_strip())
                 div.btnrow style="margin-bottom:16px" {
                     a.btn.primary href="/stations/new" { "+ New station" }
                 }
@@ -130,6 +131,7 @@ pub async fn list_page() -> Markup {
         "stations",
         "Stations",
         html! {
+            (crate::pages::overview_strip())
             div.btnrow style="margin-bottom:16px" {
                 a.btn.primary href="/stations/new" { "+ New station" }
             }

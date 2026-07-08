@@ -9,8 +9,8 @@ use tendril_orchestrator::DomainState;
 
 /// The nav items, in order: (href, key, label). `key` matches the `active` arg on each page.
 const NAV: &[(&str, &str, &str)] = &[
-    ("/", "dashboard", "Dashboard"),
-    ("/stations", "stations", "Stations"),
+    // Stations is the landing page (`/`) — the former Dashboard folded into it as a summary strip.
+    ("/", "stations", "Stations"),
     ("/hardware", "hardware", "Hardware"),
     ("/media", "media", "Media"),
     ("/network", "network", "Network"),
@@ -58,9 +58,9 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                         @for (href, key, label) in NAV {
                             a href=(href) class=(if *key == active { "active" } else { "" }) { (label) }
                         }
-                        @if crate::federation::enabled() {
-                            a href="/fleet" class=(if active == "fleet" { "active" } else { "" }) { "Fleet" }
-                        }
+                        // Always visible — federation is a headline capability, and a lone node needs a
+                        // discoverable place to create or join a fleet (chicken-and-egg otherwise).
+                        a href="/fleet" class=(if active == "fleet" { "active" } else { "" }) { "Fleet" }
                     }
                     div.spacer {}
                     button.themebtn type="button" onclick="tglTheme()"

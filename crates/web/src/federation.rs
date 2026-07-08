@@ -819,6 +819,82 @@ pub async fn api_provision(
     })
 }
 
+/// Valid remote station lifecycle actions (guards the path before it's proxied to a peer).
+fn valid_action(a: &str) -> bool {
+    matches!(a, "start" | "stop" | "forceoff" | "delete")
+}
+
+/// Remote station lifecycle API: perform an action on a station **on this node**, called by a peer
+/// controlling it from its Stations page. Token-authed by the auth middleware (X-Tendril-Federation).
+pub async fn api_station_action(
+    axum::extract::Path((name, action)): axum::extract::Path<(String, String)>,
+) -> axum::Json<ProvisionResult> {
+    if ui::is_demo() {
+        return axum::Json(ProvisionResult {
+            ok: false,
+            error: Some("disabled in the demo".into()),
+        });
+    }
+    if !valid_action(&action) {
+        return axum::Json(ProvisionResult {
+            ok: false,
+            error: Some(format!("unknown action: {action}")),
+        });
+    }
+    let res = tokio::task::spawn_blocking(move || crate::stations::lifecycle(&name, &action))
+        .await
+        .unwrap_or_else(|_| Err("station action task panicked".into()));
+    axum::Json(match res {
+        Ok(()) => ProvisionResult {
+            ok: true,
+            error: None,
+        },
+        Err(e) => ProvisionResult {
+            ok: false,
+            error: Some(e),
+        },
+    })
+}
+
+/// Call a peer's station-action API over the federation transport (mTLS, or token + plain TLS).
+fn remote_station_action(
+    url: &str,
+    fed: Option<&str>,
+    name: &str,
+    action: &str,
+) -> Result<(), String> {
+    let (base, sec) = crate::fedtls::transport(url, fed);
+    let ep = format!("{base}/api/station/{name}/{action}");
+    let auth = format!("X-Tendril-Federation: {}", federation_token());
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend(["--max-time", "60", "-X", "POST", "-H", &auth, &ep]);
+    let out = ui::run_result("curl", &args)?;
+    let res: ProvisionResult =
+        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
+    if res.ok {
+        Ok(())
+    } else {
+        Err(res.error.unwrap_or_else(|| "remote action failed".into()))
+    }
+}
+
+/// Dispatch a station lifecycle action to the node that owns the station — locally if it's us, else
+/// over the peer's API. Rejects unknown actions before touching anything.
+pub fn station_action_dispatch(node: &str, name: &str, action: &str) -> Result<(), String> {
+    if !valid_action(action) {
+        return Err(format!("unknown action: {action}"));
+    }
+    if node == node_name() {
+        crate::stations::lifecycle(name, action)
+    } else {
+        let peer = peers()
+            .into_iter()
+            .find(|p| p.name == node)
+            .ok_or("unknown peer node")?;
+        remote_station_action(&peer.url, peer.fed.as_deref(), name, action)
+    }
+}
+
 /// Post a provision spec to a peer's `/api/provision` over HTTP (curl, federation token).
 fn remote_provision(url: &str, fed: Option<&str>, spec: &ProvisionSpec) -> Result<(), String> {
     let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
@@ -1312,34 +1388,114 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
 /// A peer node's stations as a read-only panel — rendered on the Stations page for every node
 /// other than this one (a peer's stations are managed on that peer, not here).
 pub fn stations_peer_panel(n: &NodeInfo) -> Markup {
-    ui::panel(
-        &n.name,
-        Some(if n.reachable {
-            "peer · online"
-        } else {
-            "peer · unreachable"
-        }),
-        html! {
-            div.pad {
-                @if !n.reachable {
-                    p.sub { "Node not responding. Recover its image-backed stations from the " a href="/fleet" { "Fleet" } " page." }
-                } @else if n.stations.is_empty() {
-                    p.sub { "No stations on this node." }
-                } @else {
-                    div.scroll { table {
-                        thead { tr { th { "Station" } th { "State" } th.right { "GPU" } } }
-                        tbody { @for s in &n.stations {
-                            tr {
-                                td.mono { (s.name) }
-                                td { (s.state) }
-                                td.right { @if s.gpu { "\u{2713}" } @else { span.sub { "\u{2014}" } } }
-                            }
-                        } }
-                    } }
-                }
+    peer_panel(n, None)
+}
+
+/// A peer node's stations panel with per-station controls (start/stop/delete dispatched to that node
+/// over the federation API). Wrapped in a stable id so an action swaps just this panel. `err` renders
+/// a banner inside the wrapper (used when re-rendering after a failed action).
+fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
+    let free = n
+        .gpus
+        .iter()
+        .filter(|g| g.used_by.is_none() && g.capability == "Passthrough")
+        .count();
+    let wrap = format!("peer-{}", safe_component(&n.name));
+    let body = html! {
+        div.pad {
+            @if let Some(e) = err { div.banner.error style="margin-bottom:10px" { (e) } }
+            // One-line node context: reachability · stations · GPUs free · uptime.
+            p.sub style="margin:0 0 10px" {
+                @if n.reachable { "online" } @else { "unreachable" }
+                " · " (n.stations.len()) " station(s) · " (n.gpus.len()) " GPU(s), " (free) " free"
+                @if !n.health.uptime.is_empty() { " · up " (n.health.uptime) }
             }
-        },
-    )
+            @if !n.reachable {
+                p.sub { "Node not responding. Recover its image-backed stations from the " a href="/fleet" { "Fleet" } " page." }
+            } @else if n.stations.is_empty() {
+                p.sub { "No stations on this node." }
+            } @else {
+                div.scroll { table {
+                    thead { tr { th { "Station" } th { "State" } th.right { "Actions" } } }
+                    tbody { @for s in &n.stations {
+                        @let running = s.state.eq_ignore_ascii_case("running");
+                        tr {
+                            td.mono {
+                                (s.name)
+                                @if !s.gpu { span.sub title="no GPU passed through" { " \u{26a0}" } }
+                            }
+                            td { (s.state) }
+                            td.right { div.actions {
+                                @if running {
+                                    (peer_action_btn(&n.name, &s.name, "stop", "Shut down", true, &wrap))
+                                } @else {
+                                    (peer_action_btn(&n.name, &s.name, "start", "Start", false, &wrap))
+                                }
+                                (peer_action_btn(&n.name, &s.name, "delete", "Delete", true, &wrap))
+                            } }
+                        }
+                    } }
+                } }
+            }
+        }
+    };
+    html! {
+        div id=(wrap) {
+            (ui::panel(&n.name, Some(if n.reachable { "peer · online" } else { "peer · unreachable" }), body))
+        }
+    }
+}
+
+/// A control button that dispatches a station action to a peer node and swaps this peer's panel.
+fn peer_action_btn(
+    node: &str,
+    station: &str,
+    action: &str,
+    label: &str,
+    danger: bool,
+    wrap: &str,
+) -> Markup {
+    let confirm = (action == "delete").then(|| {
+        format!("Delete station '{station}' on {node}? It's forced off and its VM definition removed on that node.")
+    });
+    html! {
+        button class=(if danger { "btn sm danger" } else { "btn sm" })
+            hx-post=(format!("/fleet/{node}/station/{station}/{action}"))
+            hx-target=(format!("#{wrap}")) hx-swap="outerHTML"
+            hx-confirm=[confirm.as_deref()] { (label) }
+    }
+}
+
+/// UI proxy: run a lifecycle action on a peer's station, then re-render that peer's panel.
+pub async fn peer_station_action(
+    axum::extract::Path((node, name, action)): axum::extract::Path<(String, String, String)>,
+) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let (nd, st, ac) = (node.clone(), name.clone(), action.clone());
+    let res = tokio::task::spawn_blocking(move || station_action_dispatch(&nd, &st, &ac))
+        .await
+        .unwrap_or_else(|_| Err("dispatch task panicked".into()));
+    // Re-fetch this peer's fresh state so the panel reflects the action.
+    let nd2 = node.clone();
+    let fresh = tokio::task::spawn_blocking(move || fleet().into_iter().find(|x| x.name == nd2))
+        .await
+        .ok()
+        .flatten();
+    match fresh {
+        Some(x) => peer_panel(&x, res.err().as_deref()),
+        None => peer_panel(
+            &NodeInfo {
+                name: node,
+                reachable: false,
+                stations: Vec::new(),
+                gpus: Vec::new(),
+                health: Health::default(),
+            },
+            res.err().as_deref(),
+        ),
+    }
 }
 
 fn node_card(n: &NodeInfo) -> Markup {

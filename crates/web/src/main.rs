@@ -78,6 +78,8 @@ async fn main() {
             "/fleet/:node/station/:name/:action",
             post(federation::peer_station_action),
         )
+        // Self-refresh poll for a single peer's stations panel.
+        .route("/fleet/:node/panel", get(federation::peer_panel_fragment))
         .route("/api/node", get(federation::api_node))
         .route("/api/provision", post(federation::api_provision))
         .route(

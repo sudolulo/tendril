@@ -1714,8 +1714,9 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
     }
 }
 
-/// A peer node's stations as a read-only panel — rendered on the Stations page for every node
-/// other than this one (a peer's stations are managed on that peer, not here).
+/// A peer node's stations panel — rendered on the Stations page for every node other than this one.
+/// Its lifecycle controls (start/stop/force-off/delete) dispatch to the owning node over the
+/// federation API, so a peer's stations are fully controllable from here, not just visible.
 pub fn stations_peer_panel(n: &NodeInfo) -> Markup {
     peer_panel(n, None)
 }
@@ -1756,7 +1757,8 @@ fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
                             td { (s.state) }
                             td.right { div.actions {
                                 @if running {
-                                    (peer_action_btn(&n.name, &s.name, "stop", "Shut down", true, &wrap))
+                                    (peer_action_btn(&n.name, &s.name, "stop", "Shut down", false, &wrap))
+                                    (peer_action_btn(&n.name, &s.name, "forceoff", "Force off", true, &wrap))
                                 } @else {
                                     (peer_action_btn(&n.name, &s.name, "start", "Start", false, &wrap))
                                 }
@@ -1769,9 +1771,45 @@ fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
         }
     };
     html! {
-        div id=(wrap) {
+        // Self-refresh: re-fetch just this peer every 8s (like the local panel's 6s poll), swapping
+        // the whole wrapper. Actions also target #wrap, so they compose with the poll.
+        div id=(wrap)
+            hx-get=(format!("/fleet/{}/panel", n.name))
+            hx-trigger="every 8s" hx-target="this" hx-swap="outerHTML" {
             (ui::panel(&n.name, Some(if n.reachable { "peer · online" } else { "peer · unreachable" }), body))
         }
+    }
+}
+
+/// UI poll: re-fetch a single peer's fresh state and re-render just its panel (self-refresh).
+pub async fn peer_panel_fragment(
+    axum::extract::Path(node): axum::extract::Path<String>,
+) -> Markup {
+    if ui::is_demo() {
+        return match demo_fleet().into_iter().find(|x| x.name == node) {
+            Some(x) => peer_panel(&x, None),
+            None => html! {},
+        };
+    }
+    let nd = node.clone();
+    let fresh = tokio::task::spawn_blocking(move || {
+        peers().into_iter().find(|p| p.name == nd).map(|p| fetch_peer(&p))
+    })
+    .await
+    .ok()
+    .flatten();
+    match fresh {
+        Some(x) => peer_panel(&x, None),
+        None => peer_panel(
+            &NodeInfo {
+                name: node,
+                reachable: false,
+                stations: Vec::new(),
+                gpus: Vec::new(),
+                health: Health::default(),
+            },
+            None,
+        ),
     }
 }
 

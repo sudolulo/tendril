@@ -136,8 +136,8 @@ pub async fn list_page() -> Markup {
                 a.btn.primary href="/stations/new" { "+ New station" }
             }
             p.sub style="margin-bottom:16px" {
-                "Every station across the fleet. This node's stations are controllable here; a peer's "
-                "stations are managed on that node. Machines and health live on the "
+                "Every station across the fleet — start, stop, and delete any of them from here, on this "
+                "node or any peer. Machines and health live on the "
                 a href="/fleet" { "Fleet" } " page."
             }
             (ui::panel(&format!("{local} · this node"), None, fragment(&Libvirt::system())))

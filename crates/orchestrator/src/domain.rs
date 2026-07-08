@@ -328,7 +328,10 @@ mod tests {
             steam_library_dir: Some("/var/lib/tendril/store/steam-library".to_string()),
         };
         let on = render(&spec);
-        assert!(on.contains("<access mode='shared'/>"), "virtio-fs needs shared memory backing");
+        assert!(
+            on.contains("<access mode='shared'/>"),
+            "virtio-fs needs shared memory backing"
+        );
         assert!(on.contains("<driver type='virtiofs'/>"));
         assert!(on.contains("<source dir='/var/lib/tendril/store/steam-library'/>"));
         assert!(on.contains("<target dir='tendril-steamlib'/>"));

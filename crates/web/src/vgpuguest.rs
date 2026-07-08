@@ -241,16 +241,31 @@ mod tests {
     #[test]
     fn every_release_pairs_a_run_and_exe_on_the_public_bucket() {
         for r in RELEASES {
-            assert!(r.run_url.starts_with(BUCKET) && r.run_url.ends_with("-grid.run"), "{}", r.label);
-            assert!(r.exe_url.starts_with(BUCKET) && r.exe_url.ends_with(".exe"), "{}", r.label);
+            assert!(
+                r.run_url.starts_with(BUCKET) && r.run_url.ends_with("-grid.run"),
+                "{}",
+                r.label
+            );
+            assert!(
+                r.exe_url.starts_with(BUCKET) && r.exe_url.ends_with(".exe"),
+                "{}",
+                r.label
+            );
             // The Linux guest version equals the host branch, so the branch appears in its .run URL.
-            assert!(r.run_url.contains(r.branch), "run url must embed the host branch for {}", r.label);
+            assert!(
+                r.run_url.contains(r.branch),
+                "run url must embed the host branch for {}",
+                r.label
+            );
         }
     }
 
     #[test]
     fn branch_lookup_is_exact() {
-        assert_eq!(release_for_branch("550.127.05").map(|r| r.label), Some("vGPU 17.4"));
+        assert_eq!(
+            release_for_branch("550.127.05").map(|r| r.label),
+            Some("vGPU 17.4")
+        );
         assert!(release_for_branch("").is_none());
         assert!(release_for_branch("999.99.99").is_none());
     }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use axum::extract::Path;
 use maud::{html, Markup};
 
-use tendril_capability_engine::{detect, iommu, pci, usb, Capability};
+use tendril_capability_engine::{detect, iommu, pci, usb, Capability, GpuVendor};
 use tendril_orchestrator::Libvirt;
 use tendril_provisioning::{apply, Mode, PassthroughStrategy, ProvisioningStrategy};
 
@@ -66,6 +66,7 @@ pub async fn page() -> Markup {
         "Hardware",
         html! {
             (ui::panel("GPUs & passthrough", None, gpu_fragment(None)))
+            (vgpu_driver_panel())
             (ui::panel("USB devices", None, usb_panel()))
             (ui::panel("Seats", Some("USB device groups a station passes through as one"), crate::seats::panel()))
         },
@@ -117,6 +118,116 @@ fn gpu_fragment(note: Option<Markup>) -> Markup {
                 (matrix.passthrough_capable().count()) " GPU(s) ready for passthrough. "
                 (matrix.vgpu_capable().count()) " support vGPU (mdev or SR-IOV)."
             }
+        }
+    }
+}
+
+/// The vGPU host-driver guide: since the host is an immutable bootc image, a vGPU driver isn't
+/// installed live — it's baked into a derived image variant and booted into. This panel detects which
+/// vendor's GPUs are present, whether vGPU profiles are already active, and shows the exact
+/// build/deploy commands for the matching variant (see image/vgpu/ + scripts/build-vgpu-variant.sh).
+fn vgpu_driver_panel() -> Markup {
+    let matrix = detect();
+    let present: Vec<GpuVendor> = {
+        let mut v: Vec<GpuVendor> = matrix
+            .gpus
+            .iter()
+            .map(|g| g.gpu.vendor)
+            .filter(|v| matches!(v, GpuVendor::Amd | GpuVendor::Nvidia))
+            .collect();
+        v.sort_by_key(|v| ui::vendor(*v));
+        v.dedup();
+        v
+    };
+    let active_for = |vendor: GpuVendor| {
+        matrix
+            .gpus
+            .iter()
+            .any(|g| g.gpu.vendor == vendor && g.vgpu.is_capable())
+    };
+    ui::panel(
+        "vGPU host driver",
+        Some("split one GPU across stations"),
+        html! {
+            div.pad {
+                p.sub style="margin-top:0" {
+                    "Splitting a GPU into several stations needs a vGPU host driver. Tendril's host is an "
+                    "immutable image, so the driver is "
+                    b { "baked into a derived image variant" }
+                    " and booted into — not installed live. Build a variant on a machine with "
+                    code { "podman" } " (the appliance or a workstation with this repo), then "
+                    code { "bootc switch" } " the appliance into it and reboot."
+                }
+                @if present.is_empty() {
+                    p.sub { "No AMD or NVIDIA GPUs detected here. vGPU applies to SR-IOV-capable AMD pro/datacenter cards and NVIDIA cards (consumer via " code { "vgpu_unlock" } ", datacenter officially)." }
+                }
+                @for vendor in &present {
+                    @let active = active_for(*vendor);
+                    div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)" {
+                        div style="display:flex; align-items:center; gap:10px; margin-bottom:6px" {
+                            b { (ui::vendor(*vendor)) }
+                            @if active {
+                                span.badge title="This GPU already advertises vGPU profiles — the host driver is loaded" { "active" }
+                            } @else {
+                                span.badge title="No mdev/SR-IOV profiles detected — the vGPU host driver isn't loaded" { "not installed" }
+                            }
+                        }
+                        @match vendor {
+                            GpuVendor::Amd => (amd_guide(active)),
+                            GpuVendor::Nvidia => (nvidia_guide(active)),
+                            _ => {}
+                        }
+                    }
+                }
+                p.sub style="margin-top:14px" {
+                    "Supported cards and the full walkthrough: "
+                    a href="https://git.onetick.ninja/flan/tendril/src/branch/dev/docs/VGPU.md" { "docs/VGPU.md" }
+                    " · "
+                    a href="https://git.onetick.ninja/flan/tendril/wiki/vGPU-Supported-GPUs" { "supported-GPU list" }
+                    "."
+                }
+            }
+        },
+    )
+}
+
+/// A shell-command block for the guides.
+fn cmd(text: &str) -> Markup {
+    html! { pre.mono style="margin:6px 0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12.5px" { (text) } }
+}
+
+fn amd_guide(active: bool) -> Markup {
+    html! {
+        @if active {
+            p.sub style="margin:0" { "vGPU profiles are advertised — the AMD GIM driver is loaded. Create split stations from the station wizard." }
+        } @else {
+            p.sub style="margin:0 0 4px" {
+                "AMD's GIM (GPU-IOV Module) is open-source and redistributable, so this builds fully "
+                "unattended. It covers SR-IOV-capable pro/datacenter cards (FirePro S7150, Instinct MI-series) — "
+                b { "not" } " consumer Radeon, which has no vGPU."
+            }
+            (cmd("scripts/build-vgpu-variant.sh amd"))
+            div.sub { "Then, on the appliance:" }
+            (cmd("sudo bootc switch localhost/tendril:vgpu-amd && sudo reboot"))
+        }
+    }
+}
+
+fn nvidia_guide(active: bool) -> Markup {
+    html! {
+        @if active {
+            p.sub style="margin:0" { "vGPU profiles are advertised — the NVIDIA vGPU host driver is loaded. Create split stations from the station wizard." }
+        } @else {
+            p.sub style="margin:0 0 4px" {
+                "The NVIDIA vGPU host driver is licensed and non-redistributable, so "
+                b { "you supply the " } code { ".run" }
+                " — free via NVIDIA's 90-day vGPU evaluation. The build then installs it, applies "
+                code { "vgpu_unlock" } " for consumer GeForce cards, and enables the vGPU services."
+            }
+            div.sub { "Drop your host driver in, then build:" }
+            (cmd("cp NVIDIA-Linux-x86_64-<ver>-vgpu-kvm.run image/vgpu/nvidia-vgpu.run\nscripts/build-vgpu-variant.sh nvidia"))
+            div.sub { "Then, on the appliance:" }
+            (cmd("sudo bootc switch localhost/tendril:vgpu-nvidia && sudo reboot"))
         }
     }
 }

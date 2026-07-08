@@ -36,6 +36,8 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "Tendril · " (title) }
+                // Apply the saved theme before first paint to avoid a flash.
+                script { (PreEscaped(THEME_BOOT)) }
                 script src="/assets/htmx.min.js" {}
                 style { (PreEscaped(CSS)) }
             }
@@ -61,6 +63,18 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
                         }
                     }
                     div.spacer {}
+                    button.themebtn type="button" onclick="tglTheme()"
+                        title="Toggle light / dark theme" aria-label="Toggle light / dark theme" {
+                        svg.i-sun viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" {
+                            circle cx="12" cy="12" r="4" {}
+                            path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" {}
+                        }
+                        svg.i-moon viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" {
+                            path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" {}
+                        }
+                    }
                     @if is_demo() {
                         span.demobadge title="Live demo — actions are disabled" { "◆ DEMO" }
                     }
@@ -182,6 +196,13 @@ pub fn run_result(cmd: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Runs in <head> before paint: applies the saved theme, and defines the toggle.
+/// No stored preference → no data-theme attr → the CSS follows the OS setting.
+pub const THEME_BOOT: &str = r#"
+(function(){try{var t=localStorage.getItem('tendril-theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+function tglTheme(){var r=document.documentElement;var cur=r.getAttribute('data-theme');if(!cur)cur=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';var nx=cur==='dark'?'light':'dark';r.setAttribute('data-theme',nx);try{localStorage.setItem('tendril-theme',nx);}catch(e){}}
+"#;
+
 pub const CSS: &str = r#"
 :root {
   --bg:#0e1217; --surface:#161c24; --surface-2:#1b232d; --line:#273240;
@@ -296,6 +317,21 @@ tbody tr:hover { background:var(--surface-2); }
 .btn.sm { padding:5px 10px; font-size:12.5px; }
 .btn.danger:hover { border-color:var(--crit); color:var(--crit); }
 .btnrow { display:flex; gap:8px; flex-wrap:wrap; }
+
+.themebtn { display:inline-flex; align-items:center; justify-content:center; cursor:pointer;
+  width:34px; height:34px; padding:0; border:1px solid var(--line); border-radius:999px;
+  background:var(--surface); color:var(--muted); }
+.themebtn:hover { border-color:var(--faint); color:var(--fg); background:var(--surface-2); }
+.themebtn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.themebtn svg { width:17px; height:17px; display:none; }
+/* Show the icon for the theme you'd switch TO: dark shows the sun, light shows the moon. */
+:root:not([data-theme]) .themebtn .i-sun { display:block; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .themebtn .i-sun { display:none; }
+  :root:not([data-theme]) .themebtn .i-moon { display:block; }
+}
+:root[data-theme="dark"] .themebtn .i-sun { display:block; }
+:root[data-theme="light"] .themebtn .i-moon { display:block; }
 
 form.grid { display:grid; grid-template-columns:repeat(2,1fr); gap:16px 20px; }
 .field { display:flex; flex-direction:column; gap:6px; }

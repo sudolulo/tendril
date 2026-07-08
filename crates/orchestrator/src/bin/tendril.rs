@@ -351,6 +351,7 @@ fn menu_create_station() {
             seed_iso,
         },
         usb_devices: Vec::new(),
+        steam_library_dir: None,
         define: true,
         start,
     };

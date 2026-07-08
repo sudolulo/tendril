@@ -40,6 +40,9 @@ pub struct StationRequest {
     pub define: bool,
     /// Start the domain (implies `define`).
     pub start: bool,
+    /// Host directory to share into the guest as a shared Steam library (virtio-fs). Resolved by the
+    /// caller (it knows the store); `None` = no shared library. See docs/STEAM-GAMES.md.
+    pub steam_library_dir: Option<String>,
 }
 
 impl StationRequest {
@@ -104,6 +107,7 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
         mdev_uuid: req.mdev_uuid.clone(),
         media: req.media.clone(),
         usb_devices: req.usb_devices.clone(),
+        steam_library_dir: req.steam_library_dir.clone(),
     };
     report.xml = render(&spec);
 
@@ -138,6 +142,7 @@ mod tests {
             usb_devices: vec![],
             define: false,
             start: false,
+            steam_library_dir: None,
         }
     }
 

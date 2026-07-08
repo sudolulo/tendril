@@ -38,6 +38,7 @@ fn main() {
         mdev_uuid: None,
         media: InstallMedia::none(),
         usb_devices: Vec::new(),
+        steam_library_dir: None,
     };
 
     print!("{}", render(&spec));

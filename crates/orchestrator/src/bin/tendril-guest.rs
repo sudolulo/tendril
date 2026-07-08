@@ -103,6 +103,7 @@ fn main() {
         mdev_uuid: None,
         media,
         usb_devices: Vec::new(),
+        steam_library_dir: None,
         define,
         start,
     };

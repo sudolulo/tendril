@@ -362,6 +362,9 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field.check.install-only { input type="checkbox" name="app_steam" id="app_steam" checked; label for="app_steam" { "Install Steam" } }
                             div.field.check.install-only { input type="checkbox" name="app_sunshine" id="app_sunshine" checked; label for="app_sunshine" { "Sunshine — stream to Moonlight" } span.hint { "Recommended for a seatless station — otherwise there's no low-latency way to see it. Installs on Windows, enables Bazzite's on Linux." } }
                             div.field.check.install-only { input type="checkbox" name="app_discord" id="app_discord" checked; label for="app_discord" { "Install Discord" } }
+                            @if crate::storage::store_root().is_some() {
+                                div.field.check.install-only { input type="checkbox" name="steam_library" id="steam_library"; label for="steam_library" { "Shared Steam library (experimental)" } span.hint { "Shares the fleet store's steam-library/ folder into this station over virtio-fs — install games once, read from many. Update from one station at a time. See docs/STEAM-GAMES.md." } }
+                            }
                         }
                         div.grid style="margin-top:12px" {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
@@ -459,6 +462,18 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     // Clone-from-image path: if a base image is chosen, the disk is a copy-on-write overlay of it and
     // there's no install step — just define the VM (which boots straight from the cloned disk). The
     // guest OS comes from the image (recorded at save time), not the wizard, so it can't be mismatched.
+    // Shared Steam library (experimental): when on and a store is configured, share <store>/steam-library
+    // into the station over virtio-fs (games installed once, read by many). See docs/STEAM-GAMES.md.
+    let steam_lib = if checked("steam_library") {
+        crate::storage::store_root().map(|r| {
+            let d = format!("{r}/steam-library");
+            let _ = std::fs::create_dir_all(&d);
+            d
+        })
+    } else {
+        None
+    };
+
     let base_image = get("base_image");
     if !base_image.is_empty() {
         let Some(base_path) = crate::images::path_of(&base_image) else {
@@ -491,6 +506,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             usb_devices,
             define: true,
             start: checked("start"),
+            steam_library_dir: steam_lib.clone(),
         };
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
@@ -572,6 +588,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         usb_devices,
         define: true,
         start: checked("start"),
+        steam_library_dir: steam_lib.clone(),
     };
 
     // Refuse install media that failed checksum verification (a `.mismatch` marker). Media with no
@@ -933,6 +950,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         usb_devices: Vec::new(),
         define: true,
         start: s.start,
+        steam_library_dir: None, // fleet-placed stations: shared library is a follow-up
     };
     provision(&req, &Libvirt::system()).map_err(|e| e.to_string())?;
     record_local(

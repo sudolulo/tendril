@@ -35,6 +35,11 @@ pub struct DomainSpec<'a> {
     pub media: InstallMedia,
     /// USB devices to pass through by id (per-seat keyboard/mouse); may be empty.
     pub usb_devices: Vec<UsbPassthrough>,
+    /// Host directory to share into the guest over virtio-fs as a shared Steam library (games
+    /// installed once, read by many stations). `None` = no shared library. Requires shared-memory
+    /// backing, which is emitted automatically when this is set. The guest mounts it by the tag
+    /// `tendril-steamlib`.
+    pub steam_library_dir: Option<String>,
 }
 
 /// Render `spec` into a libvirt domain XML document.
@@ -51,6 +56,10 @@ pub fn render(spec: &DomainSpec) -> String {
     let _ = writeln!(xml, "  <name>{}</name>", s.name);
     let _ = writeln!(xml, "  <memory unit='MiB'>{}</memory>", spec.memory_mib);
     let _ = writeln!(xml, "  <vcpu>{}</vcpu>", spec.vcpus);
+    // virtio-fs needs the guest memory shared with the vhost-user device.
+    if spec.steam_library_dir.is_some() {
+        xml.push_str("  <memoryBacking>\n    <source type='memfd'/>\n    <access mode='shared'/>\n  </memoryBacking>\n");
+    }
 
     // Firmware: OVMF with Secure Boot (Windows 11 requires it).
     xml.push_str("  <os firmware='efi'>\n");
@@ -86,6 +95,15 @@ pub fn render(spec: &DomainSpec) -> String {
     let _ = writeln!(xml, "  <clock offset='{clock}'/>");
 
     xml.push_str("  <devices>\n");
+    // Shared Steam library over virtio-fs: the host's steam-library folder appears in the guest under
+    // the tag `tendril-steamlib` (mounted + registered with Steam by the guest's first-boot setup).
+    if let Some(dir) = &spec.steam_library_dir {
+        xml.push_str("    <filesystem type='mount' accessmode='passthrough'>\n");
+        xml.push_str("      <driver type='virtiofs'/>\n");
+        let _ = writeln!(xml, "      <source dir='{dir}'/>");
+        xml.push_str("      <target dir='tendril-steamlib'/>\n");
+        xml.push_str("    </filesystem>\n");
+    }
     // Boot disk. Boots first unless install media is present.
     let disk_boot = if spec.media.install_iso.is_some() {
         2
@@ -208,6 +226,7 @@ mod tests {
             mdev_uuid: None,
             media: InstallMedia::none(),
             usb_devices: vec![],
+            steam_library_dir: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("<name>s1</name>"));
@@ -235,6 +254,7 @@ mod tests {
             mdev_uuid: None,
             media: InstallMedia::none(),
             usb_devices: vec![],
+            steam_library_dir: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("<hidden state='on'/>"));
@@ -258,6 +278,7 @@ mod tests {
                 seed_iso: Some("/isos/station1-seed.iso".to_string()),
             },
             usb_devices: vec![],
+            steam_library_dir: None,
         };
         let xml = render(&spec);
         assert_eq!(xml.matches("device='cdrom'").count(), 3);
@@ -284,11 +305,38 @@ mod tests {
                 vendor_id: 0x046d,
                 product_id: 0xc52b,
             }],
+            steam_library_dir: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("type='usb'"));
         assert!(xml.contains("<vendor id='0x046d'/>"));
         assert!(xml.contains("<product id='0xc52b'/>"));
+    }
+
+    #[test]
+    fn steam_library_renders_virtiofs_and_shared_memory() {
+        let st = station(false, GuestOs::SteamOs);
+        let mut spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+            mdev_uuid: None,
+            media: InstallMedia::none(),
+            usb_devices: vec![],
+            steam_library_dir: Some("/var/lib/tendril/store/steam-library".to_string()),
+        };
+        let on = render(&spec);
+        assert!(on.contains("<access mode='shared'/>"), "virtio-fs needs shared memory backing");
+        assert!(on.contains("<driver type='virtiofs'/>"));
+        assert!(on.contains("<source dir='/var/lib/tendril/store/steam-library'/>"));
+        assert!(on.contains("<target dir='tendril-steamlib'/>"));
+        // Off by default: neither the shared-memory backing nor the filesystem appear.
+        spec.steam_library_dir = None;
+        let off = render(&spec);
+        assert!(!off.contains("virtiofs"));
+        assert!(!off.contains("memoryBacking"));
     }
 
     #[test]
@@ -303,6 +351,7 @@ mod tests {
             mdev_uuid: Some("f2c0d6a4-1111-2222-3333-444455556666".to_string()),
             media: InstallMedia::none(),
             usb_devices: vec![],
+            steam_library_dir: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("type='mdev' model='vfio-pci'"));

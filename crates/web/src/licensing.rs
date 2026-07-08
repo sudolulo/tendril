@@ -243,9 +243,7 @@ pub fn guest_token_url() -> Option<String> {
     let c = read_conf();
     match c.mode {
         Mode::External if !c.external.is_empty() => Some(c.external),
-        Mode::Builtin if running() => {
-            Some(format!("https://{}:{}/-/client-token", c.url, c.port))
-        }
+        Mode::Builtin if running() => Some(format!("https://{}:{}/-/client-token", c.url, c.port)),
         _ => None,
     }
 }
@@ -282,7 +280,9 @@ pub async fn use_builtin(Form(f): Form<BuiltinForm>) -> Markup {
     }
     let banner = if crate::hardware::nvidia_vgpu_active() {
         match start(&c) {
-            Ok(()) => html! { div.banner.ok { "Built-in license server running — new NVIDIA-vGPU stations are licensed automatically." } },
+            Ok(()) => {
+                html! { div.banner.ok { "Built-in license server running — new NVIDIA-vGPU stations are licensed automatically." } }
+            }
             Err(e) => html! { div.banner.error { (e) } },
         }
     } else {

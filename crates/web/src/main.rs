@@ -99,6 +99,8 @@ async fn main() {
         .route("/system/shutdown", post(pages::system_shutdown))
         .route("/system/logs", get(pages::logs))
         .route("/system/logs/download", get(pages::logs_download))
+        .route("/system/tls/upload", post(tls::upload))
+        .route("/system/tls/regenerate", post(tls::regenerate))
         // auth
         .route("/login", get(auth::login_page).post(auth::login))
         .route("/logout", post(auth::logout))
@@ -126,6 +128,8 @@ async fn main() {
                 let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
                     .await
                     .unwrap_or_else(|e| panic!("load TLS cert {cert}: {e}"));
+                // Stash the live config so the UI can hot-swap the cert without a restart.
+                tls::set_live_config(config.clone());
                 let sock: std::net::SocketAddr =
                     addr.parse().unwrap_or_else(|e| panic!("addr {addr}: {e}"));
                 // Optional HTTP→HTTPS redirect (e.g. :80 → :443) so bare-hostname visits still land.

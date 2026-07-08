@@ -525,6 +525,7 @@ pub async fn system() -> Markup {
                 }))
             }
             (ui::panel("Host", None, host_info()))
+            (crate::tls::panel())
             (ui::panel("Logs", Some("live · filterable · downloadable"), logs_fragment(false)))
         },
     )

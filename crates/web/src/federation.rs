@@ -75,16 +75,101 @@ fn host_of(url: &str) -> String {
         .to_string()
 }
 
-/// Configured peers (from `TENDRIL_PEERS` env, else `federation.conf`).
-pub fn peers() -> Vec<Peer> {
-    let entries: Vec<String> = match std::env::var("TENDRIL_PEERS") {
-        Ok(v) => v.split(',').map(|s| s.to_string()).collect(),
-        Err(_) => conf().2,
-    };
-    entries.iter().filter_map(|e| parse_peer(e)).collect()
+/// The shared-store directory holding each node's presence file (auto-discovery).
+fn nodes_dir() -> Option<String> {
+    crate::storage::store_root().map(|r| format!("{r}/nodes"))
 }
 
-/// True when this node is part of a fleet (any peers configured) — gates the Fleet nav/view.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// This node's presence record, published to the shared store so peers auto-discover it.
+#[derive(Serialize, Deserialize, Clone)]
+struct Presence {
+    name: String,
+    url: String,
+    ts: u64,
+}
+
+/// The base URL peers should reach this node at: explicit override, else `http://<lan-ip>:<port>`.
+fn advertise_url() -> String {
+    if let Ok(u) = std::env::var("TENDRIL_ADVERTISE_URL") {
+        let u = u.trim().trim_end_matches('/');
+        if !u.is_empty() {
+            return u.to_string();
+        }
+    }
+    let port = std::env::var("TENDRIL_WEB_ADDR")
+        .ok()
+        .and_then(|a| a.rsplit(':').next().map(str::to_string))
+        .unwrap_or_else(|| "8080".to_string());
+    let ip = ui::run_stdout("hostname", &["-I"])
+        .and_then(|s| s.split_whitespace().next().map(str::to_string))
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    format!("http://{ip}:{port}")
+}
+
+/// Publish/refresh this node's presence on the shared store (called periodically). No-op without a
+/// shared store (then federation falls back to manually configured peers).
+pub fn heartbeat() {
+    let Some(dir) = nodes_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let rec = Presence {
+        name: node_name(),
+        url: advertise_url(),
+        ts: now_secs(),
+    };
+    if let Ok(j) = serde_json::to_string(&rec) {
+        let _ = std::fs::write(format!("{dir}/{}.json", safe_component(&node_name())), j);
+    }
+}
+
+/// Fleet peers: **auto-discovered** from the shared store's presence files (zero config — every node
+/// that heartbeats there is found), unioned with any manually configured peers (env/conf), deduped by
+/// name and excluding self.
+pub fn peers() -> Vec<Peer> {
+    let me = node_name();
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(me.clone());
+    let mut out: Vec<Peer> = Vec::new();
+    if let Some(dir) = nodes_dir() {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                if e.path().extension().is_some_and(|x| x == "json") {
+                    if let Ok(txt) = std::fs::read_to_string(e.path()) {
+                        if let Ok(p) = serde_json::from_str::<Presence>(&txt) {
+                            if seen.insert(p.name.clone()) {
+                                out.push(Peer {
+                                    name: p.name,
+                                    url: p.url,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let entries: Vec<String> = match std::env::var("TENDRIL_PEERS") {
+        Ok(v) => v.split(',').map(str::to_string).collect(),
+        Err(_) => conf().2,
+    };
+    for e in entries {
+        if let Some(p) = parse_peer(&e) {
+            if seen.insert(p.name.clone()) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// True when this node is part of a fleet (any peers discovered/configured) — gates the Fleet nav/view.
 pub fn enabled() -> bool {
     !peers().is_empty()
 }
@@ -99,12 +184,69 @@ pub fn node_name() -> String {
         .unwrap_or_else(|| "tendril".to_string())
 }
 
-/// The shared token peers present to each other (env, else conf, else a token file).
+/// A strong random token (two kernel UUIDs, dashes stripped → 64 hex chars).
+fn new_random_token() -> Option<String> {
+    let a = std::fs::read_to_string("/proc/sys/kernel/random/uuid").ok()?;
+    let b = std::fs::read_to_string("/proc/sys/kernel/random/uuid").ok()?;
+    Some(format!(
+        "{}{}",
+        a.trim().replace('-', ""),
+        b.trim().replace('-', "")
+    ))
+}
+
+/// The shared token peers present to each other. Precedence: env → conf → **auto-managed on the shared
+/// store** (`<store>/fleet-token`, generated once, 0600) → legacy token file. Auto-generation on the
+/// store is what makes membership zero-config: every node that mounts the store reads the same token.
 fn federation_token() -> String {
-    std::env::var("TENDRIL_FEDERATION_TOKEN")
+    if let Ok(t) = std::env::var("TENDRIL_FEDERATION_TOKEN") {
+        let t = t.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(t) = conf().1.filter(|t| !t.is_empty()) {
+        return t;
+    }
+    if let Some(root) = crate::storage::store_root() {
+        let p = format!("{root}/fleet-token");
+        if let Ok(t) = std::fs::read_to_string(&p) {
+            let t = t.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+        // Generate once; create_new loses the race gracefully (the winner's token is then read).
+        if let Some(tok) = new_random_token() {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&p)
+            {
+                Ok(mut f) => {
+                    use std::io::Write as _;
+                    let _ = f.write_all(tok.as_bytes());
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ =
+                            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+                    }
+                    return tok;
+                }
+                Err(_) => {
+                    if let Ok(t) = std::fs::read_to_string(&p) {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            return t.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::fs::read_to_string("/etc/tendril/federation-token")
         .ok()
-        .or_else(|| conf().1)
-        .or_else(|| std::fs::read_to_string("/etc/tendril/federation-token").ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }

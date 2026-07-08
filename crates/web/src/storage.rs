@@ -93,6 +93,15 @@ fn active_mount() -> Option<String> {
     is_mounted(&s.mount).then_some(s.mount)
 }
 
+/// The mounted shared store's root — the fleet coordination point (node presence + shared token).
+/// `None` when this node runs on local storage only (federation then needs manual peers).
+pub fn store_root() -> Option<String> {
+    std::env::var("TENDRIL_STORE_ROOT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(active_mount)
+}
+
 /// Where install ISOs live: env override, else the mounted store's `isos/`, else the local default.
 pub fn iso_dir() -> String {
     std::env::var("TENDRIL_ISO_DIR")

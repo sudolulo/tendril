@@ -160,17 +160,36 @@ pub async fn forceoff(Path(n): Path<String>) -> Markup {
     act(|lv| lv.destroy(&n))
 }
 pub async fn delete(Path(n): Path<String>) -> Markup {
-    // Capture any vGPU mdev this station holds before the definition is gone, then tear it down too.
-    let mdev = station_mdev_uuid(&n);
-    let out = act(|lv| {
-        let _ = lv.destroy(&n); // force off if running (ignored if already stopped)
-        lv.undefine(&n)
-    });
-    if let Some(uuid) = mdev {
-        crate::vgpu::remove_mdev(&uuid);
+    let err = lifecycle(&n, "delete").err();
+    html! {
+        @if let Some(e) = err { div.banner.error { (e) } }
+        (fragment(&Libvirt::system()))
     }
-    crate::federation::forget_station(&crate::federation::node_name(), &n);
-    out
+}
+
+/// Perform a lifecycle action on a **local** station by name — the shared core behind both the local
+/// UI handlers and the federation API (so a peer can drive it from its Stations page). `delete` runs
+/// the full teardown (force off, undefine, release any vGPU mdev, forget it in the shared registry).
+pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
+    let lv = Libvirt::system();
+    let e = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
+    match action {
+        "start" => e(lv.start(name)),
+        "stop" => e(lv.shutdown(name)),
+        "forceoff" => e(lv.destroy(name)),
+        "delete" => {
+            // Capture any vGPU mdev before the definition is gone, then tear it down too.
+            let mdev = station_mdev_uuid(name);
+            let _ = lv.destroy(name); // force off if running (ignored if already stopped)
+            let r = e(lv.undefine(name));
+            if let Some(uuid) = mdev {
+                crate::vgpu::remove_mdev(&uuid);
+            }
+            crate::federation::forget_station(&crate::federation::node_name(), name);
+            r
+        }
+        _ => Err(format!("unknown station action: {action}")),
+    }
 }
 
 /// The UUID of a station's attached mediated device (vGPU), if it has one, read from its domain XML.

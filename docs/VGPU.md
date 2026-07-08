@@ -23,6 +23,24 @@ Once the driver is in place (after reboot), whatever it exposes shows up automat
 profile picker or the SR-IOV control. Whole-GPU passthrough is unchanged and remains the reliable
 default. See also the capability model in [docs/PLAN.md](PLAN.md).
 
+> **Community reference (NVIDIA).** [wvthoog's Proxmox vGPU guide](https://wvthoog.nl/proxmox-vgpu-v3/)
+> is a thorough walkthrough of the NVIDIA vGPU + `vgpu_unlock` process (driver install, consumer-card
+> unlock, `mdevctl`, licensing). It targets Proxmox, but the driver/unlock steps map directly onto our
+> image variant. **Caveat:** that guide auto-downloads the host `.run` from an unofficial mirror —
+> don't. Get your `.run` from NVIDIA's free
+> [90-day vGPU evaluation](https://www.nvidia.com/en-us/data-center/resources/vgpu-evaluation/) (or your
+> licensing portal), which is the only lawful source, and supply that to the build.
+
+## Guest licensing (NVIDIA) — FastAPI-DLS
+
+The host `.run` makes vGPU *work*; NVIDIA's licensing makes it run *un-throttled*. Each guest's vGPU
+driver leases a license on boot — unlicensed, it runs degraded and drops sessions (~24 h). The official
+path is an NVIDIA DLS/CLS license server; the common self-hosted path is
+[FastAPI-DLS](https://git.collinwebdesigns.de/oscar.krause/fastapi-dls), a minimal DLS re-implementation
+guests lease from. Tendril can run it for you (opt-in) — see the **vGPU licensing** panel on the
+**Hardware** page. It's separate from the `.run`: you need the driver regardless; DLS only removes the
+throttle. Emulating NVIDIA's licensing is a gray area — enable it only with your own entitlement.
+
 > **Status:** implemented, but **not yet validated on real vGPU hardware** — the dev box has no
 > mdev-capable driver. The sysfs paths, `mdevctl` calls, and mdev domain XML follow standard
 > libvirt/kernel conventions; the first run on an actual card is the real test.

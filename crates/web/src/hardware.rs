@@ -67,6 +67,9 @@ pub async fn page() -> Markup {
         html! {
             (ui::panel("GPUs & passthrough", None, gpu_fragment(None)))
             (vgpu_driver_panel())
+            @if detect().gpus.iter().any(|g| g.gpu.vendor == GpuVendor::Nvidia) {
+                (crate::licensing::panel())
+            }
             (ui::panel("USB devices", None, usb_panel()))
             (ui::panel("Seats", Some("USB device groups a station passes through as one"), crate::seats::panel()))
         },
@@ -229,6 +232,14 @@ fn nvidia_guide(active: bool) -> Markup {
             (cmd("cp NVIDIA-Linux-x86_64-<ver>-vgpu-kvm.run image/vgpu/nvidia-vgpu.run\nscripts/build-vgpu-variant.sh nvidia"))
             div.sub { "Then, on the appliance:" }
             (cmd("sudo bootc switch localhost/tendril:vgpu-nvidia && sudo reboot"))
+            p.sub style="margin:8px 0 0" {
+                "Get the licensed " code { ".run" } " free from NVIDIA's "
+                a href="https://www.nvidia.com/en-us/data-center/resources/vgpu-evaluation/" { "90-day vGPU evaluation" }
+                ". A detailed community walkthrough of the whole vGPU + " code { "vgpu_unlock" } " process: "
+                a href="https://wvthoog.nl/proxmox-vgpu-v3/" { "wvthoog's guide" }
+                " — follow the driver/unlock steps, but source your " code { ".run" }
+                " from your own NVIDIA eval rather than any mirror it links."
+            }
         }
     }
 }

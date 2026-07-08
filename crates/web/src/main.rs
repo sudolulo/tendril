@@ -10,6 +10,7 @@ mod demo;
 mod federation;
 mod hardware;
 mod images;
+mod licensing;
 mod network;
 mod pages;
 mod seats;
@@ -76,6 +77,8 @@ async fn main() {
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))
         .route("/hardware/:addr/sriov", post(hardware::sriov))
+        .route("/hardware/dls/enable", post(licensing::enable))
+        .route("/hardware/dls/disable", post(licensing::disable))
         .route("/seats", post(seats::create))
         .route("/seats/delete", post(seats::delete))
         // media + network

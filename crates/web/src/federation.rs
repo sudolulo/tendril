@@ -186,8 +186,9 @@ pub fn peers() -> Vec<Peer> {
 }
 
 /// True when this node is part of a fleet (any peers discovered/configured) — gates the Fleet nav/view.
+/// The public demo always shows a fleet (synthetic — see `demo_fleet`).
 pub fn enabled() -> bool {
-    !peers().is_empty()
+    ui::is_demo() || !peers().is_empty()
 }
 
 /// This node's name in the fleet.
@@ -433,9 +434,84 @@ pub async fn api_node() -> axum::Json<NodeInfo> {
 
 /// The aggregated fleet page.
 pub async fn page() -> Markup {
+    if ui::is_demo() {
+        return fleet_page(demo_fleet(), None);
+    }
     // Peer fetches shell out with a timeout; run off the async worker.
     let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
     fleet_page(nodes, None)
+}
+
+/// A synthetic multi-node fleet for the public demo: a few heterogeneous boxes with stations and GPUs,
+/// including a vGPU-split node and one that's offline (to show the re-home story).
+fn demo_fleet() -> Vec<NodeInfo> {
+    let station = |name: &str, state: &str, gpu: bool| StationInfo {
+        name: name.to_string(),
+        state: state.to_string(),
+        gpu,
+    };
+    let gpu = |addr: &str, label: &str, cap: &str, used: Option<&str>| GpuInfo {
+        address: addr.to_string(),
+        label: label.to_string(),
+        capability: cap.to_string(),
+        used_by: used.map(str::to_string),
+    };
+    let health = |uptime: &str, used: f64, total: f64| Health {
+        uptime: uptime.to_string(),
+        load: String::new(),
+        mem_used_gb: used,
+        mem_total_gb: total,
+    };
+    vec![
+        NodeInfo {
+            name: "aurora".into(),
+            reachable: true,
+            stations: vec![
+                station("win-arcade", "Running", true),
+                station("steam-den", "Running", true),
+                station("test-bench", "Shutoff", true),
+            ],
+            gpus: vec![
+                gpu("0000:01:00.0", "NVIDIA RTX 4090", "Passthrough", Some("win-arcade")),
+                gpu("0000:41:00.0", "NVIDIA RTX 3080", "Passthrough", Some("steam-den")),
+            ],
+            health: health("6 days", 38.0, 64.0),
+        },
+        NodeInfo {
+            name: "nebula".into(),
+            reachable: true,
+            stations: vec![
+                station("couch-coop", "Running", true),
+                station("guest-1", "Shutoff", true),
+            ],
+            gpus: vec![
+                gpu("0000:01:00.0", "NVIDIA RTX 4080", "Passthrough", Some("couch-coop")),
+                gpu("0000:81:00.0", "NVIDIA RTX 4080", "Passthrough", None),
+            ],
+            health: health("13 days", 22.0, 32.0),
+        },
+        NodeInfo {
+            name: "quasar".into(),
+            reachable: true,
+            stations: vec![
+                station("vgpu-a", "Running", true),
+                station("vgpu-b", "Running", true),
+                station("vgpu-c", "Running", true),
+            ],
+            gpus: vec![
+                gpu("0000:01:00.0", "NVIDIA A40", "VgpuOfficial", Some("vgpu-a, vgpu-b, vgpu-c")),
+                gpu("0000:c1:00.0", "NVIDIA RTX 4070", "Passthrough", None),
+            ],
+            health: health("2 days", 51.0, 128.0),
+        },
+        NodeInfo {
+            name: "eclipse".into(),
+            reachable: false,
+            stations: Vec::new(),
+            gpus: Vec::new(),
+            health: Health::default(),
+        },
+    ]
 }
 
 fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {

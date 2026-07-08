@@ -50,6 +50,10 @@ pub struct KickstartSpec {
     /// station. Idle-free (Sunshine only encodes when a client connects, on the GPU's NVENC block), so
     /// it's safe to leave on. Best-effort on atomic Bazzite; unvalidated on real hardware.
     pub enable_sunshine: bool,
+    /// Install the [Moonlight](https://moonlight-stream.org) game-stream **client** (Flathub
+    /// `com.moonlight_stream.Moonlight`) so this station can also *receive* a stream — the Linux
+    /// parallel of the Windows Moonlight app. Best-effort on atomic Bazzite.
+    pub enable_moonlight: bool,
 }
 
 impl Default for KickstartSpec {
@@ -67,6 +71,7 @@ impl Default for KickstartSpec {
             vgpu_guest_run: None,
             dls_token_url: None,
             enable_sunshine: false,
+            enable_moonlight: false,
         }
     }
 }
@@ -276,6 +281,40 @@ systemctl enable tendril-sunshine-setup.service
 %end
 "##,
             user = spec.username,
+        );
+    }
+
+    if spec.enable_moonlight {
+        // Moonlight game-stream CLIENT (Flathub) so the station can also *receive* a stream. First-boot
+        // install; the user launches it from the app grid. Best-effort on atomic Bazzite.
+        let _ = write!(
+            ks,
+            r##"
+%post
+mkdir -p /etc/tendril
+cat >/etc/tendril/moonlight-setup.sh <<'EOF'
+#!/bin/sh
+flatpak info com.moonlight_stream.Moonlight >/dev/null 2>&1 && exit 0
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true
+flatpak install -y --noninteractive flathub com.moonlight_stream.Moonlight || exit 0
+EOF
+chmod +x /etc/tendril/moonlight-setup.sh
+cat >/etc/systemd/system/tendril-moonlight-setup.service <<'EOF'
+[Unit]
+Description=Tendril: install Moonlight client (first boot)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/etc/tendril/moonlight-setup.sh
+ExecStartPost=/bin/systemctl disable tendril-moonlight-setup.service
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable tendril-moonlight-setup.service
+%end
+"##,
         );
     }
     ks

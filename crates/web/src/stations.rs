@@ -837,6 +837,7 @@ fn build_seed(
                 // Same Sunshine toggle as Windows — here it enables Bazzite's Sunshine rather than
                 // installing an .exe. Steam/Discord aren't wired: Bazzite already ships Steam+gaming mode.
                 enable_sunshine: apps.contains(&GuestApp::Sunshine),
+                enable_moonlight: apps.contains(&GuestApp::Moonlight),
                 ..KickstartSpec::default()
             };
             build_kickstart_seed_with(&spec, &extras, path)?

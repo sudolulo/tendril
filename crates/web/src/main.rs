@@ -55,6 +55,12 @@ async fn main() {
     // listener and the browser HTTPS server build rustls configs that require it.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // vGPU guest licensing is automatic: if the admin chose the built-in license server and this host's
+    // vGPU is active, make sure it's running. No-op in demo, when the admin runs their own license
+    // server, or when vGPU isn't active yet (then it starts once the host driver loads). Off-thread
+    // because it may pull a container image + generate a cert.
+    std::thread::spawn(licensing::ensure_auto_started);
+
     let app = Router::new()
         // Stations is the landing page (the former Dashboard folded into it as a summary strip).
         .route("/", get(stations::list_page))
@@ -130,8 +136,8 @@ async fn main() {
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))
         .route("/hardware/:addr/sriov", post(hardware::sriov))
-        .route("/hardware/dls/enable", post(licensing::enable))
-        .route("/hardware/dls/disable", post(licensing::disable))
+        .route("/hardware/dls/builtin", post(licensing::use_builtin))
+        .route("/hardware/dls/external", post(licensing::use_external))
         // Staging the NVIDIA .run is a multi-hundred-MB upload — lift the body limit on this route.
         .route(
             "/hardware/vgpu/run",

@@ -926,7 +926,7 @@ fn build_seed(
                 // The token is only useful once the guest driver is present.
                 dls_token_url: staged
                     .as_ref()
-                    .and_then(|_| crate::licensing::token_url_if_running()),
+                    .and_then(|_| crate::licensing::guest_token_url()),
                 apps: apps.to_vec(),
                 data_volume,
                 ..UnattendSpec::default()
@@ -958,7 +958,7 @@ fn build_seed(
                     .map(|_| crate::vgpuguest::LINUX_DISC_NAME.to_string()),
                 dls_token_url: staged
                     .as_ref()
-                    .and_then(|_| crate::licensing::token_url_if_running()),
+                    .and_then(|_| crate::licensing::guest_token_url()),
                 // Same Sunshine toggle as Windows — here it enables Bazzite's Sunshine rather than
                 // installing an .exe. Steam/Discord aren't wired: Bazzite already ships Steam+gaming mode.
                 enable_sunshine: apps.contains(&GuestApp::Sunshine),

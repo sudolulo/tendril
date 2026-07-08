@@ -143,6 +143,16 @@ pub(crate) fn vgpu_system_panels() -> Option<Markup> {
     })
 }
 
+/// True when an NVIDIA GPU on this host already advertises vGPU profiles (the host driver is loaded) —
+/// the signal that vGPU is "on", so guest licensing should be in effect. Used by [`crate::licensing`]
+/// to auto-start the built-in license server only once vGPU is actually active.
+pub(crate) fn nvidia_vgpu_active() -> bool {
+    detect()
+        .gpus
+        .iter()
+        .any(|g| g.gpu.vendor == GpuVendor::Nvidia && g.vgpu.is_capable())
+}
+
 /// The vGPU host-driver guide: since the host is an immutable bootc image, a vGPU driver isn't
 /// installed live — it's baked into a derived image variant and booted into. This panel detects which
 /// vendor's GPUs are present, whether vGPU profiles are already active, and shows the exact

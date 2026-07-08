@@ -13,10 +13,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use tendril_capability_engine::{detect, iommu, pci, usb};
-use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso, create_overlay};
+use tendril_orchestrator::guest::{build_kickstart_seed_with, build_seed_iso_with, create_overlay};
 use tendril_orchestrator::{
-    provision, DomainState, GuestOs, InstallMedia, KickstartSpec, Libvirt, StationRequest,
-    UnattendSpec, UsbPassthrough,
+    provision, DomainState, GuestApp, GuestOs, InstallMedia, KickstartSpec, Libvirt,
+    StationRequest, UnattendSpec, UsbPassthrough,
 };
 use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
@@ -357,6 +357,9 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field.check.install-only { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } span.hint { "On by default — installs the guest OS without prompts using the account above. Uncheck for a manual install." } }
                             div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
                             div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install immediately)" } }
+                            div.field.check.install-only { input type="checkbox" name="app_steam" id="app_steam" checked; label for="app_steam" { "Install Steam" } }
+                            div.field.check.install-only { input type="checkbox" name="app_sunshine" id="app_sunshine" checked; label for="app_sunshine" { "Sunshine — stream to Moonlight" } span.hint { "Recommended for a seatless station — otherwise there's no low-latency way to see it. Installs on Windows, enables Bazzite's on Linux." } }
+                            div.field.check.install-only { input type="checkbox" name="app_discord" id="app_discord" checked; label for="app_discord" { "Install Discord" } }
                         }
                         div.grid style="margin-top:12px" {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
@@ -501,6 +504,16 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     }
 
     let seed_iso = if checked("unattend") {
+        let mut apps = Vec::new();
+        if checked("app_steam") {
+            apps.push(GuestApp::Steam);
+        }
+        if checked("app_sunshine") {
+            apps.push(GuestApp::Sunshine);
+        }
+        if checked("app_discord") {
+            apps.push(GuestApp::Discord);
+        }
         match build_seed(
             guest,
             &name,
@@ -508,6 +521,8 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             &get("username"),
             &get("password"),
             &get("hostname"),
+            &get("gpu"),
+            &apps,
         ) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -714,6 +729,14 @@ fn fetching_page(name: &str, guest: GuestOs) -> Markup {
     )
 }
 
+/// Build the hands-off install seed for a station.
+///
+/// `gpu` is the wizard's raw GPU selection (an `mdev:…` value marks an NVIDIA vGPU slice); `apps` are
+/// the apps to bake in. For a Windows station bound to an NVIDIA vGPU with a guest driver staged, the
+/// driver is copied onto the seed disc and the answer file installs it on first logon, plus the DLS
+/// licensing token if the license server is running. Whole-GPU passthrough and non-Windows guests are
+/// unaffected.
+#[allow(clippy::too_many_arguments)] // a flat seed spec; the fields are all distinct scalars
 fn build_seed(
     guest: GuestOs,
     name: &str,
@@ -721,6 +744,8 @@ fn build_seed(
     username: &str,
     password: &str,
     hostname: &str,
+    gpu: &str,
+    apps: &[GuestApp],
 ) -> std::io::Result<String> {
     let dir = FsPath::new(disk)
         .parent()
@@ -730,8 +755,18 @@ fn build_seed(
     let seed = format!("{dir}/{name}-seed.iso");
     let path = FsPath::new(&seed);
     match guest {
-        GuestOs::Windows => build_seed_iso(
-            &UnattendSpec {
+        GuestOs::Windows => {
+            // Inject the NVIDIA vGPU guest driver only when this station is bound to a vGPU (mdev)
+            // slice AND a guest driver has been staged — a whole-GPU-passthrough station gets its
+            // driver from Windows Update / the vendor instead.
+            let is_vgpu = gpu.starts_with(crate::vgpu::MDEV_PREFIX);
+            let staged = is_vgpu.then(crate::vgpuguest::staged_installer).flatten();
+            let mut extras: Vec<(&str, &FsPath)> = Vec::new();
+            let staged_path = staged.as_deref().map(FsPath::new);
+            if let Some(p) = staged_path {
+                extras.push((crate::vgpuguest::DISC_NAME, p));
+            }
+            let spec = UnattendSpec {
                 computer_name: if hostname.trim().is_empty() {
                     name.to_uppercase()
                 } else {
@@ -739,12 +774,30 @@ fn build_seed(
                 },
                 username: username.to_string(),
                 password: password.to_string(),
+                vgpu_driver_exe: staged
+                    .as_ref()
+                    .map(|_| crate::vgpuguest::DISC_NAME.to_string()),
+                // The token is only useful once the guest driver is present.
+                dls_token_url: staged
+                    .as_ref()
+                    .and_then(|_| crate::licensing::token_url_if_running()),
+                apps: apps.to_vec(),
                 ..UnattendSpec::default()
-            },
-            path,
-        )?,
-        GuestOs::SteamOs => build_kickstart_seed(
-            &KickstartSpec {
+            };
+            build_seed_iso_with(&spec, &extras, path)?
+        }
+        GuestOs::SteamOs => {
+            // Same gating as Windows: inject the Linux vGPU guest driver only for a station on a vGPU
+            // (mdev) slice with a `.run` staged. It rides the OEMDRV kickstart seed and a first-boot
+            // service installs it.
+            let is_vgpu = gpu.starts_with(crate::vgpu::MDEV_PREFIX);
+            let staged = is_vgpu.then(crate::vgpuguest::staged_linux_run).flatten();
+            let mut extras: Vec<(&str, &FsPath)> = Vec::new();
+            let staged_path = staged.as_deref().map(FsPath::new);
+            if let Some(p) = staged_path {
+                extras.push((crate::vgpuguest::LINUX_DISC_NAME, p));
+            }
+            let spec = KickstartSpec {
                 hostname: if hostname.trim().is_empty() {
                     name.to_string()
                 } else {
@@ -752,10 +805,19 @@ fn build_seed(
                 },
                 username: username.to_string(),
                 password: password.to_string(),
+                vgpu_guest_run: staged
+                    .as_ref()
+                    .map(|_| crate::vgpuguest::LINUX_DISC_NAME.to_string()),
+                dls_token_url: staged
+                    .as_ref()
+                    .and_then(|_| crate::licensing::token_url_if_running()),
+                // Same Sunshine toggle as Windows — here it enables Bazzite's Sunshine rather than
+                // installing an .exe. Steam/Discord aren't wired: Bazzite already ships Steam+gaming mode.
+                enable_sunshine: apps.contains(&GuestApp::Sunshine),
                 ..KickstartSpec::default()
-            },
-            path,
-        )?,
+            };
+            build_kickstart_seed_with(&spec, &extras, path)?
+        }
     }
     Ok(seed)
 }
@@ -830,9 +892,20 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
             } else {
                 s.password.trim()
             };
+            // The federation/API path leaves vGPU + app selection to the node's own wizard for now,
+            // so no guest-driver injection or apps here.
             Some(
-                build_seed(guest, &s.name, &disk, user, pass, s.hostname.trim())
-                    .map_err(|e| e.to_string())?,
+                build_seed(
+                    guest,
+                    &s.name,
+                    &disk,
+                    user,
+                    pass,
+                    s.hostname.trim(),
+                    "",
+                    &[],
+                )
+                .map_err(|e| e.to_string())?,
             )
         } else {
             None

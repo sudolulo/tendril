@@ -41,6 +41,27 @@ guests lease from. Tendril can run it for you (opt-in) — see the **vGPU licens
 **Hardware** page. It's separate from the `.run`: you need the driver regardless; DLS only removes the
 throttle. Emulating NVIDIA's licensing is a gray area — enable it only with your own entitlement.
 
+### Automatic guest setup (Windows)
+
+The guest also needs the **GRID guest driver installed inside it** — separate from the host `.run` and
+part of the same licensed package. Rather than RDP-ing in to install it by hand, stage it once on the
+**Hardware** page (**vGPU guest driver** panel — upload the Windows `.exe` or give a URL). Then, when a
+hands-off Windows station is bound to an NVIDIA vGPU (mdev) slice, Tendril bakes the driver onto the
+seed disc and its `autounattend.xml` installs it on first logon; if the FastAPI-DLS server is running,
+the station also fetches its licensing token automatically, so a fresh vGPU station comes up licensed
+and un-throttled with no manual steps. The **New station** wizard can additionally bake in **Steam**,
+**Sunshine** (game-stream host — a seatless station needs it), and **Discord**, fetched from their
+official URLs on first boot. Whole-GPU-passthrough stations are unaffected (they get their driver from
+Windows Update / the vendor).
+
+Sourcing differs by guest OS. The **Windows** guest driver isn't published on NVIDIA's public bucket, so
+you supply it (upload/URL). The **Linux** guest `.run` *is* on NVIDIA's **official** public bucket
+(`nvidia-drivers-us-public` — the same source GCP uses), so the panel can **auto-fetch** it — pick the
+release matching your host driver branch and tick the entitlement box. Fetching from NVIDIA's own public
+URL is retrieval-from-source, not redistribution, but the vGPU EULA still gates *use*, so the attestation
+is required. SteamOS install is a first-boot oneshot; because Bazzite is atomic, it's best-effort
+scaffolding (the durable path is layering the driver into the image) and **unvalidated on real hardware**.
+
 > **Status:** implemented, but **not yet validated on real vGPU hardware** — the dev box has no
 > mdev-capable driver. The sysfs paths, `mdevctl` calls, and mdev domain XML follow standard
 > libvirt/kernel conventions; the first run on an actual card is the real test.

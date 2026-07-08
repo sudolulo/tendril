@@ -215,6 +215,17 @@ pub async fn enable(Form(f): Form<DlsForm>) -> Markup {
     }
 }
 
+/// The FastAPI-DLS client-token URL **if** the license server is currently running, else `None`.
+/// Station provisioning uses this to auto-fetch the token into a new NVIDIA-vGPU guest so it runs
+/// un-throttled without the admin pasting the PowerShell snippet by hand.
+pub fn token_url_if_running() -> Option<String> {
+    if !running() {
+        return None;
+    }
+    let c = read_conf();
+    Some(format!("https://{}:{}/-/client-token", c.url, c.port))
+}
+
 pub async fn disable() -> Markup {
     if ui::is_demo() {
         return panel_with(Some(html! { div.banner.warn { "Disabled in the demo." } }));

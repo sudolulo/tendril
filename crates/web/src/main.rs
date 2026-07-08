@@ -21,6 +21,7 @@ mod tls;
 mod ui;
 mod vgpu;
 mod vgpudrv;
+mod vgpuguest;
 
 use axum::extract::Path;
 use axum::http::{header, StatusCode};
@@ -119,6 +120,17 @@ async fn main() {
         .route("/hardware/vgpu/run/clear", post(vgpudrv::clear))
         .route("/hardware/vgpu/build", post(vgpudrv::build))
         .route("/hardware/vgpu/buildstatus", get(vgpudrv::build_status))
+        // Staging the guest driver is also a multi-hundred-MB upload — lift the body limit.
+        .route(
+            "/hardware/vgpu/guest",
+            post(vgpuguest::stage).layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route("/hardware/vgpu/guest/clear", post(vgpuguest::clear))
+        .route("/hardware/vgpu/guest/linux", post(vgpuguest::autofetch))
+        .route(
+            "/hardware/vgpu/guest/linux/clear",
+            post(vgpuguest::clear_linux),
+        )
         .route("/seats", post(seats::create))
         .route("/seats/delete", post(seats::delete))
         // media + network

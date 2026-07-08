@@ -247,6 +247,11 @@ fn nvidia_guide(active: bool) -> Markup {
             }
             (crate::vgpudrv::section(None))
         }
+        // The guest driver is staged independently of the host build — Windows vGPU stations install it
+        // on first boot. Shown in both states so it can be prepared before or after the host build.
+        div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
+            (crate::vgpuguest::section(None))
+        }
     }
 }
 

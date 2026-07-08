@@ -13,6 +13,62 @@ use std::fmt::Write as _;
 
 use crate::station::GuestOs;
 
+/// An application to fetch-and-silent-install on the station's first logon.
+///
+/// Unlike the NVIDIA vGPU guest driver (licensed → the admin stages it and it's baked onto the seed
+/// disc), these are free/redistributable, so they're pulled straight from their official download URLs
+/// at first boot — nothing to stage, and the seed ISO stays small. Requires guest network access on
+/// first boot (Windows stations get NAT by default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestApp {
+    /// Valve's Steam client.
+    Steam,
+    /// [Sunshine](https://github.com/LizardByte/Sunshine) — the self-hosted GameStream host that makes
+    /// a seatless station playable over a Moonlight client. The highest-value add for a headless VM.
+    Sunshine,
+    /// Discord.
+    Discord,
+}
+
+impl GuestApp {
+    /// Human label for the answer-file command description.
+    fn label(self) -> &'static str {
+        match self {
+            GuestApp::Steam => "Steam",
+            GuestApp::Sunshine => "Sunshine (game streaming host)",
+            GuestApp::Discord => "Discord",
+        }
+    }
+    /// Official download URL for the installer.
+    fn url(self) -> &'static str {
+        match self {
+            GuestApp::Steam => "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe",
+            GuestApp::Sunshine => {
+                "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.exe"
+            }
+            GuestApp::Discord => {
+                "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64"
+            }
+        }
+    }
+    /// Local filename to save the installer as (under `%TEMP%`).
+    fn exe(self) -> &'static str {
+        match self {
+            GuestApp::Steam => "SteamSetup.exe",
+            GuestApp::Sunshine => "SunshineSetup.exe",
+            GuestApp::Discord => "DiscordSetup.exe",
+        }
+    }
+    /// Silent-install switch(es) for the installer.
+    fn silent_args(self) -> &'static str {
+        match self {
+            // Steam: NSIS silent. Sunshine: NSIS silent. Discord: Squirrel silent.
+            GuestApp::Steam | GuestApp::Sunshine => "/S",
+            GuestApp::Discord => "-s",
+        }
+    }
+}
+
 /// Inputs for the generated answer file. Defaults suit a single local gaming station.
 #[derive(Debug, Clone)]
 pub struct UnattendSpec {
@@ -32,6 +88,18 @@ pub struct UnattendSpec {
     /// Log the user in automatically at boot (a gaming station has no keyboard at the login screen
     /// until the guest is up).
     pub autologon: bool,
+    /// Filename (on the attached seed disc) of an NVIDIA vGPU **guest** driver installer to run on
+    /// first logon. `None` for a whole-GPU-passthrough or non-NVIDIA station — those get their driver
+    /// from Windows Update / the vendor, not a vGPU GRID guest package. Set only for a station bound to
+    /// an NVIDIA vGPU (mdev) slice, which needs the matching GRID guest driver to use the vGPU at all.
+    pub vgpu_driver_exe: Option<String>,
+    /// URL of the FastAPI-DLS client-config token to fetch on first logon (removes the vGPU licensing
+    /// throttle). `None` when guest licensing isn't running. Only meaningful alongside
+    /// [`Self::vgpu_driver_exe`] — the token is inert without the guest driver.
+    pub dls_token_url: Option<String>,
+    /// Applications to fetch-and-silent-install on first logon (Steam, Sunshine, Discord). Empty for a
+    /// bare station.
+    pub apps: Vec<GuestApp>,
 }
 
 impl Default for UnattendSpec {
@@ -44,6 +112,9 @@ impl Default for UnattendSpec {
             timezone: "UTC".to_string(),
             edition_name: "Windows 11 Pro".to_string(),
             autologon: true,
+            vgpu_driver_exe: None,
+            dls_token_url: None,
+            apps: Vec::new(),
         }
     }
 }
@@ -65,6 +136,28 @@ const DRIVER_DIRS: &[&str] = &["viostor", "vioscsi", "NetKVM", "vioserial", "Bal
 /// The virtio ISO's drive letter isn't deterministic in WinPE; list the likely ones. Paths that
 /// don't resolve are skipped by Setup, so over-listing is harmless.
 const DRIVER_DRIVES: &[char] = &['d', 'e', 'f'];
+
+/// Escape `&`/`<`/`>` for text embedded in the XML answer file — notably URLs with query strings
+/// (e.g. Discord's `?channel=stable&platform=win`), whose raw `&` would otherwise be invalid XML. The
+/// answer-file parser turns these back into literal characters, and the URLs are double-quoted on the
+/// command line so cmd doesn't treat a decoded `&` as a separator.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// One `<SynchronousCommand>` entry for the `oobeSystem` `FirstLogonCommands` block. Commands run in
+/// `order` sequence after auto-logon; a failing one doesn't abort the rest.
+fn logon_cmd(order: u32, desc: &str, line: &str) -> String {
+    format!(
+        "\n        <SynchronousCommand wcm:action=\"add\">\
+         \n          <Order>{order}</Order>\
+         \n          <Description>{desc}</Description>\
+         \n          <CommandLine>{line}</CommandLine>\
+         \n        </SynchronousCommand>"
+    )
+}
 
 /// Render a Windows 11 `autounattend.xml` for `spec`.
 pub fn render_autounattend(spec: &UnattendSpec) -> String {
@@ -94,6 +187,57 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
     } else {
         String::new()
     };
+
+    // First-logon commands, in Order sequence. Order 1 is always the virtio guest tools; then (for an
+    // NVIDIA vGPU station) the GRID guest driver, the DLS licensing token, and finally any apps.
+    let mut first_logon = logon_cmd(
+        1,
+        "Install virtio guest tools (QEMU guest agent, balloon, drivers)",
+        r"cmd /c for %d in (D E F G) do @if exist %d:\virtio-win-guest-tools.exe start /wait %d:\virtio-win-guest-tools.exe /install /passive /norestart",
+    );
+    let mut order = 2;
+    if let Some(exe) = &spec.vgpu_driver_exe {
+        // NVIDIA's DCH installer supports a silent, no-reboot install; the vGPU binds after the
+        // station's next boot. The seed disc's drive letter isn't deterministic, so probe the likely ones.
+        first_logon += &logon_cmd(
+            order,
+            "Install NVIDIA vGPU guest driver",
+            &format!(
+                r"cmd /c for %d in (D E F G) do @if exist %d:\{exe} start /wait %d:\{exe} -s -noreboot"
+            ),
+        );
+        order += 1;
+    }
+    if let Some(url) = &spec.dls_token_url {
+        // `&` is cmd's command separator — XML-escaped here since the answer file is parsed as XML.
+        // The driver reads this token at boot; no service restart needed (the vGPU driver install
+        // above already requires a reboot to bind).
+        let dir = r"C:\Program Files\NVIDIA Corporation\vGPU Licensing\ClientConfigToken";
+        first_logon += &logon_cmd(
+            order,
+            "Fetch FastAPI-DLS vGPU licensing token",
+            &format!(
+                "cmd /c mkdir \"{dir}\" &amp; curl.exe --insecure -L \"{url}\" -o \"{dir}\\client_config_token.tok\"",
+                url = xml_escape(url),
+            ),
+        );
+        order += 1;
+    }
+    for app in &spec.apps {
+        // Fetch the official installer to %TEMP% and run it silently. The `&amp;` is the cmd separator;
+        // the URL is XML-escaped separately (Discord's has raw `&` in its query string).
+        first_logon += &logon_cmd(
+            order,
+            &format!("Install {}", app.label()),
+            &format!(
+                "cmd /c curl.exe -fL \"{url}\" -o \"%TEMP%\\{exe}\" &amp; start /wait \"\" \"%TEMP%\\{exe}\" {args}",
+                url = xml_escape(app.url()),
+                exe = app.exe(),
+                args = app.silent_args(),
+            ),
+        );
+        order += 1;
+    }
 
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
@@ -189,12 +333,7 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>{autologon}
-      <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add">
-          <Order>1</Order>
-          <Description>Install virtio guest tools (QEMU guest agent, balloon, drivers)</Description>
-          <CommandLine>cmd /c for %d in (D E F G) do @if exist %d:\virtio-win-guest-tools.exe start /wait %d:\virtio-win-guest-tools.exe /install /passive /norestart</CommandLine>
-        </SynchronousCommand>
+      <FirstLogonCommands>{first_logon}
       </FirstLogonCommands>
     </component>
   </settings>
@@ -209,6 +348,7 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
         user = spec.username,
         pass = spec.password,
         autologon = autologon,
+        first_logon = first_logon,
     )
 }
 
@@ -274,5 +414,101 @@ mod tests {
     fn no_answer_file_for_steamos() {
         assert!(UnattendSpec::for_guest(GuestOs::SteamOs).is_none());
         assert!(UnattendSpec::for_guest(GuestOs::Windows).is_some());
+    }
+
+    /// Number of first-logon `<SynchronousCommand>` entries in the answer file.
+    fn logon_count(xml: &str) -> usize {
+        xml.matches("<SynchronousCommand").count()
+    }
+
+    #[test]
+    fn plain_station_has_no_vgpu_token_or_apps() {
+        let xml = render_autounattend(&UnattendSpec::default());
+        assert!(!xml.contains("NVIDIA vGPU guest driver"));
+        assert!(!xml.contains("ClientConfigToken"));
+        assert!(!xml.contains("SteamSetup.exe"));
+        // Only the virtio guest-tools command — nothing follows it.
+        assert_eq!(logon_count(&xml), 1);
+    }
+
+    #[test]
+    fn injects_vgpu_guest_driver_command() {
+        let xml = render_autounattend(&UnattendSpec {
+            vgpu_driver_exe: Some("nvidia-vgpu-guest.exe".to_string()),
+            ..Default::default()
+        });
+        assert!(xml.contains("Install NVIDIA vGPU guest driver"));
+        assert!(xml.contains(r"%d:\nvidia-vgpu-guest.exe -s -noreboot"));
+        // virtio + driver.
+        assert_eq!(logon_count(&xml), 2);
+    }
+
+    #[test]
+    fn injects_dls_token_after_driver_xml_escaped() {
+        let xml = render_autounattend(&UnattendSpec {
+            vgpu_driver_exe: Some("nvidia-vgpu-guest.exe".to_string()),
+            dls_token_url: Some("https://10.0.0.2:8443/-/client-token".to_string()),
+            ..Default::default()
+        });
+        assert!(xml.contains("client_config_token.tok"));
+        assert!(xml.contains("https://10.0.0.2:8443/-/client-token"));
+        // `&` separator must be XML-escaped in the answer file, never raw.
+        assert!(xml.contains("&amp; curl.exe"));
+        assert!(!xml.contains("\" & curl.exe"));
+        // The driver command comes before the token command.
+        assert!(
+            xml.find("Install NVIDIA vGPU guest driver").unwrap()
+                < xml.find("client_config_token.tok").unwrap()
+        );
+        assert_eq!(logon_count(&xml), 3);
+    }
+
+    #[test]
+    fn installs_selected_apps_in_order() {
+        let xml = render_autounattend(&UnattendSpec {
+            apps: vec![GuestApp::Steam, GuestApp::Sunshine, GuestApp::Discord],
+            ..Default::default()
+        });
+        assert!(xml.contains("Install Steam"));
+        assert!(xml.contains("SteamSetup.exe\" /S"));
+        assert!(xml.contains("Sunshine-Windows-AMD64-installer.exe"));
+        assert!(xml.contains("SunshineSetup.exe\" /S"));
+        assert!(xml.contains("DiscordSetup.exe\" -s"));
+        // Steam before Sunshine before Discord; virtio + 3 apps = 4 commands.
+        assert!(xml.find("Install Steam").unwrap() < xml.find("Install Discord").unwrap());
+        assert_eq!(logon_count(&xml), 4);
+    }
+
+    #[test]
+    fn app_url_query_ampersands_are_xml_escaped() {
+        // Discord's installer URL carries a query string with raw `&`, which is invalid XML if not
+        // escaped — the answer file would fail to parse.
+        let xml = render_autounattend(&UnattendSpec {
+            apps: vec![GuestApp::Discord],
+            ..Default::default()
+        });
+        assert!(xml.contains("channel=stable&amp;platform=win&amp;arch=x64"));
+        // No unescaped ampersand anywhere in the document (every `&` is part of an entity).
+        for (i, _) in xml.match_indices('&') {
+            let tail = &xml[i..];
+            assert!(
+                tail.starts_with("&amp;") || tail.starts_with("&lt;") || tail.starts_with("&gt;"),
+                "unescaped '&' at byte {i}: {:?}",
+                &tail[..tail.len().min(12)]
+            );
+        }
+    }
+
+    #[test]
+    fn apps_follow_driver_and_token() {
+        let xml = render_autounattend(&UnattendSpec {
+            vgpu_driver_exe: Some("nvidia-vgpu-guest.exe".to_string()),
+            dls_token_url: Some("https://h/-/client-token".to_string()),
+            apps: vec![GuestApp::Steam],
+            ..Default::default()
+        });
+        // virtio + driver + token + steam.
+        assert_eq!(logon_count(&xml), 4);
+        assert!(xml.find("client_config_token.tok").unwrap() < xml.find("Install Steam").unwrap());
     }
 }

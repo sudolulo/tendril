@@ -99,9 +99,22 @@ impl InstallMedia {
 /// this seed disc — attached alongside the Windows and virtio ISOs — drives the whole install without
 /// a keypress.
 pub fn build_seed_iso(spec: &UnattendSpec, out_path: &Path) -> io::Result<()> {
+    build_seed_iso_with(spec, &[], out_path)
+}
+
+/// Like [`build_seed_iso`] but also copies `extras` (disc filename → source path) onto the seed disc —
+/// used to carry the licensed NVIDIA vGPU **guest** driver installer, which the answer file's
+/// first-logon commands then run from the disc. The binaries are large (hundreds of MB), so they're
+/// copied by path rather than held in memory.
+pub fn build_seed_iso_with(
+    spec: &UnattendSpec,
+    extras: &[(&str, &Path)],
+    out_path: &Path,
+) -> io::Result<()> {
     // Any volume label works — Windows scans all drives for the file by name.
     build_media_iso(
         &[("autounattend.xml", render_autounattend(spec))],
+        extras,
         "TENDRIL_SEED",
         out_path,
     )
@@ -112,18 +125,48 @@ pub fn build_seed_iso(spec: &UnattendSpec, out_path: &Path) -> io::Result<()> {
 /// The disc is labelled `OEMDRV`, which Anaconda auto-detects and reads `ks.cfg` from — no installer
 /// kernel argument or media modification needed.
 pub fn build_kickstart_seed(spec: &KickstartSpec, out_path: &Path) -> io::Result<()> {
-    build_media_iso(&[("ks.cfg", render_kickstart(spec))], "OEMDRV", out_path)
+    build_kickstart_seed_with(spec, &[], out_path)
 }
 
-/// Write `files` (name → content) to the root of a fresh ISO with volume `label`, at `out_path`.
-/// Uses `genisoimage` (or `mkisofs`), already needed by `fetch-windows-media.sh`.
-fn build_media_iso(files: &[(&str, String)], label: &str, out_path: &Path) -> io::Result<()> {
+/// Like [`build_kickstart_seed`] but also copies `extras` (disc filename → source path) onto the seed —
+/// used to carry the NVIDIA vGPU **guest** `.run`, which the kickstart's first-boot service then
+/// installs. Binaries are copied by path (they're hundreds of MB).
+pub fn build_kickstart_seed_with(
+    spec: &KickstartSpec,
+    extras: &[(&str, &Path)],
+    out_path: &Path,
+) -> io::Result<()> {
+    build_media_iso(
+        &[("ks.cfg", render_kickstart(spec))],
+        extras,
+        "OEMDRV",
+        out_path,
+    )
+}
+
+/// Write `files` (name → text content) plus `extras` (disc filename → source path, copied verbatim) to
+/// the root of a fresh ISO with volume `label`, at `out_path`. Uses `genisoimage` (or `mkisofs`),
+/// already needed by `fetch-windows-media.sh`.
+fn build_media_iso(
+    files: &[(&str, String)],
+    extras: &[(&str, &Path)],
+    label: &str,
+    out_path: &Path,
+) -> io::Result<()> {
     let staging = out_path.with_extension("seed.d");
     // Fresh staging dir each time so a re-run reflects the current spec.
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
     for (name, content) in files {
         std::fs::write(staging.join(name), content)?;
+    }
+    for (name, src) in extras {
+        std::fs::copy(src, staging.join(name)).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("staging {} onto seed disc: {e}", src.display()),
+            )
+        })?;
     }
 
     let mkisofs = which_mkisofs().ok_or_else(|| {

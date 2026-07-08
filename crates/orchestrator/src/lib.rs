@@ -14,10 +14,10 @@ pub mod station;
 pub mod unattend;
 
 pub use domain::{DomainSpec, UsbPassthrough};
-pub use guest::InstallMedia;
+pub use guest::{build_kickstart_seed_with, build_seed_iso_with, InstallMedia};
 pub use kickstart::{render_kickstart, KickstartSpec};
 pub use lifecycle::{DomainState, Libvirt};
 pub use provision::{provision, ProvisionReport, StationRequest};
 pub use role::Role;
 pub use station::{GuestOs, StationSpec};
-pub use unattend::{render_autounattend, UnattendSpec};
+pub use unattend::{render_autounattend, GuestApp, UnattendSpec};

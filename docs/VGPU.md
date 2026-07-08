@@ -11,9 +11,15 @@ detected per-GPU straight from sysfs:
   **Hardware** page has an inline control to enable *N* virtual functions; the VFs then appear as their
   own GPUs and are passed through with the normal whole-GPU path.
 
-**Tendril detects and guides — it does not install the vGPU host driver.** The proprietary NVIDIA vGPU
-driver (and, for consumer cards, the `vgpu_unlock` shim) or the Intel/AMD SR-IOV firmware must be in
-place on the host; once it is, whatever the driver exposes shows up automatically in the wizard's
+**Getting the host driver on the box.** Because the host is an immutable bootc image, the vGPU driver is
+**baked into a derived image and booted into**, not installed live — see
+[image/vgpu/](../image/vgpu/README.md) for the build variants:
+- **AMD MxGPU/GIM** — fully automated (open source), `scripts/build-vgpu-variant.sh amd`.
+- **NVIDIA vGPU + `vgpu_unlock`** — you supply the licensed `.run` (from NVIDIA's free vGPU eval or
+  licensing portal — Tendril won't fetch it from mirrors); the build applies `vgpu_unlock-rs` and
+  enables the host services: `scripts/build-vgpu-variant.sh nvidia`.
+
+Once the driver is in place (after reboot), whatever it exposes shows up automatically in the wizard's
 profile picker or the SR-IOV control. Whole-GPU passthrough is unchanged and remains the reliable
 default. See also the capability model in [docs/PLAN.md](PLAN.md).
 
@@ -78,8 +84,8 @@ If you're buying specifically to split one card across stations, a used **Turing
 
 ## Using it in Tendril
 
-1. Get the vGPU host driver working on the box (official NVIDIA vGPU, or `vgpu_unlock` for consumer
-   NVIDIA; SR-IOV firmware/driver for Intel/AMD). Tendril doesn't install these.
+1. Get the vGPU host driver onto the box by building + deploying a driver variant — AMD is automated,
+   NVIDIA takes your supplied `.run` (see [image/vgpu/](../image/vgpu/README.md)) — then reboot.
 2. **mdev:** open **New station** → the **GPU** dropdown lists each available vGPU profile
    ("… — vGPU: GRID RTX6000-4Q (2 free)") alongside whole-GPU options. Pick one; Tendril creates the
    mediated device and attaches it. Deleting the station tears the mdev down again.

@@ -1,0 +1,62 @@
+# Tendril vGPU variant — NVIDIA vGPU (+ vgpu_unlock for consumer GeForce).
+#
+# Installs the NVIDIA vGPU host driver YOU supply (licensed, non-redistributable — see
+# image/vgpu/README.md for the lawful source), builds it against the image kernel, applies
+# vgpu_unlock-rs so consumer cards expose vGPU, and enables the vGPU host services.
+#
+# Supply the driver as a build context file (git-ignored):
+#   cp NVIDIA-Linux-x86_64-<ver>-vgpu-kvm.run image/vgpu/nvidia-vgpu.run
+#   podman build -f image/vgpu/Containerfile.nvidia-vgpu-unlock --build-arg BASE=localhost/tendril:dev \
+#     -t localhost/tendril:vgpu-nvidia .
+#
+# Status: scaffolding — NOT validated on hardware. Verify: kernel-devel matches the image kernel, the
+# .run installs cleanly in a container build, vgpu_unlock-rs matches your driver version, and Secure
+# Boot module signing if host SB is enabled.
+
+ARG BASE=localhost/tendril:dev
+
+# ---- build the Rust vgpu_unlock-rs shim ----
+FROM quay.io/fedora/fedora-bootc:42 AS unlock
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:${PATH}
+ARG VGPU_UNLOCK_REPO=https://github.com/mbilker/vgpu_unlock-rs
+ARG VGPU_UNLOCK_REF=master
+RUN set -eux \
+    && dnf -y install git gcc curl \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path \
+    && git clone --depth 1 --branch "${VGPU_UNLOCK_REF}" "${VGPU_UNLOCK_REPO}" /src \
+    && cargo build --release --manifest-path /src/Cargo.toml \
+    && install -Dm644 /src/target/release/libvgpu_unlock_rs.so /out/libvgpu_unlock_rs.so
+
+# ---- host image: install the NVIDIA vGPU driver + wire the shim ----
+FROM ${BASE}
+ARG NVIDIA_VGPU_RUN=image/vgpu/nvidia-vgpu.run
+
+# The licensed host driver (you supply it; see README). Build fails clearly if it's missing.
+COPY ${NVIDIA_VGPU_RUN} /tmp/nvidia-vgpu.run
+
+RUN set -euxo pipefail \
+    && KVER="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | tail -1)" \
+    && dnf -y install make gcc "kernel-devel-${KVER}" mdevctl \
+    # Install the vGPU host driver, building its kernel modules against the image kernel (no X, no
+    # nouveau blacklist prompts — this is a headless host).
+    && chmod +x /tmp/nvidia-vgpu.run \
+    && /tmp/nvidia-vgpu.run --silent --no-questions --ui=none \
+         --kernel-name="${KVER}" --kernel-source-path="/usr/src/kernels/${KVER}" \
+    && depmod -a "${KVER}" \
+    && rm -f /tmp/nvidia-vgpu.run \
+    && dnf -y remove make gcc "kernel-devel-${KVER}" \
+    && dnf clean all
+
+# vgpu_unlock-rs: LD_PRELOAD the shim into the vGPU host services so consumer cards expose vGPU.
+COPY --from=unlock /out/libvgpu_unlock_rs.so /usr/lib64/libvgpu_unlock_rs.so
+RUN set -eux \
+    && mkdir -p /etc/vgpu_unlock \
+    && for svc in nvidia-vgpud nvidia-vgpu-mgr; do \
+         mkdir -p "/etc/systemd/system/${svc}.service.d"; \
+         printf '[Service]\nEnvironment=LD_PRELOAD=/usr/lib64/libvgpu_unlock_rs.so\n' \
+           > "/etc/systemd/system/${svc}.service.d/vgpu-unlock.conf"; \
+       done \
+    && systemctl enable nvidia-vgpud.service nvidia-vgpu-mgr.service
+
+LABEL org.tendril.vgpu="nvidia-vgpu-unlock"
+RUN bootc container lint

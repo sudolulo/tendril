@@ -1,0 +1,36 @@
+# Tendril vGPU variant — AMD MxGPU via GIM (GPU-IOV Module).
+#
+# Layers AMD's open-source GIM host driver onto the base Tendril image and builds it against the image
+# kernel. Fully automated (GIM is redistributable). Supports AMD's SR-IOV-capable pro/datacenter cards
+# (FirePro S7150, Instinct MI-series, …) — NOT consumer Radeon.
+#
+#   podman build -f image/vgpu/Containerfile.amd-gim --build-arg BASE=localhost/tendril:dev \
+#     -t localhost/tendril:vgpu-amd .
+#
+# Status: scaffolding — verify the GIM ref + card support against your hardware (see image/vgpu/README.md).
+
+ARG BASE=localhost/tendril:dev
+FROM ${BASE}
+
+# Build the GIM kernel module against the image's exact kernel.
+ARG GIM_REPO=https://github.com/amd/MxGPU-Virtualization
+ARG GIM_REF=master
+RUN set -euxo pipefail \
+    && KVER="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | tail -1)" \
+    && dnf -y install git make gcc "kernel-devel-${KVER}" \
+    && git clone --depth 1 --branch "${GIM_REF}" "${GIM_REPO}" /tmp/gim \
+    && make -C /tmp/gim KDIR="/usr/src/kernels/${KVER}" \
+    # Install the built module into the image's module tree and refresh the dep index.
+    && install -Dm644 "$(find /tmp/gim -name 'gim.ko' | head -1)" \
+         "/usr/lib/modules/${KVER}/extra/gim.ko" \
+    && depmod -a "${KVER}" \
+    && rm -rf /tmp/gim \
+    && dnf -y remove git make gcc "kernel-devel-${KVER}" \
+    && dnf clean all
+
+# Load GIM at boot. Enable SR-IOV per card via GIM's module params / sysfs; the Hardware page's
+# "SR-IOV VFs" control then spawns VFs that appear as their own GPUs.
+RUN printf 'gim\n' > /etc/modules-load.d/tendril-gim.conf
+
+LABEL org.tendril.vgpu="amd-gim"
+RUN bootc container lint

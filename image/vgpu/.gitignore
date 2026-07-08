@@ -1,0 +1,3 @@
+# Licensed NVIDIA vGPU host driver — user-supplied, never committed.
+nvidia-vgpu.run
+*.run

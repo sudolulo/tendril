@@ -905,10 +905,11 @@ fn build_seed(
     match guest {
         GuestOs::Windows => {
             // Inject the NVIDIA vGPU guest driver only when this station is bound to a vGPU (mdev)
-            // slice AND a guest driver has been staged — a whole-GPU-passthrough station gets its
-            // driver from Windows Update / the vendor instead.
+            // slice — a whole-GPU-passthrough station gets its driver from Windows Update / the vendor
+            // instead. Selection is automatic: `auto_windows_exe` picks the Windows guest `.exe`
+            // matching the host driver branch, fetching it from NVIDIA's public bucket if not cached.
             let is_vgpu = gpu.starts_with(crate::vgpu::MDEV_PREFIX);
-            let staged = is_vgpu.then(crate::vgpuguest::staged_installer).flatten();
+            let staged = is_vgpu.then(crate::vgpuguest::auto_windows_exe).flatten();
             let mut extras: Vec<(&str, &FsPath)> = Vec::new();
             let staged_path = staged.as_deref().map(FsPath::new);
             if let Some(p) = staged_path {

@@ -178,9 +178,9 @@ pub async fn stage(mut mp: Multipart) -> Markup {
     match parse_nvidia_version(&src_name).or_else(|| parse_nvidia_version(&url)) {
         Some(v) => {
             let _ = std::fs::write(branch_path(), &v);
-            // Eagerly fetch the matching Linux guest driver in the background, so vGPU SteamOS stations
-            // install with zero user steps and no create-time wait.
-            crate::vgpuguest::prefetch_linux(&v);
+            // Eagerly fetch BOTH matching guest drivers (Windows + Linux) in the background, so vGPU
+            // stations install with zero user steps and no create-time wait.
+            crate::vgpuguest::prefetch(&v);
         }
         None => {
             let _ = std::fs::remove_file(branch_path());

@@ -75,6 +75,10 @@ RUN systemctl enable tendril-web.service
 COPY scripts/ /usr/libexec/tendril/
 RUN chmod +x /usr/libexec/tendril/*.sh
 
+# vGPU build assets (Containerfiles) so the appliance can build a vGPU host-driver variant from its own
+# running image + a driver staged in the web UI — no repo checkout needed.
+COPY image/vgpu/ /usr/libexec/tendril/vgpu/
+
 # Land in the Tendril console on the primary VT (appliance UX); other VTs / SSH get a normal shell.
 COPY image/console/getty-autologin.conf /usr/lib/systemd/system/getty@tty1.service.d/autologin.conf
 COPY image/console/tendril-console.sh /etc/profile.d/tendril-console.sh

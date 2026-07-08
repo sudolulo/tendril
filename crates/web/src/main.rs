@@ -20,6 +20,7 @@ mod storage;
 mod tls;
 mod ui;
 mod vgpu;
+mod vgpudrv;
 
 use axum::extract::Path;
 use axum::http::{header, StatusCode};
@@ -84,6 +85,14 @@ async fn main() {
         .route("/hardware/:addr/sriov", post(hardware::sriov))
         .route("/hardware/dls/enable", post(licensing::enable))
         .route("/hardware/dls/disable", post(licensing::disable))
+        // Staging the NVIDIA .run is a multi-hundred-MB upload — lift the body limit on this route.
+        .route(
+            "/hardware/vgpu/run",
+            post(vgpudrv::stage).layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route("/hardware/vgpu/run/clear", post(vgpudrv::clear))
+        .route("/hardware/vgpu/build", post(vgpudrv::build))
+        .route("/hardware/vgpu/buildstatus", get(vgpudrv::build_status))
         .route("/seats", post(seats::create))
         .route("/seats/delete", post(seats::delete))
         // media + network

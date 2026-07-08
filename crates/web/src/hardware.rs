@@ -228,11 +228,7 @@ fn nvidia_guide(active: bool) -> Markup {
                 " — free via NVIDIA's 90-day vGPU evaluation. The build then installs it, applies "
                 code { "vgpu_unlock" } " for consumer GeForce cards, and enables the vGPU services."
             }
-            div.sub { "Drop your host driver in, then build:" }
-            (cmd("cp NVIDIA-Linux-x86_64-<ver>-vgpu-kvm.run image/vgpu/nvidia-vgpu.run\nscripts/build-vgpu-variant.sh nvidia"))
-            div.sub { "Then, on the appliance:" }
-            (cmd("sudo bootc switch localhost/tendril:vgpu-nvidia && sudo reboot"))
-            p.sub style="margin:8px 0 0" {
+            p.sub style="margin:6px 0 0" {
                 "Get the licensed " code { ".run" } " free from NVIDIA's "
                 a href="https://www.nvidia.com/en-us/data-center/resources/vgpu-evaluation/" { "90-day vGPU evaluation" }
                 ". A detailed community walkthrough of the whole vGPU + " code { "vgpu_unlock" } " process: "
@@ -240,6 +236,7 @@ fn nvidia_guide(active: bool) -> Markup {
                 " — follow the driver/unlock steps, but source your " code { ".run" }
                 " from your own NVIDIA eval rather than any mirror it links."
             }
+            (crate::vgpudrv::section(None))
         }
     }
 }

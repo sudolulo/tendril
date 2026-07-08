@@ -1,0 +1,277 @@
+//! NVIDIA vGPU host-driver staging + on-appliance build.
+//!
+//! The licensed NVIDIA `.run` can't ship with Tendril, but the admin shouldn't have to SSH in and `cp`
+//! it either. This lets them **upload the file or give a URL** in the web UI; the driver is staged under
+//! the Tendril state dir, and — since the appliance is a bootc host with podman and the vGPU build
+//! assets baked in — Tendril can **build the variant image right here** from the running image + the
+//! staged driver, then the admin `bootc switch`es into it.
+
+use axum::extract::Multipart;
+use maud::{html, Markup};
+
+use crate::ui;
+
+fn dir() -> String {
+    std::env::var("TENDRIL_VGPU_DIR").unwrap_or_else(|_| "/var/lib/tendril/vgpu".to_string())
+}
+fn run_path() -> String {
+    std::env::var("TENDRIL_VGPU_RUN").unwrap_or_else(|_| format!("{}/nvidia-vgpu.run", dir()))
+}
+fn log_path() -> String {
+    format!("{}/build.log", dir())
+}
+fn building_marker() -> String {
+    format!("{}/.building", dir())
+}
+/// The baked appliance build script (present only on a real Tendril image).
+fn build_script() -> Option<String> {
+    let p = "/usr/libexec/tendril/appliance-vgpu-build.sh";
+    std::path::Path::new(p).exists().then(|| p.to_string())
+}
+
+/// Size of the staged `.run`, if present.
+fn staged() -> Option<u64> {
+    std::fs::metadata(run_path())
+        .ok()
+        .map(|m| m.len())
+        .filter(|n| *n > 0)
+}
+
+fn human(n: u64) -> String {
+    if n >= 1 << 30 {
+        format!("{:.1} GB", n as f64 / (1u64 << 30) as f64)
+    } else {
+        format!("{:.0} MB", n as f64 / (1u64 << 20) as f64)
+    }
+}
+
+fn building() -> bool {
+    std::path::Path::new(&building_marker()).exists()
+}
+
+// ── staging: upload a file or fetch a URL ─────────────────────────────────────────────────────
+
+/// Accept the driver as a multipart upload (`runfile`) or a URL (`url`). The file is streamed to disk
+/// (it's hundreds of MB) then atomically renamed into place.
+pub async fn stage(mut mp: Multipart) -> Markup {
+    if ui::is_demo() {
+        return section(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+    }
+    let _ = std::fs::create_dir_all(dir());
+    let tmp = format!("{}/.nvidia-vgpu.run.part", dir());
+    let mut url = String::new();
+    let mut wrote = 0u64;
+
+    while let Ok(Some(mut field)) = mp.next_field().await {
+        match field.name().unwrap_or("") {
+            "runfile" => {
+                use std::io::Write as _;
+                let Ok(mut f) = std::fs::File::create(&tmp) else {
+                    return section(Some(
+                        html! { div.banner.error { "Couldn't open a temp file to write the driver." } },
+                    ));
+                };
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(bytes)) => {
+                            if f.write_all(&bytes).is_err() {
+                                let _ = std::fs::remove_file(&tmp);
+                                return section(Some(
+                                    html! { div.banner.error { "Write failed while saving the driver." } },
+                                ));
+                            }
+                            wrote += bytes.len() as u64;
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            let _ = std::fs::remove_file(&tmp);
+                            return section(Some(
+                                html! { div.banner.error { "Upload was interrupted." } },
+                            ));
+                        }
+                    }
+                }
+            }
+            "url" => {
+                url = field.text().await.unwrap_or_default().trim().to_string();
+            }
+            _ => {}
+        }
+    }
+
+    // A URL was given and no file was uploaded → fetch it.
+    if wrote == 0 && !url.is_empty() {
+        match ui::run_result("curl", &["-fL", "--max-time", "3600", "-o", &tmp, &url]) {
+            Ok(_) => wrote = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return section(Some(html! { div.banner.error { "Download failed: " (e) } }));
+            }
+        }
+    }
+
+    if wrote == 0 {
+        let _ = std::fs::remove_file(&tmp);
+        return section(Some(
+            html! { div.banner.error { "Provide the driver file or a URL to download it from." } },
+        ));
+    }
+    if wrote < 1 << 20 {
+        let _ = std::fs::remove_file(&tmp);
+        return section(Some(
+            html! { div.banner.error { "That doesn't look like an NVIDIA vGPU driver (too small). Expected the multi-hundred-MB " code { "-vgpu-kvm.run" } "." } },
+        ));
+    }
+    if let Err(e) = std::fs::rename(&tmp, run_path()) {
+        return section(Some(
+            html! { div.banner.error { "Couldn't store the driver: " (e) } },
+        ));
+    }
+    section(Some(
+        html! { div.banner.ok { "Driver staged (" (human(wrote)) "). Build the vGPU image below." } },
+    ))
+}
+
+pub async fn clear() -> Markup {
+    if ui::is_demo() {
+        return section(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+    }
+    let _ = std::fs::remove_file(run_path());
+    section(Some(html! { div.banner.ok { "Staged driver removed." } }))
+}
+
+// ── build ─────────────────────────────────────────────────────────────────────────────────────
+
+/// Kick off the appliance build in the background, streaming output to the build log.
+pub async fn build() -> Markup {
+    if ui::is_demo() {
+        return section(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+    }
+    let Some(script) = build_script() else {
+        return section(Some(
+            html! { div.banner.error { "This host doesn't have the vGPU build assets (needs a Tendril bootc image)." } },
+        ));
+    };
+    if staged().is_none() {
+        return section(Some(
+            html! { div.banner.error { "Stage the NVIDIA driver first." } },
+        ));
+    }
+    if building() {
+        return section(Some(
+            html! { div.banner.warn { "A build is already running." } },
+        ));
+    }
+    let _ = std::fs::write(building_marker(), "");
+    let _ = std::fs::write(log_path(), "Starting vGPU image build…\n");
+    let marker = building_marker();
+    let log = log_path();
+    std::thread::spawn(move || {
+        use std::process::{Command, Stdio};
+        let out = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .ok();
+        let (o, e) = match out {
+            Some(f) => (Stdio::from(f.try_clone().unwrap()), Stdio::from(f)),
+            None => (Stdio::null(), Stdio::null()),
+        };
+        let _ = Command::new(script)
+            .arg("nvidia")
+            .stdout(o)
+            .stderr(e)
+            .status();
+        let _ = std::fs::remove_file(&marker);
+    });
+    section(None)
+}
+
+/// The live build status/log fragment (polled while a build runs).
+pub async fn build_status() -> Markup {
+    let on = building();
+    let tail = std::fs::read_to_string(log_path())
+        .ok()
+        .map(|s| {
+            s.lines()
+                .rev()
+                .take(40)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    html! {
+        div #vgpu-build
+            hx-get="/hardware/vgpu/buildstatus"
+            hx-trigger=[on.then_some("load delay:2s")]
+            hx-swap="outerHTML"
+        {
+            @if on { div.sub { span.led {} " Building the vGPU image… (this takes several minutes)" } }
+            @if !tail.is_empty() {
+                pre.mono style="margin:8px 0 0; max-height:220px; overflow:auto; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; font-size:12px" { (tail) }
+            }
+            @if !on && tail.contains("bootc switch localhost/tendril:vgpu-nvidia") {
+                div.banner.ok style="margin-top:8px" { "Build finished. Deploy it: "
+                    code { "sudo bootc switch localhost/tendril:vgpu-nvidia && sudo reboot" }
+                }
+            }
+        }
+    }
+}
+
+// ── panel section (embedded in the Hardware vGPU driver guide) ─────────────────────────────────
+
+/// The NVIDIA driver staging + build UI, embedded in the vGPU driver panel's "NVIDIA / not installed"
+/// branch. `banner` shows the result of the last action.
+pub fn section(banner: Option<Markup>) -> Markup {
+    let sz = staged();
+    let can_build = build_script().is_some();
+    html! {
+        div #vgpu-run style="margin-top:8px" {
+            @if let Some(b) = banner { (b) }
+            @if let Some(n) = sz {
+                div.sub { "Staged driver: " b { (human(n)) } " ✓ "
+                    button.btn.sm style="margin-left:8px"
+                        hx-post="/hardware/vgpu/run/clear" hx-target="#vgpu-run" hx-swap="outerHTML"
+                        hx-confirm="Remove the staged NVIDIA driver?" { "Remove" }
+                }
+                @if can_build {
+                    div.btnrow style="margin-top:10px" {
+                        button.btn.primary
+                            hx-post="/hardware/vgpu/build" hx-target="#vgpu-run" hx-swap="outerHTML"
+                            hx-confirm="Build the NVIDIA vGPU image on this host now? It compiles the driver against the running kernel and takes several minutes." {
+                            "Build vGPU image"
+                        }
+                    }
+                    (build_status_placeholder())
+                } @else {
+                    div.sub style="margin-top:8px" { "Build it on a host with the repo + podman: " code { "scripts/build-vgpu-variant.sh nvidia" } " (it uses this staged driver via " code { "TENDRIL_VGPU_RUN" } ")." }
+                }
+            } @else {
+                p.sub style="margin:0 0 6px" { "Add the licensed NVIDIA vGPU host driver — upload the " code { ".run" } " or give a URL you can reach it at." }
+                form hx-post="/hardware/vgpu/run" hx-encoding="multipart/form-data"
+                    hx-target="#vgpu-run" hx-swap="outerHTML" {
+                    div.field style="margin:0 0 8px" {
+                        label { "Driver file (" code { "NVIDIA-Linux-x86_64-<ver>-vgpu-kvm.run" } ")" }
+                        input type="file" name="runfile" accept=".run" style="font-size:12.5px";
+                    }
+                    div.field style="margin:0 0 8px" {
+                        label { "…or a URL to download it from" }
+                        input type="url" name="url" placeholder="https://…/NVIDIA-…-vgpu-kvm.run";
+                    }
+                    button.btn.primary type="submit" { "Stage driver" }
+                }
+            }
+        }
+    }
+}
+
+/// Empty build-status container that immediately polls once (so a running build shows up).
+fn build_status_placeholder() -> Markup {
+    html! {
+        div #vgpu-build hx-get="/hardware/vgpu/buildstatus" hx-trigger="load" hx-swap="outerHTML" {}
+    }
+}

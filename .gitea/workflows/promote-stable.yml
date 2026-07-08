@@ -1,0 +1,94 @@
+name: promote-stable
+
+# Promote an already-released version to the `stable` channel (see docs/CHANNELS.md):
+#   - repoint the `:stable` image tag at the released `:X.Y.Z` image — a pull/tag/push of the
+#     EXISTING image; this workflow never rebuilds, so the validated bits are the shipped bits
+#   - repoint `:vgpu-amd-stable` at `:vgpu-amd-X.Y.Z` (non-fatal, like the variant build itself)
+#   - publish the stable installer ISO name on dl.onetick.ninja and refresh SHA256SUMS
+#
+# Manual-only by design: promotion is a human decision gated by the checklist in docs/CHANNELS.md.
+# Runs on the self-hosted `host` runner — needs podman and /srv/tendril-dl.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version to promote (e.g. 0.18.0 — no leading v)"
+        required: true
+
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: host
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Promote release to stable
+        env:
+          REG: git.onetick.ninja
+          OWNER: ${{ github.repository_owner }}
+          # Same PAT as release.yml — the built-in Actions token can't authenticate to the registry.
+          REG_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REPO: ${{ github.repository }}
+          V: ${{ inputs.version }}
+          DL_DIR: /srv/tendril-dl
+        run: |
+          set -euo pipefail
+          case "$V" in v*) echo "Version must not include the leading 'v' (got '$V')" >&2; exit 1;; esac
+
+          api="https://${REG}/api/v1/repos/${REPO}"
+          auth="Authorization: token ${REG_TOKEN}"
+
+          # Only released versions can be promoted — the release is what the checklist validated.
+          if ! curl -fsS -H "$auth" "$api/releases/tags/v$V" >/dev/null 2>&1; then
+            echo "No release v$V exists — promote only released versions (see docs/CHANNELS.md)." >&2
+            exit 1
+          fi
+
+          echo "$REG_TOKEN" | podman login "$REG" -u "$OWNER" --password-stdin
+
+          # 1. Repoint :stable at the released image. Pull the exact released tag — no build.
+          podman pull "$REG/$OWNER/tendril:$V"
+          digest="$(podman image inspect --format '{{ index .RepoDigests 0 }}' "$REG/$OWNER/tendril:$V" || true)"
+          podman tag "$REG/$OWNER/tendril:$V" "$REG/$OWNER/tendril:stable"
+          podman push "$REG/$OWNER/tendril:stable"
+          echo "Promoted tendril:$V -> tendril:stable (${digest:-digest unavailable})"
+
+          # 2. vGPU AMD variant — promote if the versioned variant exists (non-fatal, matching release.yml).
+          set +e
+          if podman pull "$REG/$OWNER/tendril:vgpu-amd-$V"; then
+            podman tag "$REG/$OWNER/tendril:vgpu-amd-$V" "$REG/$OWNER/tendril:vgpu-amd-stable" \
+              && podman push "$REG/$OWNER/tendril:vgpu-amd-stable" \
+              && echo "Promoted tendril:vgpu-amd-$V -> tendril:vgpu-amd-stable" \
+              || echo "WARNING: vgpu-amd-stable promotion failed (non-fatal)"
+          else
+            echo "No vgpu-amd-$V variant published — skipping (non-fatal)."
+          fi
+          set -e
+
+          # 3. Stable installer ISO name -> the already-published versioned ISO, then refresh
+          #    SHA256SUMS to cover every ISO currently served (release.yml only writes its own pair).
+          name="tendril-$V-installer-x86_64.iso"
+          stable="tendril-stable-installer-x86_64.iso"
+          if [ -f "$DL_DIR/$name" ]; then
+            ln -sfn "$name" "$DL_DIR/$stable"
+            ( cd "$DL_DIR"
+              : > SHA256SUMS.new
+              for f in *.iso; do
+                [ -e "$f" ] || continue
+                # Hash symlinks via their target once; record under every served name.
+                h="$(sha256sum "$(readlink -f "$f")" | awk '{print $1}')"
+                printf '%s  %s\n' "$h" "$f" >> SHA256SUMS.new
+              done
+              mv SHA256SUMS.new SHA256SUMS )
+            chcon -R -t httpd_sys_content_t "$DL_DIR" 2>/dev/null || true
+            echo "Published $stable -> $name and refreshed SHA256SUMS."
+          else
+            echo "WARNING: $name not found in $DL_DIR — stable ISO name not updated (image tags were promoted)."
+          fi
+
+          echo "Done. Hosts on the stable channel pick this up via 'bootc upgrade'."

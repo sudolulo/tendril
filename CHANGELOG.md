@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **License: AGPL-3.0-only, dual-licensed.** The project's license is no longer TBD — full text in
+  `LICENSE`, the dual-licensing model (one open edition, commercial licenses available) in
+  `LICENSING.md`, SPDX `license` in the Cargo workspace, and copyright in `NOTICE`.
+- **Contributor License Agreement** (`CLA.md`) — required with a first PR so single-owner copyright
+  (and thus dual licensing) survives outside contributions; process documented in `CONTRIBUTING.md`.
+- **Security policy** (`SECURITY.md`) — private reporting, response expectations, per-channel
+  support matrix, scope.
+- **Stable release channel.** `promote-stable.yml` repoints `:stable` (and `:vgpu-amd-stable`) at an
+  already-released image digest — promotion moves bits, never rebuilds — and publishes the
+  `tendril-stable-installer-x86_64.iso` name. Channels, promotion checklist (bake time, hardware
+  matrix, blockers, security review), and subscription commands in `docs/CHANNELS.md`.
+- **Optional image signing** — `release.yml` signs the released image digest with cosign when
+  `COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD` secrets are configured; non-fatal and off by default.
+
 ## [0.18.0] - 2026-07-08
 
 Fleet-wide station control (including live console) from any node, invisible vGPU guest drivers,

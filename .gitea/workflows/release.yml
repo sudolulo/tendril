@@ -44,6 +44,9 @@ jobs:
           # licensed NVIDIA vGPU host .run. Set it to auto-build the NVIDIA variant into a PRIVATE repo.
           # Never a public mirror — NVIDIA's driver is non-redistributable (see image/vgpu/README.md).
           NVIDIA_VGPU_RUN_URL: ${{ secrets.NVIDIA_VGPU_RUN_URL }}
+          # Optional: cosign keypair for image signing (see the signing step). Leave unset to skip.
+          COSIGN_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
@@ -76,6 +79,20 @@ jobs:
           podman tag localhost/tendril:dev "$REG/$OWNER/tendril:latest"
           podman push "$REG/$OWNER/tendril:$V"
           podman push "$REG/$OWNER/tendril:latest"
+
+          # Optional supply-chain signing: sign the pushed image digest with cosign when a key is
+          # configured (COSIGN_PRIVATE_KEY / COSIGN_PASSWORD secrets). Signatures follow the digest,
+          # so a later `:stable` promotion of this image verifies too. Non-fatal: signing must never
+          # block a release; add the secrets + cosign binary on the runner to enable.
+          set +e
+          if [ -n "${COSIGN_KEY:-}" ] && command -v cosign >/dev/null 2>&1; then
+            digest="$(podman image inspect --format '{{ index .RepoDigests 0 }}' "$REG/$OWNER/tendril:$V")" \
+              && cosign sign -y --key env://COSIGN_KEY "$digest" \
+              && echo "Signed $digest" || echo "WARNING: cosign signing failed (non-fatal)"
+          else
+            echo "cosign key or binary not present — skipping image signing (optional)."
+          fi
+          set -e
 
           # 3. Build the installer ISO.
           rm -rf out

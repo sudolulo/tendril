@@ -1,0 +1,56 @@
+# Release channels
+
+Tendril publishes one codebase through three channels. A bootc host tracks a channel and rolls
+forward with `bootc upgrade`; greenboot auto-rollback protects every channel equally.
+
+| Channel | Image tag | Published by | Cadence | Who it's for |
+|---|---|---|---|---|
+| **dev** | `:dev` | every push to `dev` ([deploy-dev.yml](../.gitea/workflows/deploy-dev.yml)) | rolling | contributors, testers |
+| **release** | `:latest` + `:X.Y.Z` | every release ([release.yml](../.gitea/workflows/release.yml)) | per milestone | enthusiasts who want current features |
+| **stable** | `:stable` | manual promotion ([promote-stable.yml](../.gitea/workflows/promote-stable.yml)) | when a release has proven itself | anyone running Tendril for others — venues, fleets, the risk-averse |
+
+Subscribe:
+
+```bash
+sudo bootc switch git.onetick.ninja/flan/tendril:stable   # or :latest, :dev
+```
+
+Installer ISOs: `tendril-latest-installer-x86_64.iso`, `tendril-stable-installer-x86_64.iso`, and
+`tendril-dev-installer-x86_64.iso` at https://dl.onetick.ninja/ (verify against `SHA256SUMS`).
+
+## What "stable" means
+
+**Promotion moves bits, never rebuilds.** The `:stable` tag is repointed at the *exact image digest*
+already released as `:X.Y.Z` — what was validated is what ships. The promotion workflow refuses to
+build anything.
+
+A release is promoted only when **all** of the following hold:
+
+1. **Bake time** — released for **≥ 14 days** with no regression reports affecting core flows
+   (install, station create, passthrough, update/rollback).
+2. **Hardware validation** — on the reference matrix (at minimum: one Intel + one AMD IOMMU
+   platform, one NVIDIA + one AMD GPU): fresh ISO install, unattended Windows 11 **and** Bazzite
+   station install, `bootc upgrade` *onto* the candidate from the previous stable, and a forced
+   greenboot rollback.
+3. **No open release-blockers** — no issue labeled `release-blocker` against the candidate.
+4. **Security review** — the changelog's `Security` entries for the candidate are shipped, and no
+   unfixed vulnerability reported under [SECURITY.md](../SECURITY.md) affects it.
+
+Security fixes invert the flow: a patch release containing a security fix for stable is promoted
+**out of band**, as soon as the hardware pass completes — bake time doesn't apply.
+
+Run the promotion from Gitea → Actions → `promote-stable` → *Run workflow*, entering the version
+(e.g. `0.18.0`). The job logs the promoted digest; record it in the release notes if you edit them.
+
+## Experimental features on stable
+
+Features flagged 🧪 in the [README](../README.md) (vGPU, federation, streaming) are present on every
+channel — there is one edition of Tendril — but the stable promise (the checklist above) covers the
+core flows. Experimental features graduate by being added to the hardware-validation matrix.
+
+## Looking ahead
+
+The stable channel is also the foundation for a future paid **assurance subscription** (stable
+channel + support SLA, served from an authenticated registry). If that happens, the public channels
+above — including everything in the codebase — remain free and complete; see
+[LICENSING.md](../LICENSING.md).

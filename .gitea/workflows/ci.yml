@@ -2,7 +2,7 @@ name: ci
 
 # Runs on PRs into (and pushes to) dev and main, on a Docker-mode Gitea Actions runner.
 # The runner maps `ubuntu-latest` to a container image; Rust is installed per-run and pinned by
-# rust-toolchain.toml (1.84.0), so runs are reproducible regardless of the base image.
+# rust-toolchain.toml (1.85.0), so runs are reproducible regardless of the base image.
 on:
   pull_request:
     branches: [main, dev]

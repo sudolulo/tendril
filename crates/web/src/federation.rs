@@ -110,7 +110,12 @@ fn advertise_url() -> String {
     let ip = ui::run_stdout("hostname", &["-I"])
         .and_then(|s| s.split_whitespace().next().map(str::to_string))
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    format!("http://{ip}:{port}")
+    let scheme = if crate::tls::enabled() {
+        "https"
+    } else {
+        "http"
+    };
+    format!("{scheme}://{ip}:{port}")
 }
 
 /// Publish/refresh this node's presence on the shared store (called periodically). No-op without a
@@ -370,7 +375,9 @@ pub fn local_node_info() -> NodeInfo {
 fn fetch_peer(p: &Peer) -> NodeInfo {
     let url = format!("{}/api/node", p.url.trim_end_matches('/'));
     let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let parsed = ui::run_result("curl", &["-s", "--max-time", "5", "-H", &auth, &url])
+    // `-k`: accept the peer's self-signed cert. Transitional — the mTLS phase replaces this with
+    // `--cacert <peer's store-published cert>` for real pinning; for now HTTPS gives encryption.
+    let parsed = ui::run_result("curl", &["-sk", "--max-time", "5", "-H", &auth, &url])
         .ok()
         .and_then(|s| serde_json::from_str::<NodeInfo>(&s).ok());
     match parsed {
@@ -503,7 +510,7 @@ fn remote_provision(url: &str, spec: &ProvisionSpec) -> Result<(), String> {
     let out = ui::run_result(
         "curl",
         &[
-            "-s",
+            "-sk",
             "--max-time",
             "120",
             "-H",

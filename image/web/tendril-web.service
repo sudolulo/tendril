@@ -5,9 +5,11 @@ After=network-online.target libvirtd.service
 Wants=network-online.target
 
 [Service]
-# Serves on :80 (root; it also needs privilege for libvirt/VFIO). Override the port with a drop-in
-# setting TENDRIL_WEB_ADDR if 80 is taken.
-Environment=TENDRIL_WEB_ADDR=0.0.0.0:80
+# HTTPS is mandatory: serves on :443 with a self-signed cert auto-generated on first boot (provide a
+# real one via TENDRIL_TLS_CERT/KEY), and redirects plain HTTP on :80 → HTTPS. Runs as root (needs
+# privilege for libvirt/VFIO and the low ports). Behind a TLS-terminating proxy, set TENDRIL_TLS=off.
+Environment=TENDRIL_WEB_ADDR=0.0.0.0:443
+Environment=TENDRIL_HTTP_REDIRECT_ADDR=0.0.0.0:80
 ExecStart=/usr/bin/tendril-web
 Restart=always
 RestartSec=3

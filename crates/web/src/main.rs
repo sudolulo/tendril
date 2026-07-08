@@ -15,6 +15,7 @@ mod pages;
 mod seats;
 mod stations;
 mod storage;
+mod tls;
 mod ui;
 mod vgpu;
 
@@ -111,6 +112,62 @@ async fn main() {
     });
 
     let addr = std::env::var("TENDRIL_WEB_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+
+    // HTTPS (opt-in via TENDRIL_TLS=on): terminate TLS in-app with a self-signed (or provided) cert.
+    if tls::enabled() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        match tls::ensure() {
+            Ok((cert, key)) => {
+                let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
+                    .await
+                    .unwrap_or_else(|e| panic!("load TLS cert {cert}: {e}"));
+                let sock: std::net::SocketAddr =
+                    addr.parse().unwrap_or_else(|e| panic!("addr {addr}: {e}"));
+                // Optional HTTP→HTTPS redirect (e.g. :80 → :443) so bare-hostname visits still land.
+                if let Ok(redir) = std::env::var("TENDRIL_HTTP_REDIRECT_ADDR") {
+                    let https_port = sock.port();
+                    tokio::spawn(async move {
+                        let redirect = axum::Router::new().fallback(
+                            move |headers: axum::http::HeaderMap, uri: axum::http::Uri| async move {
+                                let host = headers
+                                    .get(axum::http::header::HOST)
+                                    .and_then(|v| v.to_str().ok())
+                                    .unwrap_or("")
+                                    .split(':')
+                                    .next()
+                                    .unwrap_or("")
+                                    .to_string();
+                                let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+                                let target = if https_port == 443 {
+                                    format!("https://{host}{pq}")
+                                } else {
+                                    format!("https://{host}:{https_port}{pq}")
+                                };
+                                axum::response::Redirect::permanent(&target)
+                            },
+                        );
+                        match tokio::net::TcpListener::bind(&redir).await {
+                            Ok(l) => {
+                                println!("HTTP→HTTPS redirect on http://{redir}");
+                                if let Err(e) = axum::serve(l, redirect).await {
+                                    eprintln!("redirect server error: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("redirect bind {redir} failed: {e}"),
+                        }
+                    });
+                }
+                println!("Tendril web UI listening on https://{addr}");
+                axum_server::bind_rustls(sock, config)
+                    .serve(app.into_make_service())
+                    .await
+                    .expect("serve https");
+                return;
+            }
+            Err(e) => eprintln!("TLS setup failed ({e}); serving plain HTTP"),
+        }
+    }
+
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .unwrap_or_else(|e| panic!("bind {addr}: {e}"));

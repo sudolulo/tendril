@@ -7,7 +7,7 @@
 
 # ---- build stage: compile the tendril binaries with the pinned toolchain ----
 # Build on the same Fedora base as the runtime (matching glibc) and off Docker Hub (which rate-limits
-# anonymous pulls). rust-toolchain.toml pins the version, so rustup installs exactly 1.84.0.
+# anonymous pulls). rust-toolchain.toml pins the version, so rustup installs exactly 1.85.0.
 FROM quay.io/fedora/fedora-bootc:42 AS build
 # In bootc images /root is a symlink to /var/roothome, which trips rustup's home-dir setup — install
 # the toolchain under /usr/local instead (same layout the official rust image uses).

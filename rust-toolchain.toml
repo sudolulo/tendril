@@ -1,5 +1,6 @@
 # Pinned Rust toolchain — reproducible builds. Bump via Renovate PRs only.
+# 1.85 = first stable with edition2024, required by the rustls/rcgen TLS dependency tree.
 [toolchain]
-channel = "1.84.0"
+channel = "1.85.0"
 components = ["rustfmt", "clippy"]
 profile = "default"

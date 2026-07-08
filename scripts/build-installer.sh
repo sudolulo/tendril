@@ -67,6 +67,58 @@ sudo podman run --rm --privileged \
   "${config_mount[@]}" \
   "$BIB" --type "$TYPE" --rootfs "$ROOTFS" "$IMAGE"
 
+# For an ISO, add a touchless "Unattended" entry to the GRUB menu (BIOS + UEFI). It clones the default
+# "Install Tendril" entry and appends `inst.text tendril.unattended=1` — the same boot argument the PXE
+# "provision the room" flow uses — so ONE ISO offers both the guided install (default) and a hands-off
+# unattended install (pick the entry → ERASE countdown → auto-install). RAW images have no menu.
+if [ "$TYPE" = "iso" ] && command -v xorriso >/dev/null 2>&1; then
+  iso="$(find "$OUTPUT" -type f -iname '*.iso' -print -quit || true)"
+  if [ -n "${iso:-}" ]; then
+    # bootc-image-builder runs privileged, so its ISO is root-owned; take ownership so the xorriso
+    # commit below can rewrite it (no-op when this script already runs as root, e.g. in CI).
+    sudo chown "$(id -u):$(id -g)" "$iso" 2>/dev/null || true
+    echo "==> Adding 'Unattended' entry to the ISO GRUB menu"
+    tmp="$(mktemp -d)"
+    newhead="menuentry 'Install Tendril - Unattended (ERASES THIS DISK)' --class fedora --class gnu-linux --class gnu --class os {"
+    cat > "$tmp/clone.awk" <<'AWK'
+BEGIN{ inserted=0; inblk=0; n=0 }
+/^menuentry .Install Tendril/ && !inserted && !inblk { inblk=1; n=0 }
+inblk { blk[++n]=$0 }
+inblk && /^}/ {
+  for(i=1;i<=n;i++) print blk[i]                       # keep the original (default) entry
+  for(i=1;i<=n;i++){                                    # then an unattended clone right after it
+    line=blk[i]
+    if(line ~ /^menuentry /) line=newhead
+    else if(line ~ /^[ \t]*linux/){
+      if(line ~ / quiet/) sub(/ quiet/," inst.text tendril.unattended=1 quiet",line)
+      else line=line" inst.text tendril.unattended=1"
+    }
+    print line
+  }
+  inblk=0; inserted=1; next
+}
+!inblk { print }
+AWK
+    updates=()
+    for cfg in /EFI/BOOT/grub.cfg /boot/grub2/grub.cfg; do
+      if xorriso -osirrox on -indev "$iso" -extract "$cfg" "$tmp/in.cfg" >/dev/null 2>&1; then
+        local_name="$tmp/$(echo "$cfg" | tr / _)"
+        awk -v newhead="$newhead" -f "$tmp/clone.awk" "$tmp/in.cfg" > "$local_name"
+        updates+=(-update "$local_name" "$cfg")
+      fi
+    done
+    # In-place update, keeping the existing El Torito / GPT boot records untouched (`-boot_image any
+    # keep`). The -indev/-outdev "replay" form silently drops the file changes here, so use -dev.
+    if [ "${#updates[@]}" -gt 0 ] \
+       && xorriso -dev "$iso" -boot_image any keep "${updates[@]}" -commit >/dev/null 2>&1; then
+      echo "    added: Install Tendril - Unattended (ERASES THIS DISK)"
+    else
+      echo "    WARNING: could not add the unattended menu entry — the guided install still works." >&2
+    fi
+    rm -rf "$tmp"
+  fi
+fi
+
 echo "==> Done. Artifacts:"
 find "$OUTPUT" -type f \( -iname '*.iso' -o -iname '*.raw' \) -print
 
@@ -74,6 +126,9 @@ cat <<'NOTE'
 
 Next:
   ISO:  flash to a USB stick (e.g. `dd if=<name>.iso of=/dev/sdX bs=4M status=progress`), boot the
-        target machine from it, and follow the installer.
+        target machine from it. The GRUB menu offers two installs:
+          • "Install Tendril"                        — guided (pick disk + accounts).
+          • "Install Tendril - Unattended (ERASES…)" — hands-off: ERASE countdown, then auto-install.
+        The Unattended entry is the same touchless path PXE net-boot uses (arg: tendril.unattended).
   RAW:  `dd` the image straight onto the target's disk (or a USB you boot the machine from).
 NOTE

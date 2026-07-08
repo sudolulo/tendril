@@ -73,6 +73,53 @@ fn non_empty(p: &str) -> Option<String> {
         .map(|_| p.to_string())
 }
 
+// ── automatic selection: the split implies the host branch, which implies the guest driver ─────────
+
+/// The curated Linux bucket release (`label`, `url`) whose driver version matches `branch` exactly. For
+/// a given vGPU release the Linux **guest** version equals the **host** version, so an exact match on
+/// the version string is the correct pairing.
+fn linux_release_for_branch(branch: &str) -> Option<(&'static str, &'static str)> {
+    let b = branch.trim();
+    if b.is_empty() {
+        return None;
+    }
+    LINUX_DRIVERS.iter().find(|(_, u)| u.contains(b)).copied()
+}
+fn linux_url_for_branch(branch: &str) -> Option<&'static str> {
+    linux_release_for_branch(branch).map(|(_, u)| u)
+}
+
+/// Auto-select the Linux guest `.run` for the host driver branch — the staged file if present, else the
+/// matching release fetched from NVIDIA's official public bucket. This is what makes the guest driver
+/// invisible for SteamOS stations: nothing to pick, nothing to stage. None only if no host branch is
+/// known or no matching public release exists (then a whole-GPU or unlicensed path — driver skipped).
+pub fn auto_linux_run() -> Option<String> {
+    if let Some(p) = staged_linux_run() {
+        return Some(p);
+    }
+    let branch = crate::vgpudrv::host_vgpu_branch()?;
+    let url = linux_url_for_branch(&branch)?;
+    let _ = std::fs::create_dir_all(dir());
+    fetch_to(url, &run_path()).ok().map(|_| run_path())
+}
+
+/// Best-effort background prefetch of the Linux guest `.run` matching `branch`, so it's already staged
+/// by the time a vGPU SteamOS station is created (keeps create fast). Called when the host driver is
+/// staged. No-op if already staged or no matching public release.
+pub fn prefetch_linux(branch: &str) {
+    if staged_linux_run().is_some() {
+        return;
+    }
+    let Some(url) = linux_url_for_branch(branch) else {
+        return;
+    };
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        let _ = std::fs::create_dir_all(dir());
+        let _ = fetch_to(&url, &run_path());
+    });
+}
+
 fn staged_size() -> Option<u64> {
     std::fs::metadata(exe_path())
         .ok()
@@ -260,12 +307,16 @@ fn fetch_to(url: &str, dest: &str) -> Result<u64, String> {
 pub fn section(banner: Option<Markup>) -> Markup {
     let win = staged_size();
     let lin = linux_size();
+    let host_branch = crate::vgpudrv::host_vgpu_branch();
+    let lin_match = host_branch.as_deref().and_then(linux_release_for_branch);
     html! {
         div #vgpu-guest style="margin-top:8px" {
             @if let Some(b) = banner { (b) }
             p.sub style="margin:0 0 6px" {
                 "vGPU " b { "guest" } " driver — installed " b { "inside" } " each NVIDIA-vGPU station so it can use its slice. "
-                "It's part of the same licensed package as the host " code { ".run" } " and must match the host driver branch you baked."
+                "Tendril picks it " b { "automatically" } " to match your host driver branch"
+                @if let Some(hb) = &host_branch { " (" code { (hb) } ")" }
+                " — you don't choose a driver. Linux stations fetch the matching release on demand; Windows needs its installer supplied once (below), since NVIDIA doesn't publish it."
             }
 
             // ── Windows guest driver (supplied) ──
@@ -296,15 +347,25 @@ pub fn section(banner: Option<Markup>) -> Markup {
                 }
             }
 
-            // ── Linux guest driver (auto-fetch or supplied) ──
+            // ── Linux guest driver (automatic; manual supply only as a fallback) ──
             div.sub style="font-weight:600; margin:14px 0 4px" { "SteamOS / Linux stations" }
             @if let Some(n) = lin {
-                div.sub { "Staged " code { ".run" } ": " b { (human(n)) } " ✓ "
+                div.sub { "Ready " code { ".run" } ": " b { (human(n)) } " ✓ (auto-matched to your host driver) "
                     button.btn.sm style="margin-left:8px"
                         hx-post="/hardware/vgpu/guest/linux/clear" hx-target="#vgpu-guest" hx-swap="outerHTML"
-                        hx-confirm="Remove the staged Linux guest driver?" { "Remove" }
+                        hx-confirm="Remove the staged Linux guest driver? It will be re-fetched automatically." { "Remove" }
+                }
+            } @else if let Some((label, _)) = lin_match {
+                p.sub {
+                    "Automatic — " b { (label) } " matches your host driver and is fetched from NVIDIA's "
+                    "official bucket when a vGPU SteamOS station is created. Nothing to do."
                 }
             } @else {
+                p.sub style="margin:0 0 6px" {
+                    "No matching release is known for your host driver "
+                    @if let Some(hb) = &host_branch { "(" code { (hb) } ") " } @else { "(host branch not detected yet) " }
+                    "— supply the Linux " code { ".run" } " once (advanced):"
+                }
                 form hx-post="/hardware/vgpu/guest/linux" hx-target="#vgpu-guest" hx-swap="outerHTML" {
                     p.sub style="margin:0 0 6px" {
                         "Auto-fetch the Linux " code { ".run" } " from NVIDIA's " b { "official public bucket" }

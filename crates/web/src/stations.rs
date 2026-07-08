@@ -810,11 +810,12 @@ fn build_seed(
             build_seed_iso_with(&spec, &extras, path)?
         }
         GuestOs::SteamOs => {
-            // Same gating as Windows: inject the Linux vGPU guest driver only for a station on a vGPU
-            // (mdev) slice with a `.run` staged. It rides the OEMDRV kickstart seed and a first-boot
-            // service installs it.
+            // Inject the Linux vGPU guest driver for a station on a vGPU (mdev) slice. Selection is
+            // automatic: `auto_linux_run` picks the release matching the host driver branch, fetching
+            // it from NVIDIA's public bucket if it isn't already staged — the user never picks a driver.
+            // It rides the OEMDRV kickstart seed and a first-boot service installs it.
             let is_vgpu = gpu.starts_with(crate::vgpu::MDEV_PREFIX);
-            let staged = is_vgpu.then(crate::vgpuguest::staged_linux_run).flatten();
+            let staged = is_vgpu.then(crate::vgpuguest::auto_linux_run).flatten();
             let mut extras: Vec<(&str, &FsPath)> = Vec::new();
             let staged_path = staged.as_deref().map(FsPath::new);
             if let Some(p) = staged_path {

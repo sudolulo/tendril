@@ -17,6 +17,50 @@ fn dir() -> String {
 fn run_path() -> String {
     std::env::var("TENDRIL_VGPU_RUN").unwrap_or_else(|_| format!("{}/nvidia-vgpu.run", dir()))
 }
+/// Where we record the staged host driver's version (e.g. "550.127.05"). bootc-image-builder renames
+/// the `.run` to a version-less name, discarding the branch — so we capture it from the original
+/// filename / download URL at stage time. This is the key that makes guest-driver selection automatic.
+fn branch_path() -> String {
+    format!("{}/host-branch", dir())
+}
+
+/// Best-effort extract an NVIDIA driver version like `550.127.05` (or `550.127`) from a filename/URL.
+/// vGPU host driver majors are 3 digits (470/535/550/…), which lets us ignore noise like `x86_64`.
+pub fn parse_nvidia_version(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len()
+            && (b[i].is_ascii_digit() || (b[i] == b'.' && i + 1 < b.len() && b[i + 1].is_ascii_digit()))
+        {
+            i += 1;
+        }
+        let tok = &s[start..i];
+        let major = tok.split('.').next().unwrap_or("");
+        if tok.contains('.') && major.len() >= 3 {
+            return Some(tok.to_string());
+        }
+    }
+    None
+}
+
+/// The installed/staged NVIDIA vGPU host driver version, or None. Prefers what we captured at stage
+/// time; falls back to the live host (`/proc/driver/nvidia/version`) when the driver is actually loaded.
+pub fn host_vgpu_branch() -> Option<String> {
+    if let Ok(v) = std::fs::read_to_string(branch_path()) {
+        let v = v.trim();
+        if !v.is_empty() {
+            return Some(v.to_string());
+        }
+    }
+    let proc = std::fs::read_to_string("/proc/driver/nvidia/version").ok()?;
+    parse_nvidia_version(&proc)
+}
 fn log_path() -> String {
     format!("{}/build.log", dir())
 }
@@ -60,11 +104,13 @@ pub async fn stage(mut mp: Multipart) -> Markup {
     let _ = std::fs::create_dir_all(dir());
     let tmp = format!("{}/.nvidia-vgpu.run.part", dir());
     let mut url = String::new();
+    let mut src_name = String::new(); // original filename — carries the version we want to capture
     let mut wrote = 0u64;
 
     while let Ok(Some(mut field)) = mp.next_field().await {
         match field.name().unwrap_or("") {
             "runfile" => {
+                src_name = field.file_name().map(|s| s.to_string()).unwrap_or_default();
                 use std::io::Write as _;
                 let Ok(mut f) = std::fs::File::create(&tmp) else {
                     return section(Some(
@@ -126,6 +172,19 @@ pub async fn stage(mut mp: Multipart) -> Markup {
         return section(Some(
             html! { div.banner.error { "Couldn't store the driver: " (e) } },
         ));
+    }
+    // Capture the version (from the original filename or URL) so guest-driver selection can match it
+    // automatically later — the file itself is now renamed to a version-less name.
+    match parse_nvidia_version(&src_name).or_else(|| parse_nvidia_version(&url)) {
+        Some(v) => {
+            let _ = std::fs::write(branch_path(), &v);
+            // Eagerly fetch the matching Linux guest driver in the background, so vGPU SteamOS stations
+            // install with zero user steps and no create-time wait.
+            crate::vgpuguest::prefetch_linux(&v);
+        }
+        None => {
+            let _ = std::fs::remove_file(branch_path());
+        }
     }
     section(Some(
         html! { div.banner.ok { "Driver staged (" (human(wrote)) "). Build the vGPU image below." } },
@@ -279,5 +338,27 @@ pub fn section(banner: Option<Markup>) -> Markup {
 fn build_status_placeholder() -> Markup {
     html! {
         div #vgpu-build hx-get="/hardware/vgpu/buildstatus" hx-trigger="load" hx-swap="outerHTML" {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_nvidia_version;
+
+    #[test]
+    fn parses_driver_versions_ignoring_noise() {
+        assert_eq!(
+            parse_nvidia_version("NVIDIA-Linux-x86_64-550.127.05-vgpu-kvm.run").as_deref(),
+            Some("550.127.05")
+        );
+        assert_eq!(
+            parse_nvidia_version("https://host/vGPU17.4/NVIDIA-Linux-x86_64-550.127.05-grid.run")
+                .as_deref(),
+            Some("550.127.05")
+        );
+        assert_eq!(parse_nvidia_version("535.161.08").as_deref(), Some("535.161.08"));
+        assert_eq!(parse_nvidia_version("470.256").as_deref(), Some("470.256"));
+        assert_eq!(parse_nvidia_version("x86_64 only, no version").as_deref(), None);
+        assert_eq!(parse_nvidia_version("vGPU 17.4").as_deref(), None); // 2-digit major = release, not driver
     }
 }

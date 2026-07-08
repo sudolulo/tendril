@@ -136,8 +136,8 @@ pub async fn list_page() -> Markup {
                 a.btn.primary href="/stations/new" { "+ New station" }
             }
             p.sub style="margin-bottom:16px" {
-                "Every station across the fleet. This node's stations are controllable here; a peer's "
-                "stations are managed on that node. Machines and health live on the "
+                "Every station across the fleet — start, stop, and delete any of them from here, on this "
+                "node or any peer. Machines and health live on the "
                 a href="/fleet" { "Fleet" } " page."
             }
             (ui::panel(&format!("{local} · this node"), None, fragment(&Libvirt::system())))
@@ -202,6 +202,118 @@ pub(crate) fn station_mdev_uuid(name: &str) -> Option<String> {
     let start = after.find("uuid='")? + "uuid='".len();
     let end = after[start..].find('\'')? + start;
     Some(after[start..end].to_string())
+}
+
+/// Change a station's vGPU split **without touching its disk** — the qcow2 (Windows/games/saves) is
+/// kept as-is. The station must be stopped: we create the new slice on the host, repoint the persistent
+/// domain definition at it (swapping just the mdev UUID — everything else, including the disk, stays
+/// identical), and it boots into the new split. The guest driver already matches the host driver branch,
+/// which a re-split does not change, so no driver reinstall is needed. On failure nothing is lost: the
+/// new slice is rolled back and the old definition is untouched.
+///
+/// NOTE: needs validation on real vGPU hardware (this is the experimental vGPU path).
+pub(crate) fn resplit(name: &str, new_gpu_sel: &str) -> Result<(), String> {
+    let lv = Libvirt::system();
+    if matches!(lv.state(name), DomainState::Running | DomainState::Paused) {
+        return Err("Shut the station down before changing its GPU split.".into());
+    }
+    let (parent, type_id) = crate::vgpu::parse_mdev_selection(new_gpu_sel)
+        .ok_or("Pick a vGPU profile to change to.")?;
+    let old_uuid = station_mdev_uuid(name)
+        .ok_or("This station has no vGPU slice to change (it's whole-GPU or has none).")?;
+
+    // New slice on the host first, so a failure here changes nothing on the station.
+    let new_uuid = crate::vgpu::create_mdev(&parent, &type_id)?;
+
+    // Repoint the persistent definition at the new mdev — swap only the UUID, keeping the disk and
+    // every other device identical (no disk recreation ⇒ user data preserved).
+    let xml = match ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name]) {
+        Some(x) if x.contains(&format!("uuid='{old_uuid}'")) => x,
+        _ => {
+            crate::vgpu::remove_mdev(&new_uuid);
+            return Err("couldn't locate the current vGPU slice in the station definition".into());
+        }
+    };
+    let new_xml = xml.replace(
+        &format!("uuid='{old_uuid}'"),
+        &format!("uuid='{new_uuid}'"),
+    );
+    if let Err(e) = lv.define(name, &new_xml) {
+        crate::vgpu::remove_mdev(&new_uuid); // roll back the freshly-created slice
+        return Err(format!("couldn't update the station definition: {e}"));
+    }
+
+    // Committed — release the old slice.
+    if old_uuid != new_uuid {
+        crate::vgpu::remove_mdev(&old_uuid);
+    }
+    Ok(())
+}
+
+/// POST handler: re-split a station into a new vGPU profile (data-preserving).
+pub async fn resplit_action(
+    Path(name): Path<String>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let sel = form.get("gpu").cloned().unwrap_or_default();
+    let n = name.clone();
+    let res = tokio::task::spawn_blocking(move || resplit(&n, &sel))
+        .await
+        .unwrap_or_else(|_| Err("re-split task panicked".into()));
+    match res {
+        Ok(()) => html! { div.banner.ok {
+            "GPU split changed — your disk and data are untouched. Start the station to boot into the new split."
+        } },
+        Err(e) => html! { div.banner.error { (e) } },
+    }
+}
+
+/// The "GPU split" panel on a station's detail page — only for stations bound to a vGPU (mdev) slice.
+/// Lets you re-slice the same GPU without recreating the disk. Returns None for non-vGPU stations.
+fn resplit_panel(name: &str, running: bool) -> Option<Markup> {
+    let uuid = station_mdev_uuid(name)?;
+    let parent = crate::vgpu::mdev_parent(&uuid)?; // no parent found ⇒ don't offer a re-split
+    // Precompute the selectable profiles (value, label) so the markup stays simple.
+    let sup = tendril_capability_engine::vgpu::probe(&parent);
+    let opts: Vec<(String, String)> = sup
+        .mdev_types
+        .iter()
+        .filter(|m| m.available > 0)
+        .map(|m| {
+            let label = m.name.clone().unwrap_or_else(|| m.id.clone());
+            (format!("mdev:{parent}:{}", m.id), label)
+        })
+        .collect();
+    Some(ui::panel(
+        "GPU split",
+        Some("change how this station's GPU is sliced — the disk and its data are kept"),
+        html! {
+            div.pad {
+                @if running {
+                    p.muted { "Shut the station down first — the split changes on the next boot." }
+                } @else if opts.is_empty() {
+                    p.sub { "No other vGPU profiles are currently available on the parent GPU." }
+                } @else {
+                    form hx-post=(format!("/stations/{name}/resplit")) hx-target="#resplit-result" hx-swap="innerHTML" {
+                        div.field { label { "New profile" }
+                            select name="gpu" {
+                                @for (val, label) in &opts {
+                                    option value=(val) { (label) }
+                                }
+                            }
+                        }
+                        button.btn.primary type="submit" style="margin-top:8px"
+                            hx-confirm="Change this station's GPU split? Its disk and data are kept; it boots into the new split." { "Change split" }
+                    }
+                    div #resplit-result style="margin-top:10px" {}
+                    p.sub style="margin-top:8px" { "Only the GPU slice changes — Windows, games, and saves on the disk are untouched." }
+                }
+            }
+        },
+    ))
 }
 
 fn act(f: impl FnOnce(&Libvirt) -> std::io::Result<()>) -> Markup {
@@ -371,6 +483,7 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
                             div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: (host threads − 1) ÷ GPUs" } }
                             div.field.install-only { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
+                            div.field.install-only { label { "Persistent data volume (GiB)" } input name="data_gib" value="0" inputmode="numeric"; span.hint { "0 = none. A separate disk for games/saves that survives OS reinstalls and GPU re-splits." } }
                             div.field.install-only.remote-hide { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
                             div.field.wide.install-only.remote-hide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
                             div.field.wide.install-only.remote-hide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
@@ -508,6 +621,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             define: true,
             start: checked("start"),
             steam_library_dir: steam_lib.clone(),
+            data_disk: None,
         };
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
@@ -545,6 +659,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             &get("hostname"),
             &get("gpu"),
             &apps,
+            get("data_gib").parse::<u32>().unwrap_or(0) > 0,
         ) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -593,6 +708,15 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         define: true,
         start: checked("start"),
         steam_library_dir: steam_lib.clone(),
+        // Optional persistent data volume: a `<disk>-data.qcow2` sized by the wizard (0 = none). It
+        // survives OS/base-image swaps and re-splits, so games/saves aren't lost when the OS is replaced.
+        data_disk: {
+            let gib: u32 = get("data_gib").parse().unwrap_or(0);
+            (gib > 0)
+                .then(|| disk.strip_suffix(".qcow2"))
+                .flatten()
+                .map(|base| (format!("{base}-data.qcow2"), gib))
+        },
     };
 
     // Refuse install media that failed checksum verification (a `.mismatch` marker). Media with no
@@ -769,6 +893,7 @@ fn build_seed(
     hostname: &str,
     gpu: &str,
     apps: &[GuestApp],
+    data_volume: bool,
 ) -> std::io::Result<String> {
     let dir = FsPath::new(disk)
         .parent()
@@ -805,16 +930,18 @@ fn build_seed(
                     .as_ref()
                     .and_then(|_| crate::licensing::token_url_if_running()),
                 apps: apps.to_vec(),
+                data_volume,
                 ..UnattendSpec::default()
             };
             build_seed_iso_with(&spec, &extras, path)?
         }
         GuestOs::SteamOs => {
-            // Same gating as Windows: inject the Linux vGPU guest driver only for a station on a vGPU
-            // (mdev) slice with a `.run` staged. It rides the OEMDRV kickstart seed and a first-boot
-            // service installs it.
+            // Inject the Linux vGPU guest driver for a station on a vGPU (mdev) slice. Selection is
+            // automatic: `auto_linux_run` picks the release matching the host driver branch, fetching
+            // it from NVIDIA's public bucket if it isn't already staged — the user never picks a driver.
+            // It rides the OEMDRV kickstart seed and a first-boot service installs it.
             let is_vgpu = gpu.starts_with(crate::vgpu::MDEV_PREFIX);
-            let staged = is_vgpu.then(crate::vgpuguest::staged_linux_run).flatten();
+            let staged = is_vgpu.then(crate::vgpuguest::auto_linux_run).flatten();
             let mut extras: Vec<(&str, &FsPath)> = Vec::new();
             let staged_path = staged.as_deref().map(FsPath::new);
             if let Some(p) = staged_path {
@@ -838,6 +965,7 @@ fn build_seed(
                 // installing an .exe. Steam/Discord aren't wired: Bazzite already ships Steam+gaming mode.
                 enable_sunshine: apps.contains(&GuestApp::Sunshine),
                 enable_moonlight: apps.contains(&GuestApp::Moonlight),
+                data_volume,
                 ..KickstartSpec::default()
             };
             build_kickstart_seed_with(&spec, &extras, path)?
@@ -928,6 +1056,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
                     s.hostname.trim(),
                     "",
                     &[],
+                    false, // fleet-placed: data volume is a follow-up
                 )
                 .map_err(|e| e.to_string())?,
             )
@@ -956,6 +1085,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         define: true,
         start: s.start,
         steam_library_dir: None, // fleet-placed stations: shared library is a follow-up
+        data_disk: None, // fleet-placed stations: data volume is a follow-up
     };
     provision(&req, &Libvirt::system()).map_err(|e| e.to_string())?;
     record_local(
@@ -1135,6 +1265,7 @@ pub async fn detail(Path(name): Path<String>) -> Response {
             }
         }))
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
+        @if let Some(p) = resplit_panel(&name, running) { (p) }
         (ui::panel("Save as image", Some("capture this station's disk as a reusable golden image"), html! {
             div.pad {
                 @if running {

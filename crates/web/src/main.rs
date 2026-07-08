@@ -78,12 +78,20 @@ async fn main() {
             "/fleet/:node/station/:name/:action",
             post(federation::peer_station_action),
         )
+        // Self-refresh poll for a single peer's stations panel.
+        .route("/fleet/:node/panel", get(federation::peer_panel_fragment))
         .route("/api/node", get(federation::api_node))
         .route("/api/provision", post(federation::api_provision))
         .route(
             "/api/station/:name/:action",
             post(federation::api_station_action),
         )
+        // Peer-facing VNC bridge: exposes this node's local station console over the token/mTLS-authed
+        // fed API (reuses the same relay as the browser console). It's the owning-node half of the
+        // cross-node console — a fleet peer with the fed token can reach a station's VNC through here.
+        // The browser-side proxy that consumes it (this node ↔ peer WebSocket) is a follow-up: it needs
+        // a WS client + the fed client cert, and real cross-node hardware to validate.
+        .route("/api/station/:name/vnc", get(stations::vnc_ws))
         .route("/api/reimage", post(federation::api_reimage))
         .route("/api/image/:name", get(federation::api_image))
         .route("/api/image-pull", post(federation::api_image_pull))
@@ -101,6 +109,7 @@ async fn main() {
         .route("/stations/:name/sendenter", post(stations::send_enter))
         .route("/stations/:name/progress", get(stations::progress))
         .route("/stations/:name/save-image", post(images::save))
+        .route("/stations/:name/resplit", post(stations::resplit_action))
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         .route("/images/delete", post(images::delete))
         .route("/images/panel", get(images::panel_route))

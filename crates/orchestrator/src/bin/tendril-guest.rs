@@ -104,6 +104,7 @@ fn main() {
         media,
         usb_devices: Vec::new(),
         steam_library_dir: None,
+        data_disk: None,
         define,
         start,
     };

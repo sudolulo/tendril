@@ -108,6 +108,10 @@ pub struct UnattendSpec {
     /// Applications to fetch-and-silent-install on first logon (Steam, Sunshine, Discord). Empty for a
     /// bare station.
     pub apps: Vec<GuestApp>,
+    /// The station has a persistent data volume (a second disk) — initialize + format it and assign a
+    /// drive letter on first logon, so games/saves can live off the OS disk and survive reinstalls,
+    /// base-image swaps, and re-splits.
+    pub data_volume: bool,
 }
 
 impl Default for UnattendSpec {
@@ -123,6 +127,7 @@ impl Default for UnattendSpec {
             vgpu_driver_exe: None,
             dls_token_url: None,
             apps: Vec::new(),
+            data_volume: false,
         }
     }
 }
@@ -214,6 +219,17 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
         r#"cmd /c sc config VirtioFsSvc start= auto &amp; net start VirtioFsSvc"#,
     );
     order += 1;
+    if spec.data_volume {
+        // Initialize the persistent data volume (the second disk, which starts RAW) and give it a drive
+        // letter, so games/saves can live off the OS disk. The RAW filter targets only the uninitialized
+        // data disk — never the installed Windows boot disk. `& < >` would need XML-escaping; this has none.
+        first_logon += &logon_cmd(
+            order,
+            "Initialize persistent data volume",
+            r#"powershell -NoProfile -Command "Get-Disk | Where-Object PartitionStyle -Eq RAW | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel TendrilData -Confirm:$false""#,
+        );
+        order += 1;
+    }
     if let Some(exe) = &spec.vgpu_driver_exe {
         // NVIDIA's DCH installer supports a silent, no-reboot install; the vGPU binds after the
         // station's next boot. The seed disc's drive letter isn't deterministic, so probe the likely ones.
@@ -373,6 +389,19 @@ mod tests {
         assert!(xml.contains(r#"pass="windowsPE""#));
         assert!(xml.contains(r#"pass="specialize""#));
         assert!(xml.contains(r#"pass="oobeSystem""#));
+    }
+
+    #[test]
+    fn data_volume_initializes_the_second_disk() {
+        let xml = render_autounattend(&UnattendSpec {
+            data_volume: true,
+            ..UnattendSpec::default()
+        });
+        assert!(xml.contains("Initialize persistent data volume"));
+        assert!(xml.contains("PartitionStyle -Eq RAW")); // targets only the uninitialized data disk
+        // Off by default.
+        assert!(!render_autounattend(&UnattendSpec::default())
+            .contains("Initialize persistent data volume"));
     }
 
     #[test]

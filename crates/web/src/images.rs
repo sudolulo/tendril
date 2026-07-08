@@ -155,14 +155,17 @@ fn human(n: u64) -> String {
 }
 
 /// A station's primary disk path, via virsh.
+/// The station's **boot** disk source path (target `vda`). Explicitly `vda`, not just the first disk,
+/// so a reimage/base-push replaces only the OS disk and NEVER the persistent data volume (`vdb`).
 fn station_disk(name: &str) -> Option<String> {
     let out = ui::run_stdout(
         "virsh",
         &["-c", "qemu:///system", "domblklist", "--details", name],
     )?;
+    // Columns: Type | Device | Target | Source.
     out.lines().find_map(|l| {
         let c: Vec<&str> = l.split_whitespace().collect();
-        (c.len() >= 4 && c[1] == "disk").then(|| c[3].to_string())
+        (c.len() >= 4 && c[1] == "disk" && c[2] == "vda").then(|| c[3].to_string())
     })
 }
 
@@ -405,6 +408,9 @@ fn note(ok: bool, msg: &str) -> Markup {
 /// overlay backs onto the existing golden image (instant, ~KB; **no full-image copy or transfer**),
 /// so on a shared store every node overlays the same base in place. The station is forced off (its
 /// disk is being replaced), the overlay recreated at the same path, and restarted if it was running.
+///
+/// Only the OS boot disk (`vda`) is replaced — a station's persistent **data volume** (`vdb`), if it
+/// has one, is left untouched, so games/saves survive a base-image push.
 pub(crate) fn reimage_station(name: &str, image_path: &str) -> Result<(), String> {
     let lv = Libvirt::system();
     let was_running = matches!(lv.state(name), DomainState::Running);
@@ -656,7 +662,7 @@ fn panel_with(note: Option<Markup>) -> Markup {
                                         button.btn.sm
                                             hx-get=(format!("/images/push?name={}", urlencode(n)))
                                             hx-target="#images" hx-swap="outerHTML"
-                                            title="Reset stations across the fleet to a fresh copy of this image" { "Push…" }
+                                            title="Reset stations across the fleet to a fresh copy of this image (each station's persistent data volume is kept)" { "Push…" }
                                         " "
                                         @if crate::federation::enabled() {
                                             button.btn.sm

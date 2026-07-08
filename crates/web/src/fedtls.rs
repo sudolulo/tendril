@@ -26,8 +26,9 @@ fn identity_dir() -> String {
         .unwrap_or_else(|| "/var/lib/tendril/fedtls".to_string())
 }
 
-/// The CA directory: explicit override, else the shared store's `ca/`. `None` (→ mTLS off) when neither
-/// is set — e.g. a standalone node with no shared store.
+/// The CA directory: explicit override, else the shared store's `ca/`, else a **local** CA dir that
+/// exists only once this node founded or joined a fleet via a join code (store-less trust). `None`
+/// (→ mTLS off, token fallback) on a lone node that has done neither.
 fn ca_dir() -> Option<String> {
     if let Ok(d) = std::env::var("TENDRIL_FED_CA_DIR") {
         let d = d.trim();
@@ -35,7 +36,22 @@ fn ca_dir() -> Option<String> {
             return Some(d.to_string());
         }
     }
-    crate::storage::store_root().map(|r| format!("{r}/ca"))
+    if let Some(r) = crate::storage::store_root() {
+        return Some(format!("{r}/ca"));
+    }
+    let local = local_ca_dir();
+    Path::new(&format!("{local}/ca.pem"))
+        .exists()
+        .then_some(local)
+}
+
+/// Local CA dir for a store-less fleet — the founder generates the CA here (via a join code) and
+/// joiners install the received CA here, so mTLS works with no shared store in the loop.
+pub(crate) fn local_ca_dir() -> String {
+    std::env::var("TENDRIL_FED_LOCAL_CA_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "/var/lib/tendril/fedtls-ca".to_string())
 }
 
 /// The federation mTLS listener address (its own port so it never collides with the browser UI).
@@ -106,11 +122,31 @@ fn chmod_600(path: &str) {
 #[cfg(not(unix))]
 fn chmod_600(_: &str) {}
 
-/// Ensure the shared federation CA exists (generate once, race-safe on the shared store). Returns the
-/// CA cert + key paths, or `None` if there's no CA dir.
+/// Ensure the fleet CA exists in this node's active CA dir (generate once, race-safe on a shared
+/// store). Returns the CA cert + key paths, or `None` if there's no CA dir.
 fn ensure_ca() -> Option<(String, String)> {
-    let dir = ca_dir()?;
-    let _ = std::fs::create_dir_all(&dir);
+    ensure_ca_in(&ca_dir()?)
+}
+
+/// Force-create (once) a CA in the local dir so this node can **found** a store-less fleet — the CA
+/// it hands out in join codes. Returns the cert + key paths.
+pub fn ensure_local_ca() -> Option<(String, String)> {
+    ensure_ca_in(&local_ca_dir())
+}
+
+/// The active fleet CA's cert + key **contents**, for embedding in a join code (store-less trust
+/// transfer). Founds a local CA when there's no store and none exists yet.
+pub fn ca_material() -> Option<(String, String)> {
+    let (cert, key) = ensure_ca().or_else(ensure_local_ca)?;
+    Some((
+        std::fs::read_to_string(&cert).ok()?,
+        std::fs::read_to_string(&key).ok()?,
+    ))
+}
+
+/// Ensure a CA exists in `dir` (generate once, race-safe). Returns the CA cert + key paths.
+fn ensure_ca_in(dir: &str) -> Option<(String, String)> {
+    let _ = std::fs::create_dir_all(dir);
     let ca_cert = format!("{dir}/ca.pem");
     let ca_key = format!("{dir}/ca.key");
     if Path::new(&ca_cert).exists() {

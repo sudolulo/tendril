@@ -59,6 +59,7 @@ async fn main() {
         .route("/fleet/rehome", post(federation::rehome))
         .route("/fleet/setup/name", post(federation::setup_name))
         .route("/fleet/setup/rotate-token", post(federation::rotate_token))
+        .route("/fleet/join-code", get(federation::join_code))
         // Control a peer's station from the Stations page (UI proxy → dispatches to the owning node).
         .route(
             "/fleet/:node/station/:name/:action",

@@ -21,6 +21,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 maud = { version = "0.26", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"  # compact single-line encoding for fleet join codes
 include_dir = "0.7"
 argon2 = "0.5"
 # HTTPS for the web UI (and, later, federation mTLS): a rustls TLS server. Self-signed certs are

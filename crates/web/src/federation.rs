@@ -274,6 +274,76 @@ pub fn token_ok(presented: &str) -> bool {
     !t.is_empty() && presented == t
 }
 
+/// Persist a federation token to `federation.conf` (replacing any existing `token=` line). Used when
+/// founding a **store-less** fleet, where there's no shared store to auto-generate/hold the token.
+fn set_conf_token(tok: &str) -> Result<(), String> {
+    let p = conf_path();
+    let mut lines: Vec<String> = std::fs::read_to_string(&p)
+        .ok()
+        .map(|t| {
+            t.lines()
+                .filter(|l| !l.trim_start().starts_with("token="))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    lines.push(format!("token={tok}"));
+    if let Some(d) = std::path::Path::new(&p).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+/// This node's federation token, generating and persisting one to `federation.conf` if none exists
+/// yet — so a store-less founder always has a token to hand out in its join code.
+fn ensure_founder_token() -> Option<String> {
+    let t = federation_token();
+    if !t.is_empty() {
+        return Some(t);
+    }
+    let tok = new_random_token()?;
+    set_conf_token(&tok).ok()?;
+    Some(tok)
+}
+
+/// A fleet join code: everything a new node needs to join this fleet with **no shared store** — this
+/// node's reachable URLs, the shared token, and the fleet CA (cert + key) so the joiner trusts the
+/// fleet and self-issues its cert. It's a one-time trust-bearing secret (like a Proxmox join blob).
+#[derive(Serialize, Deserialize)]
+struct JoinCode {
+    /// This (founding) node's name.
+    name: String,
+    /// This node's plain-TLS UI URL (fallback transport).
+    ui: String,
+    /// This node's mTLS federation endpoint.
+    fed: String,
+    /// The shared federation token.
+    token: String,
+    /// The fleet CA certificate (PEM).
+    ca: String,
+    /// The fleet CA private key (PEM) — lets the joiner self-issue its node cert store-lessly.
+    cakey: String,
+}
+
+/// Produce a copy-paste join code for this fleet (see [`JoinCode`]). Founds a store-less CA + token
+/// on demand, so "Create fleet" works on a lone node with no shared store. `None` if CA material
+/// can't be produced (e.g. `openssl` missing).
+pub fn make_join_code() -> Option<String> {
+    use base64::Engine as _;
+    let token = ensure_founder_token()?;
+    let (ca, cakey) = crate::fedtls::ca_material()?;
+    let jc = JoinCode {
+        name: node_name(),
+        ui: advertise_url(),
+        fed: crate::fedtls::fed_advertise_url(),
+        token,
+        ca,
+        cakey,
+    };
+    let json = serde_json::to_vec(&jc).ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(json))
+}
+
 // ── node info (the federation API payload) ──────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -666,6 +736,29 @@ pub async fn rotate_token() -> Markup {
 
 /// The Fleet setup / onboarding panel — how to form and grow a fleet, shown wherever a lone node needs
 /// to discover federation (System page) and on the Fleet page itself.
+/// Generate and reveal this fleet's join code (store-less onboarding). Runs the CA/token setup off
+/// the async worker since it shells out to `openssl` and touches the filesystem.
+pub async fn join_code() -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Disabled in the demo." } };
+    }
+    match tokio::task::spawn_blocking(make_join_code)
+        .await
+        .ok()
+        .flatten()
+    {
+        Some(code) => html! {
+            p.sub style="margin:0 0 6px" {
+                "Paste this on a new node's " b { "Join fleet" } " screen. It stays valid until you rotate the token."
+            }
+            pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px; word-break:break-all" { (code) }
+        },
+        None => {
+            html! { div.banner.error { "Couldn't generate a join code — is " code { "openssl" } " available on this node?" } }
+        }
+    }
+}
+
 pub fn setup_panel() -> Markup {
     ui::panel("Fleet setup", Some("form & grow a fleet"), setup_body(None))
 }
@@ -726,6 +819,19 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                                 hx-post="/fleet/setup/rotate-token" hx-target="#fleet-setup" hx-swap="outerHTML"
                                 hx-confirm="Rotate the join token? Nodes on the shared store update automatically; any manually-configured node must be given the new token." { "Rotate token" }
                         }
+                    }
+                }
+            }
+
+            div style="margin-top:12px" {
+                details {
+                    summary.sub style="cursor:pointer" { "Join code — add a node with no shared store" }
+                    div #join-code-box style="margin-top:8px" {
+                        p.sub style="margin:0 0 6px" {
+                            "One copy-paste code that lets a new node join this fleet without mounting a shared store — "
+                            "it carries this node's address, the token, and the fleet CA (so mTLS just works). Treat it as a secret."
+                        }
+                        button.btn.sm hx-get="/fleet/join-code" hx-target="#join-code-box" hx-swap="innerHTML" { "Generate join code" }
                     }
                 }
             }

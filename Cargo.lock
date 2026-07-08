@@ -971,6 +971,7 @@ dependencies = [
  "argon2",
  "axum",
  "axum-server",
+ "base64",
  "include_dir",
  "maud",
  "rustls",

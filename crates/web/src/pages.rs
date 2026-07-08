@@ -443,10 +443,10 @@ const AUTO_TIMER: &str = "bootc-fetch-apply-updates.timer";
 /// bootc system, so the control is previewable on test builds.
 const DUMMY_BOOTC_STATUS: &str = "\
 Current booted image: git.onetick.ninja/flan/tendril:latest
-        Digest: sha256:9f3c…a1b2  (version 0.13.1, 2026-07-07)
+        Digest: sha256:9f3c…a1b2  (version 0.18.0, 2026-07-08)
 Current staged image: none
     Available update: none — you're on the latest image
-Rollback image: git.onetick.ninja/flan/tendril:0.13.0  (bootable fallback)";
+Rollback image: git.onetick.ninja/flan/tendril:0.17.0  (bootable fallback)";
 
 pub async fn system() -> Markup {
     let status = ui::run_stdout("bootc", &["status"]);

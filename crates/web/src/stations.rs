@@ -99,6 +99,33 @@ fn delete_btn(name: &str) -> Markup {
 }
 
 pub async fn list_page() -> Markup {
+    use crate::federation as fed;
+    // Single node: the classic flat list.
+    if !fed::enabled() {
+        return ui::page(
+            "stations",
+            "Stations",
+            html! {
+                div.btnrow style="margin-bottom:16px" {
+                    a.btn.primary href="/stations/new" { "+ New station" }
+                }
+                (ui::panel("Stations", None, fragment(&Libvirt::system())))
+            },
+        );
+    }
+    // Fleet: every station across the fleet, grouped by node. This node is interactive; each peer's
+    // stations are shown read-only (they're managed on that peer). The demo uses its synthetic fleet.
+    let local = fed::node_name();
+    let peers: Vec<_> = if ui::is_demo() {
+        fed::demo_fleet()
+    } else {
+        tokio::task::spawn_blocking(fed::fleet)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| n.name != local)
+            .collect()
+    };
     ui::page(
         "stations",
         "Stations",
@@ -106,7 +133,13 @@ pub async fn list_page() -> Markup {
             div.btnrow style="margin-bottom:16px" {
                 a.btn.primary href="/stations/new" { "+ New station" }
             }
-            (ui::panel("Stations", None, fragment(&Libvirt::system())))
+            p.sub style="margin-bottom:16px" {
+                "Every station across the fleet. This node's stations are controllable here; a peer's "
+                "stations are managed on that node. Machines and health live on the "
+                a href="/fleet" { "Fleet" } " page."
+            }
+            (ui::panel(&format!("{local} · this node"), None, fragment(&Libvirt::system())))
+            @for n in &peers { (fed::stations_peer_panel(n)) }
         },
     )
 }
@@ -165,6 +198,25 @@ pub async fn new_form() -> Markup {
     create_form(None)
 }
 
+/// Remote placement targets for the create form (names only, no network): a fleet's peer nodes.
+/// Empty when there's no fleet, so the Placement selector doesn't appear on a lone node.
+fn fleet_target_names() -> Vec<String> {
+    if !crate::federation::enabled() {
+        return Vec::new();
+    }
+    if ui::is_demo() {
+        return crate::federation::demo_fleet()
+            .into_iter()
+            .filter(|n| n.reachable)
+            .map(|n| n.name)
+            .collect();
+    }
+    crate::federation::peers()
+        .into_iter()
+        .map(|p| p.name)
+        .collect()
+}
+
 fn create_form(error: Option<&str>) -> Markup {
     let matrix = detect();
     // Whole-GPU passthrough and vGPU on the same physical GPU are mutually exclusive at the driver
@@ -179,8 +231,21 @@ fn create_form(error: Option<&str>) -> Markup {
             @if let Some(e) = error { div.banner.error { (e) } }
             (ui::panel("Create a gaming station", None, html! {
                 @let (ram, vcpus, disk) = resource_defaults();
-                form.grid.pad method="post" action="/stations" {
+                @let peers = fleet_target_names();
+                form #newstation.grid.pad method="post" action="/stations" {
                     div.field { label { "Station name" } input name="name" value="station1" required; }
+                    // Placement: only shown once a fleet exists. Picking a peer switches the form to the
+                    // fleet dispatcher (a peer auto-assigns a whole free GPU; local-only fields are hidden).
+                    @if !peers.is_empty() {
+                        div.field.wide {
+                            label { "Placement" }
+                            select #placement name="target" onchange="tendrilPlace()" {
+                                option value="" { "This node — full options (specific GPU / vGPU, USB, seats)" }
+                                @for nm in &peers { option value=(nm) { (nm) } }
+                            }
+                            span.hint.remote-note style="display:none" { "On another node a whole free GPU is auto-assigned; local-only options (specific GPU/vGPU, USB, seats, disk path, ISO) don't apply." }
+                        }
+                    }
                     @let img_list = crate::images::list();
                     @if !img_list.is_empty() {
                         div.field.wide {
@@ -204,7 +269,7 @@ fn create_form(error: Option<&str>) -> Markup {
                             option value="steamos" { "SteamOS (Bazzite)" }
                         }
                     }
-                    div.field.wide {
+                    div.field.wide.remote-hide {
                         label { "GPU" }
                         select name="gpu" {
                             option value="" { "None — headless / attach later" }
@@ -244,7 +309,7 @@ fn create_form(error: Option<&str>) -> Markup {
                     div.field.install-only { label { "Password" } input name="password" value="tendril"; }
                     @let seat_list = crate::seats::load();
                     @if !seat_list.is_empty() {
-                        div.field.wide {
+                        div.field.wide.remote-hide {
                             label { "Seat (a saved group of USB devices — manage under Hardware)" }
                             select name="seat" {
                                 option value="" { "None" }
@@ -254,7 +319,7 @@ fn create_form(error: Option<&str>) -> Markup {
                     }
                     @let usb_list = usb::devices();
                     @if !usb_list.is_empty() {
-                        div.field.wide {
+                        div.field.wide.remote-hide {
                             label { "Or pick individual USB devices (keyboard, mouse, controller)" }
                             @for d in &usb_list {
                                 @let id = format!("{:04x}:{:04x}", d.vendor_id, d.product_id);
@@ -278,22 +343,35 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
                             div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: (host threads − 1) ÷ GPUs" } }
                             div.field.install-only { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
-                            div.field.install-only { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
-                            div.field.wide.install-only { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
-                            div.field.wide.install-only { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
+                            div.field.install-only.remote-hide { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
+                            div.field.wide.install-only.remote-hide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
+                            div.field.wide.install-only.remote-hide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
                             div.field.wide.install-only { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
                         }
                     }
                     div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create station" } a.btn href="/stations" { "Cancel" } } }
                     (maud::PreEscaped(
-                        "<script>window.tendrilClone=function(){\
+                        "<script>\
+                         window.tendrilPlace=function(){\
+                         var p=document.getElementById('placement');var f=document.getElementById('newstation');\
+                         var remote=p&&p.value!=='';\
+                         if(f){f.setAttribute('action',remote?'/fleet/create':'/stations');}\
+                         document.querySelectorAll('.remote-hide').forEach(function(e){e.style.display=remote?'none':'';});\
+                         var n=document.querySelector('.remote-note');if(n){n.style.display=remote?'':'none';}\
+                         if(!remote&&window.tendrilClone){tendrilClone();}\
+                         };\
+                         window.tendrilClone=function(){\
                          var b=document.getElementById('base-image');if(!b)return;\
                          var o=b.options[b.selectedIndex];var cloning=b.value!=='';\
-                         document.querySelectorAll('.install-only').forEach(function(e){e.style.display=cloning?'none':'';});\
+                         var p=document.getElementById('placement');var remote=p&&p.value!=='';\
+                         document.querySelectorAll('.install-only').forEach(function(e){\
+                           if(remote&&e.classList.contains('remote-hide'))return;\
+                           e.style.display=cloning?'none':'';});\
                          var os=o&&o.getAttribute('data-os');var s=document.getElementById('os-select');\
                          if(cloning&&os&&s){s.value=os;}\
-                         if(cloning&&!os&&s){var f=s.closest('.install-only');if(f)f.style.display='';}\
-                         };tendrilClone();</script>"
+                         if(cloning&&!os&&s){var ff=s.closest('.install-only');if(ff)ff.style.display='';}\
+                         };\
+                         tendrilPlace();</script>"
                     ))
                 }
             }))

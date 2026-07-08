@@ -83,15 +83,6 @@ pub(crate) fn os_display(name: &str) -> &'static str {
     }
 }
 
-/// Machine OS token for a `data-os` attribute ("windows"/"steamos"/""), for clone-exclusivity JS.
-pub(crate) fn image_os_short(name: &str) -> &'static str {
-    match image_os(name) {
-        Some(GuestOs::Windows) => "windows",
-        Some(GuestOs::SteamOs) => "steamos",
-        None => "",
-    }
-}
-
 /// A station's guest OS, inferred from its domain XML clock (Windows uses localtime, SteamOS UTC).
 fn station_guest(name: &str) -> Option<GuestOs> {
     let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;

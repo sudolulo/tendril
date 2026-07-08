@@ -50,7 +50,11 @@ async fn main() {
         .route("/stats", get(pages::stats))
         // federation
         .route("/fleet", get(federation::page))
-        .route("/fleet/new", get(federation::new_page))
+        // Legacy fleet-create URL now folds into the unified Stations wizard (placement selector).
+        .route(
+            "/fleet/new",
+            get(|| async { axum::response::Redirect::permanent("/stations/new") }),
+        )
         .route("/fleet/create", post(federation::create))
         .route("/fleet/rehome", post(federation::rehome))
         .route("/fleet/setup/name", post(federation::setup_name))

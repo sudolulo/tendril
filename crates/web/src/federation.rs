@@ -444,7 +444,7 @@ pub async fn page() -> Markup {
 
 /// A synthetic multi-node fleet for the public demo: a few heterogeneous boxes with stations and GPUs,
 /// including a vGPU-split node and one that's offline (to show the re-home story).
-fn demo_fleet() -> Vec<NodeInfo> {
+pub(crate) fn demo_fleet() -> Vec<NodeInfo> {
     let station = |name: &str, state: &str, gpu: bool| StationInfo {
         name: name.to_string(),
         state: state.to_string(),
@@ -542,11 +542,10 @@ fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
         "Fleet",
         html! {
             @if let Some(n) = note { (n) }
-            div.btnrow style="margin-bottom:16px" {
-                a.btn.primary href="/fleet/new" { "+ New fleet station" }
-            }
             p.sub style="margin-bottom:16px" {
-                "Every node manages itself; this view aggregates the fleet over each node's API. "
+                "Infrastructure view — the machines in your fleet, their GPUs and health. Every node "
+                "manages itself; create and control stations from the "
+                a href="/stations" { "Stations" } " page. "
                 strong { (up) "/" (nodes.len()) } " node(s) reachable · " (total_stations) " station(s)."
             }
             @for n in &nodes { (node_card(n)) }
@@ -1090,84 +1089,8 @@ pub struct FleetCreateForm {
     start: Option<String>,
 }
 
-/// The "create a station on the fleet" form — mirrors the standard station wizard (same options,
-/// sensible defaults), with the non-essential ones behind an Advanced toggle. GPU is auto-assigned by
-/// placement rather than picked; seats/USB and vGPU are set on the node's own wizard.
-pub async fn new_page() -> Markup {
-    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
-    let images = crate::images::list();
-    ui::page(
-        "fleet",
-        "New fleet station",
-        html! {
-            (ui::panel("Create a station on the fleet", None, html! {
-                @let (ram, vcpus, disk) = crate::stations::resource_defaults();
-                form.grid.pad method="post" action="/fleet/create" {
-                    div.field { label { "Station name" } input name="name" value="station1" required; }
-                    div.field {
-                        label { "Placement" }
-                        select name="target" {
-                            option value="" { "Auto — any node with a free GPU" }
-                            @for n in &nodes { @if n.reachable {
-                                option value=(n.name) { (n.name) " (" (free_gpu(n).map(|_| "free GPU").unwrap_or("no free GPU")) ")" }
-                            } }
-                        }
-                        span.hint { "A whole GPU is auto-assigned on the chosen node." }
-                    }
-                    @if !images.is_empty() {
-                        div.field.wide {
-                            label { "Base image (clone a ready-to-play station instantly)" }
-                            select #fleet-base name="base_image" onchange="fleetClone()" {
-                                option value="" { "None — install the OS fresh" }
-                                @for (n, sz) in &images {
-                                    @let osa = crate::images::image_os_short(n);
-                                    option value=(n) data-os=(osa) { (n) " (" (sz) ") · " (crate::images::os_display(n)) }
-                                }
-                            }
-                            span.hint { "Golden images on the shared store are visible to every node — cloning is instant, needs no install media, and the OS comes from the image." }
-                        }
-                    }
-                    div.field.fleet-install-only {
-                        label { "Guest OS" }
-                        select #fleet-os name="os" {
-                            option value="windows" { "Windows 11" }
-                            option value="steamos" { "SteamOS (Bazzite)" }
-                        }
-                    }
-                    div.field.fleet-install-only { label { "Username" } input name="username" value="player"; }
-                    div.field.fleet-install-only { label { "Password" } input name="password" value="tendril"; }
-                    details.advanced.wide {
-                        summary { "Advanced options" }
-                        div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
-                            div.field.check.fleet-install-only { input type="checkbox" name="unattend" id="f-unattend" checked; label for="f-unattend" { "Install unattended (hands-off)" } span.hint { "Installs the guest OS without prompts using the account above." } }
-                            div.field.check { input type="checkbox" name="native" id="f-native"; label for="f-native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
-                            div.field.check { input type="checkbox" name="start" id="f-start" checked; label for="f-start" { "Start now" } }
-                        }
-                        div.grid style="margin-top:12px" {
-                            div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Default sized to the chosen node." } }
-                            div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; }
-                            div.field.fleet-install-only { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; }
-                            div.field.wide.fleet-install-only { label { "Computer name / hostname" } input name="hostname" placeholder="defaults to the station name"; }
-                        }
-                    }
-                    div.field.wide { div.btnrow { button.btn.primary type="submit" { "Create on fleet" } a.btn href="/fleet" { "Cancel" } } }
-                    (maud::PreEscaped(
-                        "<script>window.fleetClone=function(){\
-                         var b=document.getElementById('fleet-base');if(!b)return;\
-                         var o=b.options[b.selectedIndex];var cloning=b.value!=='';\
-                         document.querySelectorAll('.fleet-install-only').forEach(function(e){e.style.display=cloning?'none':'';});\
-                         var os=o&&o.getAttribute('data-os');var s=document.getElementById('fleet-os');\
-                         if(cloning&&os&&s){s.value=os;}\
-                         if(cloning&&!os&&s){var f=s.closest('.fleet-install-only');if(f)f.style.display='';}\
-                         };fleetClone();</script>"
-                    ))
-                }
-            }))
-        },
-    )
-}
-
-/// Resolve placement and dispatch the provision to the chosen node.
+/// Resolve placement and dispatch the provision to the chosen node. The station spec comes from the
+/// unified Stations wizard, which switches its POST target here when a peer node is chosen.
 pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>) -> Markup {
     let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
     if f.name.trim().is_empty() {
@@ -1386,6 +1309,39 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
     }
 }
 
+/// A peer node's stations as a read-only panel — rendered on the Stations page for every node
+/// other than this one (a peer's stations are managed on that peer, not here).
+pub fn stations_peer_panel(n: &NodeInfo) -> Markup {
+    ui::panel(
+        &n.name,
+        Some(if n.reachable {
+            "peer · online"
+        } else {
+            "peer · unreachable"
+        }),
+        html! {
+            div.pad {
+                @if !n.reachable {
+                    p.sub { "Node not responding. Recover its image-backed stations from the " a href="/fleet" { "Fleet" } " page." }
+                } @else if n.stations.is_empty() {
+                    p.sub { "No stations on this node." }
+                } @else {
+                    div.scroll { table {
+                        thead { tr { th { "Station" } th { "State" } th.right { "GPU" } } }
+                        tbody { @for s in &n.stations {
+                            tr {
+                                td.mono { (s.name) }
+                                td { (s.state) }
+                                td.right { @if s.gpu { "\u{2713}" } @else { span.sub { "\u{2014}" } } }
+                            }
+                        } }
+                    } }
+                }
+            }
+        },
+    )
+}
+
 fn node_card(n: &NodeInfo) -> Markup {
     let free_gpus = n
         .gpus
@@ -1432,20 +1388,6 @@ fn node_card(n: &NodeInfo) -> Markup {
                         (n.stations.len()) " station(s) · " (n.gpus.len()) " GPU(s), " (free_gpus) " free for passthrough"
                         @if !n.health.uptime.is_empty() { " · up " (n.health.uptime) }
                         @if n.health.mem_total_gb > 0.0 { " · " (format!("{:.0}/{:.0} GB RAM", n.health.mem_used_gb, n.health.mem_total_gb)) }
-                    }
-                    @if n.stations.is_empty() {
-                        p.sub { "No stations." }
-                    } @else {
-                        div.scroll { table {
-                            thead { tr { th { "Station" } th { "State" } th.right { "GPU" } } }
-                            tbody { @for s in &n.stations {
-                                tr {
-                                    td.mono { (s.name) }
-                                    td { (s.state) }
-                                    td.right { @if s.gpu { "✓" } @else { span.sub { "—" } } }
-                                }
-                            } }
-                        } }
                     }
                     @if !n.gpus.is_empty() {
                         p.sub style="margin:10px 0 0" {

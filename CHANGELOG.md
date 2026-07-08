@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tendril-stable-installer-x86_64.iso` name. Channels, promotion checklist (bake time, hardware
   matrix, blockers, security review), and subscription commands in `docs/CHANNELS.md`.
 - **Optional image signing** — `release.yml` signs the released image digest with cosign when
-  `COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD` secrets are configured; non-fatal and off by default.
+  `COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD` secrets are configured; non-fatal and off by default. The
+  workflow fetches a pinned, checksum-verified cosign itself if the runner lacks one; the signing
+  public key is committed as `cosign.pub`, with verification steps in `docs/CHANNELS.md`.
 
 ## [0.18.0] - 2026-07-08
 

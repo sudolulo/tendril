@@ -18,6 +18,13 @@ sudo bootc switch git.onetick.ninja/flan/tendril:stable   # or :latest, :dev
 Installer ISOs: `tendril-latest-installer-x86_64.iso`, `tendril-stable-installer-x86_64.iso`, and
 `tendril-dev-installer-x86_64.iso` at https://dl.onetick.ninja/ (verify against `SHA256SUMS`).
 
+Released images are cosign-signed (from the first release after signing was enabled). Verify with
+the repository's [`cosign.pub`](../cosign.pub):
+
+```bash
+cosign verify --key cosign.pub git.onetick.ninja/flan/tendril:stable
+```
+
 ## What "stable" means
 
 **Promotion moves bits, never rebuilds.** The `:stable` tag is repointed at the *exact image digest*

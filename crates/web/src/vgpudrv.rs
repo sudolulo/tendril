@@ -36,7 +36,8 @@ pub fn parse_nvidia_version(s: &str) -> Option<String> {
         }
         let start = i;
         while i < b.len()
-            && (b[i].is_ascii_digit() || (b[i] == b'.' && i + 1 < b.len() && b[i + 1].is_ascii_digit()))
+            && (b[i].is_ascii_digit()
+                || (b[i] == b'.' && i + 1 < b.len() && b[i + 1].is_ascii_digit()))
         {
             i += 1;
         }
@@ -356,9 +357,15 @@ mod tests {
                 .as_deref(),
             Some("550.127.05")
         );
-        assert_eq!(parse_nvidia_version("535.161.08").as_deref(), Some("535.161.08"));
+        assert_eq!(
+            parse_nvidia_version("535.161.08").as_deref(),
+            Some("535.161.08")
+        );
         assert_eq!(parse_nvidia_version("470.256").as_deref(), Some("470.256"));
-        assert_eq!(parse_nvidia_version("x86_64 only, no version").as_deref(), None);
+        assert_eq!(
+            parse_nvidia_version("x86_64 only, no version").as_deref(),
+            None
+        );
         assert_eq!(parse_nvidia_version("vGPU 17.4").as_deref(), None); // 2-digit major = release, not driver
     }
 }

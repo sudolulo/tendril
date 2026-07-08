@@ -161,7 +161,10 @@ mod tests {
         let mut req = base_request();
         req.data_disk = Some(("/var/lib/tendril/s1-data.qcow2".to_string(), 256));
         let xml = provision(&req, &Libvirt::system()).unwrap().xml;
-        assert!(xml.contains("dev='vdb'"), "data volume should attach as vdb");
+        assert!(
+            xml.contains("dev='vdb'"),
+            "data volume should attach as vdb"
+        );
         assert!(xml.contains("s1-data.qcow2"));
         // Without a data disk, no vdb.
         let plain = provision(&base_request(), &Libvirt::system()).unwrap().xml;

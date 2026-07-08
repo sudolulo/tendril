@@ -234,10 +234,7 @@ pub(crate) fn resplit(name: &str, new_gpu_sel: &str) -> Result<(), String> {
             return Err("couldn't locate the current vGPU slice in the station definition".into());
         }
     };
-    let new_xml = xml.replace(
-        &format!("uuid='{old_uuid}'"),
-        &format!("uuid='{new_uuid}'"),
-    );
+    let new_xml = xml.replace(&format!("uuid='{old_uuid}'"), &format!("uuid='{new_uuid}'"));
     if let Err(e) = lv.define(name, &new_xml) {
         crate::vgpu::remove_mdev(&new_uuid); // roll back the freshly-created slice
         return Err(format!("couldn't update the station definition: {e}"));
@@ -276,7 +273,7 @@ pub async fn resplit_action(
 fn resplit_panel(name: &str, running: bool) -> Option<Markup> {
     let uuid = station_mdev_uuid(name)?;
     let parent = crate::vgpu::mdev_parent(&uuid)?; // no parent found ⇒ don't offer a re-split
-    // Precompute the selectable profiles (value, label) so the markup stays simple.
+                                                   // Precompute the selectable profiles (value, label) so the markup stays simple.
     let sup = tendril_capability_engine::vgpu::probe(&parent);
     let opts: Vec<(String, String)> = sup
         .mdev_types
@@ -1086,7 +1083,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         define: true,
         start: s.start,
         steam_library_dir: None, // fleet-placed stations: shared library is a follow-up
-        data_disk: None, // fleet-placed stations: data volume is a follow-up
+        data_disk: None,         // fleet-placed stations: data volume is a follow-up
     };
     provision(&req, &Libvirt::system()).map_err(|e| e.to_string())?;
     record_local(

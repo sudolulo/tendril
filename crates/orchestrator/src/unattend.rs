@@ -399,7 +399,7 @@ mod tests {
         });
         assert!(xml.contains("Initialize persistent data volume"));
         assert!(xml.contains("PartitionStyle -Eq RAW")); // targets only the uninitialized data disk
-        // Off by default.
+                                                         // Off by default.
         assert!(!render_autounattend(&UnattendSpec::default())
             .contains("Initialize persistent data volume"));
     }

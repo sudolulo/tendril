@@ -1791,7 +1791,7 @@ async fn peer_vnc_relay(
     let to_peer = async {
         while let Some(Ok(msg)) = b_rx.next().await {
             let out = match msg {
-                AxMsg::Binary(b) => TgMsg::Binary(b.into()),
+                AxMsg::Binary(b) => TgMsg::Binary(b),
                 AxMsg::Text(t) => TgMsg::Text(t.as_str().into()),
                 AxMsg::Close(_) => break,
                 _ => continue,
@@ -1947,9 +1947,7 @@ fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
 }
 
 /// UI poll: re-fetch a single peer's fresh state and re-render just its panel (self-refresh).
-pub async fn peer_panel_fragment(
-    axum::extract::Path(node): axum::extract::Path<String>,
-) -> Markup {
+pub async fn peer_panel_fragment(axum::extract::Path(node): axum::extract::Path<String>) -> Markup {
     if ui::is_demo() {
         return match demo_fleet().into_iter().find(|x| x.name == node) {
             Some(x) => peer_panel(&x, None),
@@ -1958,7 +1956,10 @@ pub async fn peer_panel_fragment(
     }
     let nd = node.clone();
     let fresh = tokio::task::spawn_blocking(move || {
-        peers().into_iter().find(|p| p.name == nd).map(|p| fetch_peer(&p))
+        peers()
+            .into_iter()
+            .find(|p| p.name == nd)
+            .map(|p| fetch_peer(&p))
     })
     .await
     .ok()

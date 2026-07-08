@@ -48,6 +48,9 @@ async fn main() {
         .route("/fleet/rehome", post(federation::rehome))
         .route("/api/node", get(federation::api_node))
         .route("/api/provision", post(federation::api_provision))
+        .route("/api/reimage", post(federation::api_reimage))
+        .route("/api/image/:name", get(federation::api_image))
+        .route("/api/image-pull", post(federation::api_image_pull))
         // stations
         .route("/stations", get(stations::list_page).post(stations::create))
         .route("/stations/fragment", get(stations::fragment_route))
@@ -67,6 +70,8 @@ async fn main() {
         .route("/images/panel", get(images::panel_route))
         .route("/images/verify", post(images::verify))
         .route("/images/verifystatus", get(images::verify_status))
+        .route("/images/push", get(images::push_form).post(images::push))
+        .route("/images/distribute", post(images::distribute))
         // hardware
         .route("/hardware", get(hardware::page))
         .route("/hardware/:addr/bind", post(hardware::bind))

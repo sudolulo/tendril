@@ -96,7 +96,7 @@ struct Presence {
 }
 
 /// The base URL peers should reach this node at: explicit override, else `http://<lan-ip>:<port>`.
-fn advertise_url() -> String {
+pub(crate) fn advertise_url() -> String {
     if let Ok(u) = std::env::var("TENDRIL_ADVERTISE_URL") {
         let u = u.trim().trim_end_matches('/');
         if !u.is_empty() {
@@ -570,6 +570,181 @@ fn dispatch(target: &str, spec: &ProvisionSpec) -> Result<(), String> {
             .map(|p| p.url)
             .ok_or("unknown peer node")?;
         remote_provision(&url, spec)
+    }
+}
+
+// ── reimage (push a golden image to stations across the fleet) ───────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ReimageSpec {
+    pub station: String,
+    pub image: String,
+}
+
+/// Remote-reimage API: reset a station on THIS node to the named golden image, resolved from this
+/// node's image dir (the shared store — so the overlay backs onto it in place, nothing transferred).
+pub async fn api_reimage(axum::Json(spec): axum::Json<ReimageSpec>) -> axum::Json<ProvisionResult> {
+    let res = tokio::task::spawn_blocking(move || {
+        let path = crate::images::path_of(&spec.image)
+            .ok_or("image not found on this node".to_string())?;
+        crate::images::reimage_station(&spec.station, &path)
+    })
+    .await
+    .unwrap_or_else(|_| Err("reimage task panicked".into()));
+    axum::Json(match res {
+        Ok(()) => ProvisionResult {
+            ok: true,
+            error: None,
+        },
+        Err(e) => ProvisionResult {
+            ok: false,
+            error: Some(e),
+        },
+    })
+}
+
+/// Reimage a station on `node` — locally (overlay onto the local/shared image), or via the peer's API.
+pub fn reimage_dispatch(node: &str, station: &str, image: &str) -> Result<(), String> {
+    if node == node_name() {
+        let path = crate::images::path_of(image).ok_or("image not found on this node")?;
+        crate::images::reimage_station(station, &path)
+    } else {
+        let url = peers()
+            .into_iter()
+            .find(|p| p.name == node)
+            .map(|p| p.url)
+            .ok_or("unknown peer node")?;
+        remote_reimage(
+            &url,
+            &ReimageSpec {
+                station: station.to_string(),
+                image: image.to_string(),
+            },
+        )
+    }
+}
+
+fn remote_reimage(url: &str, spec: &ReimageSpec) -> Result<(), String> {
+    let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
+    let ep = format!("{}/api/reimage", url.trim_end_matches('/'));
+    let auth = format!("X-Tendril-Federation: {}", federation_token());
+    let out = ui::run_result(
+        "curl",
+        &[
+            "-sk",
+            "--max-time",
+            "60",
+            "-H",
+            &auth,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body,
+            &ep,
+        ],
+    )?;
+    let res: ProvisionResult =
+        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
+    if res.ok {
+        Ok(())
+    } else {
+        Err(res.error.unwrap_or_else(|| "remote reimage failed".into()))
+    }
+}
+
+// ── distribute a golden image to every node's store (once per node; then overlays, no per-station copy) ──
+
+/// Serve a golden image's bytes to a peer pulling it (token-authed). 404 if this node lacks it.
+pub async fn api_image(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match crate::images::path_of(&name) {
+        Some(p) => match tokio::fs::File::open(&p).await {
+            Ok(f) => (
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(f)),
+            )
+                .into_response(),
+            Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        },
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ImagePull {
+    name: String,
+    from: String,
+}
+
+/// Pull a golden image from a peer into THIS node's store (once; then reimaging uses overlays). No-op
+/// if already present (e.g. a shared store).
+pub async fn api_image_pull(
+    axum::Json(pull): axum::Json<ImagePull>,
+) -> axum::Json<ProvisionResult> {
+    let tok = federation_token();
+    let res =
+        tokio::task::spawn_blocking(move || crate::images::pull_from(&pull.name, &pull.from, &tok))
+            .await
+            .unwrap_or_else(|_| Err("image-pull task panicked".into()));
+    axum::Json(match res {
+        Ok(()) => ProvisionResult {
+            ok: true,
+            error: None,
+        },
+        Err(e) => ProvisionResult {
+            ok: false,
+            error: Some(e),
+        },
+    })
+}
+
+/// Distribute a golden image to `node`'s store: it pulls from `source_url`. The local node is the
+/// source (no-op if it already has it).
+pub fn distribute_dispatch(node: &str, name: &str, source_url: &str) -> Result<(), String> {
+    if node == node_name() {
+        return if crate::images::path_of(name).is_some() {
+            Ok(())
+        } else {
+            Err("image not present on the source node".into())
+        };
+    }
+    let url = peers()
+        .into_iter()
+        .find(|p| p.name == node)
+        .map(|p| p.url)
+        .ok_or("unknown peer node")?;
+    let body = serde_json::to_string(&ImagePull {
+        name: name.to_string(),
+        from: source_url.to_string(),
+    })
+    .map_err(|e| e.to_string())?;
+    let ep = format!("{}/api/image-pull", url.trim_end_matches('/'));
+    let auth = format!("X-Tendril-Federation: {}", federation_token());
+    let out = ui::run_result(
+        "curl",
+        &[
+            "-sk",
+            "--max-time",
+            "3600",
+            "-H",
+            &auth,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body,
+            &ep,
+        ],
+    )?;
+    let res: ProvisionResult =
+        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
+    if res.ok {
+        Ok(())
+    } else {
+        Err(res
+            .error
+            .unwrap_or_else(|| "remote image-pull failed".into()))
     }
 }
 

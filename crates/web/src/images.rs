@@ -10,6 +10,7 @@ use axum::extract::{Form, Path, Query};
 use maud::{html, Markup};
 use serde::Deserialize;
 
+use tendril_orchestrator::guest::create_overlay;
 use tendril_orchestrator::{DomainState, GuestOs, Libvirt};
 
 use crate::ui;
@@ -357,6 +358,216 @@ fn note(ok: bool, msg: &str) -> Markup {
     html! { div class=(if ok { "banner ok" } else { "banner error" }) style="margin:0" { (msg) } }
 }
 
+// ── push a golden image to stations (bulk reimage) ──────────────────────────────────────────────
+
+/// Reset a station's disk to a fresh **copy-on-write overlay** of `image_path` — a "reimage". The
+/// overlay backs onto the existing golden image (instant, ~KB; **no full-image copy or transfer**),
+/// so on a shared store every node overlays the same base in place. The station is forced off (its
+/// disk is being replaced), the overlay recreated at the same path, and restarted if it was running.
+pub(crate) fn reimage_station(name: &str, image_path: &str) -> Result<(), String> {
+    let lv = Libvirt::system();
+    let was_running = matches!(lv.state(name), DomainState::Running);
+    let disk = station_disk(name).ok_or("couldn't find the station's disk")?;
+    if was_running {
+        let _ = lv.destroy(name); // force off — the disk is about to be replaced
+    }
+    let _ = std::fs::remove_file(&disk);
+    create_overlay(FsPath::new(&disk), FsPath::new(image_path)).map_err(|e| e.to_string())?;
+    if was_running {
+        lv.start(name).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct PushQuery {
+    name: String,
+}
+
+/// The fleet-wide "push image to stations" picker — pick stations across all nodes to reset to this
+/// golden image.
+pub async fn push_form(Query(q): Query<PushQuery>) -> Markup {
+    let image = sanitize(&q.name);
+    let nodes = tokio::task::spawn_blocking(crate::federation::fleet)
+        .await
+        .unwrap_or_default();
+    let total: usize = nodes.iter().map(|n| n.stations.len()).sum();
+    html! {
+        div #images {
+            div.pad {
+                @if path_of(&image).is_none() {
+                    div.banner.error { "That image no longer exists." }
+                    button.btn.sm hx-get="/images/panel" hx-target="#images" hx-swap="outerHTML" { "Back" }
+                } @else if total == 0 {
+                    p.muted { "No stations in the fleet to push to." }
+                    button.btn.sm hx-get="/images/panel" hx-target="#images" hx-swap="outerHTML" { "Back" }
+                } @else {
+                    p { "Push " strong { (image) } " to stations — each selected station is reset to a fresh copy-on-write overlay of it (instant, no image transfer)." }
+                    p.sub style="color:var(--crit)" { "This wipes each selected station's current disk (forced off, re-cloned, restarted). Push images matching the station's OS; remote nodes must have the image (e.g. on the shared store)." }
+                    form hx-post=(format!("/images/push?name={}", urlencode(&image))) hx-target="#images" hx-swap="outerHTML"
+                        hx-confirm="Reset the selected stations to this golden image? Their current disks are wiped." {
+                        div.check { input type="checkbox" id="push-all" onclick="var c=this.checked;document.querySelectorAll('.push-st:not(:disabled)').forEach(function(e){e.checked=c});"; label for="push-all" { strong { "Select all" } } }
+                        @for n in &nodes {
+                            @if !n.stations.is_empty() {
+                                p.sub style="margin:8px 0 2px" { strong { (n.name) } @if !n.reachable { " (unreachable — skipped)" } }
+                                @for s in &n.stations {
+                                    @let id = format!("push-{}-{}", n.name, s.name);
+                                    div.check {
+                                        input.push-st type="checkbox" name="station" value=(format!("{}|{}", n.name, s.name)) id=(id) disabled[!n.reachable];
+                                        label for=(id) { (s.name) " " span.sub { "(" (s.state) ")" } }
+                                    }
+                                }
+                            }
+                        }
+                        div.btnrow style="margin-top:10px" {
+                            button.btn.primary.danger type="submit" { "Push to selected" }
+                            button.btn type="button" hx-get="/images/panel" hx-target="#images" hx-swap="outerHTML" { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Reimage each selected station (across the fleet) to the golden image, dispatching to the station's
+/// node (locally, or over the peer's API).
+pub async fn push(Query(q): Query<PushQuery>, Form(form): Form<Vec<(String, String)>>) -> Markup {
+    let image = sanitize(&q.name);
+    if path_of(&image).is_none() {
+        return panel_with(Some(
+            html! { div.banner.error { "That image no longer exists." } },
+        ));
+    }
+    let targets: Vec<(String, String)> = form
+        .iter()
+        .filter(|(k, _)| k == "station")
+        .filter_map(|(_, v)| {
+            v.split_once('|')
+                .map(|(n, s)| (n.to_string(), s.to_string()))
+        })
+        .collect();
+    if targets.is_empty() {
+        return panel_with(Some(html! { div.banner.warn { "No stations selected." } }));
+    }
+    let img = image.clone();
+    let results = tokio::task::spawn_blocking(move || {
+        targets
+            .into_iter()
+            .map(|(node, st)| {
+                let r = crate::federation::reimage_dispatch(&node, &st, &img);
+                (node, st, r)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    let ok = results.iter().filter(|(_, _, r)| r.is_ok()).count();
+    let errs: Vec<String> = results
+        .iter()
+        .filter_map(|(n, s, r)| r.as_ref().err().map(|e| format!("{n}/{s}: {e}")))
+        .collect();
+    let note = html! {
+        @if errs.is_empty() {
+            div.banner.ok { "Pushed " (image) " to " (ok) " station(s)." }
+        } @else {
+            div.banner.error { "Pushed to " (ok) " station(s); failed — " (errs.join("; ")) }
+        }
+    };
+    panel_with(Some(note))
+}
+
+/// Pull a golden image from `from_url`'s API into this node's store, **unless already present** (e.g. a
+/// shared store — then it's a no-op, nothing transferred). Atomic (temp + rename); records the
+/// SHA-256 sidecar for the pulled copy.
+pub(crate) fn pull_from(name: &str, from_url: &str, token: &str) -> Result<(), String> {
+    let clean = sanitize(name);
+    if clean.is_empty() {
+        return Err("invalid image name".into());
+    }
+    let dir = images_dir();
+    let dest = format!("{dir}/{clean}.qcow2");
+    if FsPath::new(&dest).exists() {
+        return Ok(()); // already present (shared store, or previously distributed)
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = format!("{dir}/.{clean}.qcow2.pulling");
+    let _ = std::fs::remove_file(&tmp);
+    let auth = format!("X-Tendril-Federation: {token}");
+    let src = format!(
+        "{}/api/image/{}",
+        from_url.trim_end_matches('/'),
+        urlencode(&clean)
+    );
+    ui::run_result(
+        "curl",
+        &[
+            "-sk",
+            "--fail",
+            "--max-time",
+            "3600",
+            "-H",
+            &auth,
+            "-o",
+            &tmp,
+            &src,
+        ],
+    )
+    .map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("pull failed: {e}")
+    })?;
+    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    if let Some(h) = sha256_of(&dest) {
+        let _ = std::fs::write(sha_path(&clean), h);
+    }
+    Ok(())
+}
+
+/// Distribute a golden image to every reachable fleet node's image store (each pulls it once from this
+/// node; nodes that already have it — e.g. via a shared store — skip). Then reimaging on any node uses
+/// overlays, so only the base moves, once per node.
+pub async fn distribute(Query(q): Query<PushQuery>) -> Markup {
+    let image = sanitize(&q.name);
+    if path_of(&image).is_none() {
+        return panel_with(Some(
+            html! { div.banner.error { "That image isn't on this node — distribute from a node that has it." } },
+        ));
+    }
+    let source = crate::federation::advertise_url();
+    let nodes = tokio::task::spawn_blocking(crate::federation::fleet)
+        .await
+        .unwrap_or_default();
+    let (img, src) = (image.clone(), source.clone());
+    let results = tokio::task::spawn_blocking(move || {
+        nodes
+            .iter()
+            .filter(|n| n.reachable)
+            .map(|n| {
+                (
+                    n.name.clone(),
+                    crate::federation::distribute_dispatch(&n.name, &img, &src),
+                )
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
+    let errs: Vec<String> = results
+        .iter()
+        .filter_map(|(n, r)| r.as_ref().err().map(|e| format!("{n}: {e}")))
+        .collect();
+    let note = html! {
+        @if errs.is_empty() {
+            div.banner.ok { "Distributed " (image) " to " (ok) " node(s)." }
+        } @else {
+            div.banner.error { "Distributed to " (ok) " node(s); failed — " (errs.join("; ")) }
+        }
+    };
+    panel_with(Some(note))
+}
+
 // ── UI ──────────────────────────────────────────────────────────────────────────────────────
 
 /// GET handler so the panel can self-refresh while a capture is running.
@@ -366,6 +577,10 @@ pub async fn panel_route() -> Markup {
 
 /// The saved-images panel for the Media page.
 pub fn panel() -> Markup {
+    panel_with(None)
+}
+
+fn panel_with(note: Option<Markup>) -> Markup {
     let imgs = list();
     let caps = if ui::is_demo() {
         Vec::new()
@@ -377,6 +592,7 @@ pub fn panel() -> Markup {
     html! {
         div #images hx-get=[poll.then_some("/images/panel")] hx-trigger=[poll.then_some("every 4s")] hx-swap="outerHTML" {
             div.pad {
+                @if let Some(n) = note { (n) }
                 @if imgs.is_empty() && caps.is_empty() {
                     p.muted { "No saved images yet. Open a station that's shut off and use " strong { "Save as image" } " to capture its installed disk as a reusable template." }
                 } @else {
@@ -390,6 +606,19 @@ pub fn panel() -> Markup {
                                     td { (integrity_cell(n)) }
                                     td.right.num { (sz) }
                                     td.right {
+                                        button.btn.sm
+                                            hx-get=(format!("/images/push?name={}", urlencode(n)))
+                                            hx-target="#images" hx-swap="outerHTML"
+                                            title="Reset stations across the fleet to a fresh copy of this image" { "Push…" }
+                                        " "
+                                        @if crate::federation::enabled() {
+                                            button.btn.sm
+                                                hx-post=(format!("/images/distribute?name={}", urlencode(n)))
+                                                hx-target="#images" hx-swap="outerHTML"
+                                                hx-confirm=(format!("Copy '{n}' to every fleet node's image store? (Nodes that already have it — e.g. via a shared store — are skipped. Large images transfer once per node.)"))
+                                                title="Copy this image to every node's store so it can be used fleet-wide" { "Distribute…" }
+                                            " "
+                                        }
                                         button.btn.sm.danger
                                             hx-post=(format!("/images/delete?name={}", urlencode(n)))
                                             hx-target="#images" hx-swap="outerHTML"

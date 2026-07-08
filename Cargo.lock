@@ -947,6 +947,7 @@ dependencies = [
  "tendril-orchestrator",
  "tendril-provisioning",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -66,10 +66,6 @@ pub async fn page() -> Markup {
         "Hardware",
         html! {
             (ui::panel("GPUs & passthrough", None, gpu_fragment(None)))
-            (vgpu_driver_panel())
-            @if detect().gpus.iter().any(|g| g.gpu.vendor == GpuVendor::Nvidia) {
-                (crate::licensing::panel())
-            }
             (ui::panel("USB devices", None, usb_panel()))
             (ui::panel("Seats", Some("USB device groups a station passes through as one"), crate::seats::panel()))
         },
@@ -123,6 +119,28 @@ fn gpu_fragment(note: Option<Markup>) -> Markup {
             }
         }
     }
+}
+
+/// The vGPU **system** panels (driver install + NVIDIA licensing) — shown on the System tab, since they
+/// change the OS image / run a container rather than configure live hardware. `None` when there's no
+/// AMD/NVIDIA GPU (nothing to install a vGPU driver for).
+pub(crate) fn vgpu_system_panels() -> Option<Markup> {
+    let matrix = detect();
+    let has_dgpu = matrix
+        .gpus
+        .iter()
+        .any(|g| matches!(g.gpu.vendor, GpuVendor::Amd | GpuVendor::Nvidia));
+    if !has_dgpu {
+        return None;
+    }
+    let has_nvidia = matrix
+        .gpus
+        .iter()
+        .any(|g| g.gpu.vendor == GpuVendor::Nvidia);
+    Some(html! {
+        (vgpu_driver_panel())
+        @if has_nvidia { (crate::licensing::panel()) }
+    })
 }
 
 /// The vGPU host-driver guide: since the host is an immutable bootc image, a vGPU driver isn't

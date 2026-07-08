@@ -74,6 +74,9 @@ sudo podman run --rm --privileged \
 if [ "$TYPE" = "iso" ] && command -v xorriso >/dev/null 2>&1; then
   iso="$(find "$OUTPUT" -type f -iname '*.iso' -print -quit || true)"
   if [ -n "${iso:-}" ]; then
+    # bootc-image-builder runs privileged, so its ISO is root-owned; take ownership so the xorriso
+    # commit below can rewrite it (no-op when this script already runs as root, e.g. in CI).
+    sudo chown "$(id -u):$(id -g)" "$iso" 2>/dev/null || true
     echo "==> Adding 'Unattended' entry to the ISO GRUB menu"
     tmp="$(mktemp -d)"
     newhead="menuentry 'Install Tendril - Unattended (ERASES THIS DISK)' --class fedora --class gnu-linux --class gnu --class os {"

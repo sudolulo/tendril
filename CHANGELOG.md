@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Green `dev` CI restored** — `cargo fmt` drift across five files from the 0.18 cycle and a
-  clippy `useless_conversion` in the federation WebSocket bridge failed `ci.yml` on every push.
+## [0.19.0] - 2026-07-08
+
+Invisible-by-default NVIDIA vGPU: the Windows guest driver now auto-fetches like Linux, and licensing
+is automatic (a built-in server, or bring your own). Plus AGPL relicensing, a stable release channel,
+and optionally-signed images.
 
 ### Added
+- **NVIDIA vGPU licensing is automatic.** The built-in FastAPI-DLS license server auto-starts with
+  sane defaults as soon as the vGPU host driver is active, and station provisioning installs the token
+  into each guest — nothing is pasted into VMs. It's a single one-time opt-in (the gray-area note shows
+  only on this path), after which driver + license + guest driver are all automatic and silent.
+- **Bring your own NVIDIA license server.** If you run a real on-prem DLS/NLS appliance or CLS, point
+  Tendril at its client-token URL and it **never runs the built-in emulated server** — guests are
+  licensed by your legitimate server. A valid license means you don't need the emulation.
+- **Dev-channel installs auto-enable OS updates.** A machine installed from the dev-channel ISO enables
+  `bootc-fetch-apply-updates.timer` at first boot (only when it tracks `:dev`), so dev boxes roll
+  forward with the channel automatically. Stable installs are unaffected (operator opts in).
 - **License: AGPL-3.0-only, dual-licensed.** The project's license is no longer TBD — full text in
   `LICENSE`, the dual-licensing model (one open edition, commercial licenses available) in
   `LICENSING.md`, SPDX `license` in the Cargo workspace, and copyright in `NOTICE`.
@@ -27,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD` secrets are configured; non-fatal and off by default. The
   workflow fetches a pinned, checksum-verified cosign itself if the runner lacks one; the signing
   public key is committed as `cosign.pub`, with verification steps in `docs/CHANNELS.md`.
+
+### Changed
+- **The Windows vGPU guest driver is now invisible too.** It's auto-fetched from NVIDIA's own public
+  bucket (paired per vGPU release, verified for 15.4–18.4) to match the staged host driver branch —
+  exactly like the Linux `.run`. The old "NVIDIA doesn't publish it, upload it yourself" claim was
+  wrong. Removed the guest-driver upload form, release picker, and per-driver entitlement checkbox; the
+  panel is read-only status. Air-gapped escape hatch: `TENDRIL_VGPU_GUEST_EXE_URL` / `_RUN_URL`.
+
+### Fixed
+- **Green `dev` CI restored** — `cargo fmt` drift across five files from the 0.18 cycle and a
+  clippy `useless_conversion` in the federation WebSocket bridge failed `ci.yml` on every push.
+- **Demo System-page OS-image sample** was showing a stale `0.13.1`; updated to the current version.
 
 ## [0.18.0] - 2026-07-08
 
@@ -528,7 +552,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.19.0...HEAD
+[0.19.0]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...v0.19.0
 [0.18.0]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...v0.18.0
 [0.17.0]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...v0.17.0
 [0.16.0]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...v0.16.0

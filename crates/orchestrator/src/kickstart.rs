@@ -54,6 +54,9 @@ pub struct KickstartSpec {
     /// `com.moonlight_stream.Moonlight`) so this station can also *receive* a stream — the Linux
     /// parallel of the Windows Moonlight app. Best-effort on atomic Bazzite.
     pub enable_moonlight: bool,
+    /// The station has a persistent data volume (`/dev/vdb`) — format it once and mount it at
+    /// `/var/mnt/tendril-data`, so games/saves survive OS reinstalls, base-image swaps, and re-splits.
+    pub data_volume: bool,
 }
 
 impl Default for KickstartSpec {
@@ -72,6 +75,7 @@ impl Default for KickstartSpec {
             dls_token_url: None,
             enable_sunshine: false,
             enable_moonlight: false,
+            data_volume: false,
         }
     }
 }
@@ -190,6 +194,25 @@ ExecStart=/var/lib/tendril/nvidia-vgpu-guest.run --silent --dkms
 WantedBy=multi-user.target
 EOF
 systemctl enable tendril-vgpu-guest.service
+%end
+"#,
+        );
+    }
+
+    if spec.data_volume {
+        // Persistent data volume (vdb): format once if empty, then mount at /var/mnt/tendril-data via
+        // fstab. Games/saves live here, so they survive OS reinstalls, base-image swaps, and re-splits
+        // (which only replace the OS disk vda). `nofail` keeps boot clean if the volume is ever absent.
+        let _ = write!(
+            ks,
+            r#"
+%post
+if [ -b /dev/vdb ]; then
+  blkid /dev/vdb >/dev/null 2>&1 || mkfs.ext4 -F -L tendril-data /dev/vdb
+  mkdir -p /var/mnt/tendril-data
+  grep -q '/var/mnt/tendril-data' /etc/fstab || \
+    echo 'LABEL=tendril-data /var/mnt/tendril-data ext4 nofail,x-systemd.device-timeout=5s 0 2' >> /etc/fstab
+fi
 %end
 "#,
         );
@@ -331,6 +354,19 @@ mod tests {
         assert!(ks.contains("clearpart --all"));
         assert!(ks.contains("autopart --type=btrfs"));
         assert!(ks.contains("reboot"));
+    }
+
+    #[test]
+    fn data_volume_formats_and_mounts_vdb() {
+        let ks = render_kickstart(&KickstartSpec {
+            data_volume: true,
+            ..KickstartSpec::default()
+        });
+        assert!(ks.contains("/dev/vdb"));
+        assert!(ks.contains("/var/mnt/tendril-data"));
+        assert!(ks.contains("mkfs.ext4"));
+        // Off by default — no data-volume handling.
+        assert!(!render_kickstart(&KickstartSpec::default()).contains("tendril-data"));
     }
 
     #[test]

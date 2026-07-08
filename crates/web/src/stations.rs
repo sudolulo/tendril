@@ -659,6 +659,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             &get("hostname"),
             &get("gpu"),
             &apps,
+            get("data_gib").parse::<u32>().unwrap_or(0) > 0,
         ) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -892,6 +893,7 @@ fn build_seed(
     hostname: &str,
     gpu: &str,
     apps: &[GuestApp],
+    data_volume: bool,
 ) -> std::io::Result<String> {
     let dir = FsPath::new(disk)
         .parent()
@@ -928,6 +930,7 @@ fn build_seed(
                     .as_ref()
                     .and_then(|_| crate::licensing::token_url_if_running()),
                 apps: apps.to_vec(),
+                data_volume,
                 ..UnattendSpec::default()
             };
             build_seed_iso_with(&spec, &extras, path)?
@@ -962,6 +965,7 @@ fn build_seed(
                 // installing an .exe. Steam/Discord aren't wired: Bazzite already ships Steam+gaming mode.
                 enable_sunshine: apps.contains(&GuestApp::Sunshine),
                 enable_moonlight: apps.contains(&GuestApp::Moonlight),
+                data_volume,
                 ..KickstartSpec::default()
             };
             build_kickstart_seed_with(&spec, &extras, path)?
@@ -1052,6 +1056,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
                     s.hostname.trim(),
                     "",
                     &[],
+                    false, // fleet-placed: data volume is a follow-up
                 )
                 .map_err(|e| e.to_string())?,
             )

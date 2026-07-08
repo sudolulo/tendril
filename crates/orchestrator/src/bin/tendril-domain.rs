@@ -39,6 +39,7 @@ fn main() {
         media: InstallMedia::none(),
         usb_devices: Vec::new(),
         steam_library_dir: None,
+        data_disk_path: None,
     };
 
     print!("{}", render(&spec));

@@ -483,6 +483,7 @@ fn create_form(error: Option<&str>) -> Markup {
                             div.field { label { "Memory (MiB)" } input name="memory_mib" value=(ram) inputmode="numeric"; span.hint { "Auto: (host RAM − ~2 GiB host reserve) ÷ GPUs" } }
                             div.field { label { "vCPUs" } input name="vcpus" value=(vcpus) inputmode="numeric"; span.hint { "Auto: (host threads − 1) ÷ GPUs" } }
                             div.field.install-only { label { "Disk size (GiB)" } input name="size_gib" value=(disk) inputmode="numeric"; span.hint { "Auto: (free disk − ~20 GiB) ÷ GPUs" } }
+                            div.field.install-only { label { "Persistent data volume (GiB)" } input name="data_gib" value="0" inputmode="numeric"; span.hint { "0 = none. A separate disk for games/saves that survives OS reinstalls and GPU re-splits." } }
                             div.field.install-only.remote-hide { label { "Disk image path" } input name="disk" placeholder=(format!("{DISK_DIR}/<name>.qcow2")); }
                             div.field.wide.install-only.remote-hide { label { "Install ISO (blank = the OS default)" } input name="iso" placeholder=(format!("{}/win11.iso · bazzite-deck-nvidia.iso", crate::storage::iso_dir())); }
                             div.field.wide.install-only.remote-hide { label { "virtio-win ISO (Windows; blank = default)" } input name="virtio_iso" placeholder=(format!("{}/virtio-win.iso", crate::storage::iso_dir())); }
@@ -620,6 +621,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             define: true,
             start: checked("start"),
             steam_library_dir: steam_lib.clone(),
+            data_disk: None,
         };
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
@@ -705,6 +707,15 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         define: true,
         start: checked("start"),
         steam_library_dir: steam_lib.clone(),
+        // Optional persistent data volume: a `<disk>-data.qcow2` sized by the wizard (0 = none). It
+        // survives OS/base-image swaps and re-splits, so games/saves aren't lost when the OS is replaced.
+        data_disk: {
+            let gib: u32 = get("data_gib").parse().unwrap_or(0);
+            (gib > 0)
+                .then(|| disk.strip_suffix(".qcow2"))
+                .flatten()
+                .map(|base| (format!("{base}-data.qcow2"), gib))
+        },
     };
 
     // Refuse install media that failed checksum verification (a `.mismatch` marker). Media with no
@@ -1069,6 +1080,7 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         define: true,
         start: s.start,
         steam_library_dir: None, // fleet-placed stations: shared library is a follow-up
+        data_disk: None, // fleet-placed stations: data volume is a follow-up
     };
     provision(&req, &Libvirt::system()).map_err(|e| e.to_string())?;
     record_local(

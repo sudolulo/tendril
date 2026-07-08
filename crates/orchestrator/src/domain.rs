@@ -40,6 +40,10 @@ pub struct DomainSpec<'a> {
     /// backing, which is emitted automatically when this is set. The guest mounts it by the tag
     /// `tendril-steamlib`.
     pub steam_library_dir: Option<String>,
+    /// Optional persistent data volume — a second qcow2 attached as `vdb`, separate from the OS boot
+    /// disk (`vda`). It survives OS/base-image swaps and re-splits, so user data (games, saves) is
+    /// preserved when the boot disk is replaced. `None` = no data volume.
+    pub data_disk_path: Option<String>,
 }
 
 /// Render `spec` into a libvirt domain XML document.
@@ -116,6 +120,15 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("      <target dev='vda' bus='virtio'/>\n");
     let _ = writeln!(xml, "      <boot order='{disk_boot}'/>");
     xml.push_str("    </disk>\n");
+    // Persistent data volume (vdb): a separate qcow2 that survives boot-disk / base-image swaps and
+    // re-splits, so the user's games/saves are kept when the OS disk is replaced.
+    if let Some(data) = &spec.data_disk_path {
+        xml.push_str("    <disk type='file' device='disk'>\n");
+        xml.push_str("      <driver name='qemu' type='qcow2'/>\n");
+        let _ = writeln!(xml, "      <source file='{data}'/>");
+        xml.push_str("      <target dev='vdb' bus='virtio'/>\n");
+        xml.push_str("    </disk>\n");
+    }
     // OS install ISO (cdrom) — boots first while present.
     if let Some(iso) = &spec.media.install_iso {
         xml.push_str("    <disk type='file' device='cdrom'>\n");
@@ -227,6 +240,7 @@ mod tests {
             media: InstallMedia::none(),
             usb_devices: vec![],
             steam_library_dir: None,
+            data_disk_path: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("<name>s1</name>"));
@@ -255,6 +269,7 @@ mod tests {
             media: InstallMedia::none(),
             usb_devices: vec![],
             steam_library_dir: None,
+            data_disk_path: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("<hidden state='on'/>"));
@@ -279,6 +294,7 @@ mod tests {
             },
             usb_devices: vec![],
             steam_library_dir: None,
+            data_disk_path: None,
         };
         let xml = render(&spec);
         assert_eq!(xml.matches("device='cdrom'").count(), 3);
@@ -306,6 +322,7 @@ mod tests {
                 product_id: 0xc52b,
             }],
             steam_library_dir: None,
+            data_disk_path: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("type='usb'"));
@@ -326,6 +343,7 @@ mod tests {
             media: InstallMedia::none(),
             usb_devices: vec![],
             steam_library_dir: Some("/var/lib/tendril/store/steam-library".to_string()),
+            data_disk_path: None,
         };
         let on = render(&spec);
         assert!(
@@ -355,6 +373,7 @@ mod tests {
             media: InstallMedia::none(),
             usb_devices: vec![],
             steam_library_dir: None,
+            data_disk_path: None,
         };
         let xml = render(&spec);
         assert!(xml.contains("type='mdev' model='vfio-pci'"));

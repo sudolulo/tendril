@@ -43,6 +43,10 @@ pub struct StationRequest {
     /// Host directory to share into the guest as a shared Steam library (virtio-fs). Resolved by the
     /// caller (it knows the store); `None` = no shared library. See docs/STEAM-GAMES.md.
     pub steam_library_dir: Option<String>,
+    /// Optional persistent data volume as `(qcow2 path, size GiB)` — a separate disk for user data
+    /// (games/saves) that survives OS/base-image swaps and re-splits. Created when `create_disk` is
+    /// also set. `None` = no data volume.
+    pub data_disk: Option<(String, u32)>,
 }
 
 impl StationRequest {
@@ -83,6 +87,10 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
     if req.create_disk {
         create_disk(Path::new(&req.disk_path), req.size_gib)?;
         report.disk_created = true;
+        // Create the persistent data volume alongside the boot disk when requested.
+        if let Some((data_path, gib)) = &req.data_disk {
+            create_disk(Path::new(data_path), *gib)?;
+        }
     }
 
     // A GPU address is required by the spec even when nothing is passed through; the renderer only
@@ -108,6 +116,7 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
         media: req.media.clone(),
         usb_devices: req.usb_devices.clone(),
         steam_library_dir: req.steam_library_dir.clone(),
+        data_disk_path: req.data_disk.as_ref().map(|(p, _)| p.clone()),
     };
     report.xml = render(&spec);
 
@@ -143,7 +152,20 @@ mod tests {
             define: false,
             start: false,
             steam_library_dir: None,
+            data_disk: None,
         }
+    }
+
+    #[test]
+    fn data_volume_renders_a_second_disk() {
+        let mut req = base_request();
+        req.data_disk = Some(("/var/lib/tendril/s1-data.qcow2".to_string(), 256));
+        let xml = provision(&req, &Libvirt::system()).unwrap().xml;
+        assert!(xml.contains("dev='vdb'"), "data volume should attach as vdb");
+        assert!(xml.contains("s1-data.qcow2"));
+        // Without a data disk, no vdb.
+        let plain = provision(&base_request(), &Libvirt::system()).unwrap().xml;
+        assert!(!plain.contains("dev='vdb'"));
     }
 
     #[test]

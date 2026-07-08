@@ -525,9 +525,9 @@ pub async fn system() -> Markup {
                     }
                 }))
             }
+            @if let Some(vgpu) = crate::hardware::vgpu_system_panels() { (vgpu) }
             (ui::panel("Host", None, host_info()))
             @if !crate::federation::enabled() { (crate::federation::setup_panel()) }
-            @if let Some(vgpu) = crate::hardware::vgpu_system_panels() { (vgpu) }
             (crate::tls::panel())
             (ui::panel("Logs", Some("live · filterable · downloadable"), logs_fragment(false)))
         },

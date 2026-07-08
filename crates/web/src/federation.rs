@@ -53,21 +53,25 @@ pub struct Peer {
     pub fed: Option<String>,
 }
 
-/// Parse a peer entry: `name=http://host:port` or bare `http://host:port` (name derived from host).
+/// Parse a peer entry: `name=<ui-url>` or bare `<ui-url>` (name derived from host). The URL half may
+/// also carry the peer's mTLS endpoint after a `|`: `name=<ui-url>|<fed-url>` (written by a join).
 fn parse_peer(entry: &str) -> Option<Peer> {
     let entry = entry.trim();
     if entry.is_empty() {
         return None;
     }
-    let (name, url) = match entry.split_once('=') {
+    let (name, rest) = match entry.split_once('=') {
         Some((n, u)) => (n.trim().to_string(), u.trim().to_string()),
         None => (host_of(entry), entry.to_string()),
     };
-    (!url.is_empty()).then_some(Peer {
-        name,
-        url,
-        fed: None,
-    })
+    let (url, fed) = match rest.split_once('|') {
+        Some((u, f)) => {
+            let f = f.trim();
+            (u.trim().to_string(), (!f.is_empty()).then(|| f.to_string()))
+        }
+        None => (rest, None),
+    };
+    (!url.is_empty()).then_some(Peer { name, url, fed })
 }
 
 /// A display name from a URL: the host part, e.g. `http://10.0.0.2:8080/` → `10.0.0.2`.
@@ -342,6 +346,147 @@ pub fn make_join_code() -> Option<String> {
     };
     let json = serde_json::to_vec(&jc).ok()?;
     Some(base64::engine::general_purpose::STANDARD.encode(json))
+}
+
+/// Append a peer to `federation.conf` (replacing any existing entry with the same name). Entry format
+/// is `name=<ui-url>|<fed-url>` (see [`parse_peer`]).
+fn add_conf_peer(entry: &str) -> Result<(), String> {
+    let p = conf_path();
+    let new_name = entry
+        .split_once('=')
+        .map(|(n, _)| n.trim())
+        .unwrap_or(entry);
+    let mut lines: Vec<String> = std::fs::read_to_string(&p)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| {
+            l.trim()
+                .strip_prefix("peer=")
+                .and_then(|r| r.split_once('='))
+                .map(|(n, _)| n.trim() != new_name)
+                .unwrap_or(true)
+        })
+        .map(String::from)
+        .collect();
+    lines.push(format!("peer={entry}"));
+    if let Some(d) = std::path::Path::new(&p).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+/// A node introducing itself to a fleet member (join reverse-registration payload).
+#[derive(Serialize, Deserialize)]
+pub struct RegisterReq {
+    name: String,
+    ui: String,
+    #[serde(default)]
+    fed: String,
+}
+
+/// Founder-side register API: a joining node calls this (token-authed) so the founder adds it as a
+/// peer too — the store-less path to *mutual* membership (no shared presence dir to discover it).
+pub async fn api_fleet_register(
+    axum::Json(r): axum::Json<RegisterReq>,
+) -> axum::Json<ProvisionResult> {
+    if ui::is_demo() {
+        return axum::Json(ProvisionResult {
+            ok: false,
+            error: Some("disabled in the demo".into()),
+        });
+    }
+    let name = safe_component(r.name.trim());
+    if name.is_empty() || r.ui.trim().is_empty() {
+        return axum::Json(ProvisionResult {
+            ok: false,
+            error: Some("register requires a node name and UI url".into()),
+        });
+    }
+    let entry = format!("{}={}|{}", name, r.ui.trim(), r.fed.trim());
+    axum::Json(match add_conf_peer(&entry) {
+        Ok(()) => ProvisionResult {
+            ok: true,
+            error: None,
+        },
+        Err(e) => ProvisionResult {
+            ok: false,
+            error: Some(e),
+        },
+    })
+}
+
+/// Tell the founder about this node so it adds us as a peer (mutual membership). Uses the founder's
+/// plain-TLS UI endpoint with the shared token — works before either side's mTLS listener is up.
+fn register_with(jc: &JoinCode) -> Result<(), String> {
+    let ep = format!("{}/api/fleet/register", jc.ui.trim_end_matches('/'));
+    let body = serde_json::to_string(&RegisterReq {
+        name: node_name(),
+        ui: advertise_url(),
+        fed: crate::fedtls::fed_advertise_url(),
+    })
+    .map_err(|e| e.to_string())?;
+    let auth = format!("X-Tendril-Federation: {}", jc.token);
+    let out = ui::run_result(
+        "curl",
+        &[
+            "-sk",
+            "--max-time",
+            "30",
+            "-X",
+            "POST",
+            "-H",
+            &auth,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body,
+            &ep,
+        ],
+    )?;
+    let res: ProvisionResult =
+        serde_json::from_str(&out).map_err(|e| format!("bad response from founder: {e}"))?;
+    if res.ok {
+        Ok(())
+    } else {
+        Err(res
+            .error
+            .unwrap_or_else(|| "founder rejected registration".into()))
+    }
+}
+
+/// Apply a join code on a new node: install the fleet CA, adopt the shared token, add the founder as a
+/// peer (with its mTLS URL), and register back so membership is mutual. Federation works immediately
+/// over token+TLS; mTLS fully engages once this node's service restarts to start its mTLS listener.
+pub fn apply_join_code(code: &str) -> Result<String, String> {
+    use base64::Engine as _;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(code.trim())
+        .map_err(|_| "invalid join code (not valid base64)".to_string())?;
+    let jc: JoinCode = serde_json::from_slice(&raw)
+        .map_err(|_| "invalid join code (unrecognized contents)".to_string())?;
+    if jc.name.trim().is_empty() || jc.token.trim().is_empty() || jc.ca.trim().is_empty() {
+        return Err("join code is missing the fleet name, token, or CA".into());
+    }
+    crate::fedtls::install_ca(&jc.ca, &jc.cakey)?;
+    set_conf_token(&jc.token)?;
+    add_conf_peer(&format!(
+        "{}={}|{}",
+        safe_component(jc.name.trim()),
+        jc.ui,
+        jc.fed
+    ))?;
+    match register_with(&jc) {
+        Ok(()) => Ok(format!(
+            "Joined the fleet via {}. Both nodes now see each other. Restart this node's tendril-web \
+             service to bring up its mTLS endpoint (federation already works over the shared token).",
+            jc.name
+        )),
+        Err(e) => Ok(format!(
+            "Joined the fleet via {} — you can see it now. Reverse registration didn't complete ({e}); \
+             add this node on {} manually, or it will be picked up once both nodes are on a shared store.",
+            jc.name, jc.name
+        )),
+    }
 }
 
 // ── node info (the federation API payload) ──────────────────────────────────────────────────────
@@ -759,6 +904,44 @@ pub async fn join_code() -> Markup {
     }
 }
 
+/// The paste-a-join-code form (its own fn so the handler can re-render it after an error).
+fn join_form() -> Markup {
+    html! {
+        p.sub style="margin:0 0 6px" {
+            "Paste a join code from another node's Fleet setup. This node adopts that fleet's CA + token, "
+            "and both nodes start seeing each other."
+        }
+        form hx-post="/fleet/join" hx-target="#join-box" hx-swap="innerHTML" {
+            textarea name="code" rows="3" required
+                style="width:100%; font-family:monospace; font-size:12px" placeholder="paste join code\u{2026}" {}
+            div.btnrow style="margin-top:8px" { button.btn.sm.primary type="submit" { "Join fleet" } }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct JoinForm {
+    code: String,
+}
+
+/// Apply a pasted join code (store-less join). Off the async worker — it shells to openssl/curl.
+pub async fn join(axum::Form(f): axum::Form<JoinForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Disabled in the live demo." } };
+    }
+    let code = f.code.clone();
+    let res = tokio::task::spawn_blocking(move || apply_join_code(&code))
+        .await
+        .unwrap_or_else(|_| Err("join task panicked".into()));
+    match res {
+        Ok(msg) => html! { div.banner.ok { (msg) } },
+        Err(e) => html! {
+            div.banner.error style="margin-bottom:8px" { (e) }
+            (join_form())
+        },
+    }
+}
+
 pub fn setup_panel() -> Markup {
     ui::panel("Fleet setup", Some("form & grow a fleet"), setup_body(None))
 }
@@ -832,6 +1015,15 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                             "it carries this node's address, the token, and the fleet CA (so mTLS just works). Treat it as a secret."
                         }
                         button.btn.sm hx-get="/fleet/join-code" hx-target="#join-code-box" hx-swap="innerHTML" { "Generate join code" }
+                    }
+                }
+            }
+
+            div style="margin-top:12px" {
+                details {
+                    summary.sub style="cursor:pointer" { "Join an existing fleet (paste a join code)" }
+                    div #join-box style="margin-top:8px" {
+                        (join_form())
                     }
                 }
             }

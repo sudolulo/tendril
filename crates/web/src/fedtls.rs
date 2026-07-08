@@ -144,6 +144,19 @@ pub fn ca_material() -> Option<(String, String)> {
     ))
 }
 
+/// Install a fleet CA (cert + key from a join code) into the local CA dir, so this node trusts the
+/// fleet and self-issues its own node cert from it — a store-less join. Invalidates the cached
+/// identity so mTLS re-derives from the new CA on the next call.
+pub fn install_ca(cert_pem: &str, key_pem: &str) -> Result<(), String> {
+    let dir = local_ca_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(format!("{dir}/ca.pem"), cert_pem).map_err(|e| e.to_string())?;
+    std::fs::write(format!("{dir}/ca.key"), key_pem).map_err(|e| e.to_string())?;
+    chmod_600(&format!("{dir}/ca.key"));
+    reset_identity();
+    Ok(())
+}
+
 /// Ensure a CA exists in `dir` (generate once, race-safe). Returns the CA cert + key paths.
 fn ensure_ca_in(dir: &str) -> Option<(String, String)> {
     let _ = std::fs::create_dir_all(dir);
@@ -275,15 +288,24 @@ fn build_identity() -> Option<Identity> {
     })
 }
 
+static IDENTITY_CACHE: OnceLock<Mutex<Option<Identity>>> = OnceLock::new();
+
 /// This node's federation identity, if a CA is reachable (cached once built).
 pub fn identity() -> Option<Identity> {
-    static CACHE: OnceLock<Mutex<Option<Identity>>> = OnceLock::new();
-    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    let cell = IDENTITY_CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = cell.lock().unwrap();
     if guard.is_none() {
         *guard = build_identity();
     }
     guard.clone()
+}
+
+/// Drop the cached identity so the next call rebuilds it — called after installing a CA received in a
+/// join code, so this node's mTLS client identity picks up the new trust root without a restart.
+pub fn reset_identity() {
+    if let Some(cell) = IDENTITY_CACHE.get() {
+        *cell.lock().unwrap() = None;
+    }
 }
 
 /// Whether this node can do federation mTLS (has an identity to present). When false, federation calls

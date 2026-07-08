@@ -52,18 +52,18 @@ EOF
 %end
 %include /tmp/tendril-part.ks
 
-# Default console login: a `tendril` sudo user with a password that must be changed on first login
-# (chage -d 0 in %post). Root stays locked. The WEB admin password is seeded + force-changed
-# separately by the first-boot unit below.
-rootpw --lock
-user --name=tendril --groups=wheel --password=tendril --plaintext
+# Console login. The image auto-logs-in root on tty1 (agetty --autologin root) to open the console
+# menu, so root must NOT be locked — a locked account dead-ends the autologin at a password prompt.
+# Give root a default password (unlocked) for local sudo; the REAL security gate is the web admin
+# password, seeded + force-changed by the first-boot unit below. Physical console access is trusted
+# (it's the owner's machine). No separate `tendril` user — it duplicated root and, when its password
+# was force-expired, also broke SSH. Change the default with `passwd` after first boot.
+rootpw --plaintext tendril
 
 # Reboot into the installed system when the install finishes.
 reboot --eject
 
 %post --erroronfail
-# Force the default console password to be changed at first login.
-chage -d 0 tendril || true
 
 # Seed a default WEB admin password and flag it must-change, so the web console forces a new one on
 # first visit (a fleet deployer can log in with the default to pre-seed config before a human does).
@@ -88,8 +88,9 @@ cat > /etc/motd <<'MOTD'
 
   Web UI:   http://<this-host>/   — a default admin password is set; you'll be
             required to change it on first sign-in.
-  Console:  log in as 'tendril' (default password 'tendril' — you'll be prompted
-            to change it), then the `tendril` menu on tty1.
+  Console:  the `tendril` menu opens automatically on this display (tty1).
+            Local sudo/SSH is root with the default password 'tendril' — run
+            `passwd` to change it.
 
 MOTD
 %end

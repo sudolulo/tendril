@@ -261,6 +261,12 @@ pub fn section(banner: Option<Markup>) -> Markup {
                     div.field style="margin:0 0 8px" {
                         label { "…or a URL to download it from" }
                         input type="url" name="url" placeholder="https://…/NVIDIA-…-vgpu-kvm.run";
+                        span.hint {
+                            "Use a URL you're authorized to reach (your NVIDIA "
+                            a href="https://www.nvidia.com/en-us/data-center/resources/vgpu-evaluation/" { "vGPU eval" }
+                            " download). This community guide walks through obtaining the driver: "
+                            a href="https://wvthoog.nl/proxmox-vgpu-v3/" { "wvthoog's NVIDIA vGPU guide" } "."
+                        }
                     }
                     button.btn.primary type="submit" { "Stage driver" }
                 }

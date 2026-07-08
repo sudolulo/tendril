@@ -216,23 +216,29 @@ fn create_form(error: Option<&str>) -> Markup {
                                     }
                                 }
                             }
-                            // vGPU: one option per available mdev profile (a slice of a shared GPU).
+                            // vGPU: one option per available mdev profile (a slice of a shared GPU). The
+                            // profile Tendril recommends for gaming (≥4 GB, most stations) is badged and
+                            // pre-selected as the logical default (see vgpu::recommended_mdev).
+                            @let rec_key = crate::vgpu::default_mdev_key(&matrix, &whole_used);
                             @for g in matrix.vgpu_capable() {
                                 @if !whole_used.contains_key(&g.gpu.address) {
-                                @for t in &g.vgpu.mdev_types {
+                                @let rec_i = crate::vgpu::recommended_mdev(&g.vgpu.mdev_types);
+                                @for (i, t) in g.vgpu.mdev_types.iter().enumerate() {
                                     @if t.available > 0 {
-                                        option value=(format!("{}{}:{}", crate::vgpu::MDEV_PREFIX, g.gpu.address, t.id)) {
+                                        @let val = format!("{}{}:{}", crate::vgpu::MDEV_PREFIX, g.gpu.address, t.id);
+                                        option value=(val) selected[rec_key.as_deref() == Some(val.as_str())] {
                                             (ui::vendor(g.gpu.vendor)) " "
                                             (g.gpu.model.as_deref().unwrap_or("GPU"))
                                             " — vGPU: " (t.name.as_deref().unwrap_or(t.id.as_str()))
                                             " (" (t.available) " free)"
+                                            @if rec_i == Some(i) { " · recommended" }
                                         }
                                     }
                                 }
                                 }
                             }
                         }
-                        span.hint { "Pick a whole GPU for full passthrough, or a vGPU profile to hand a station one slice of a shared GPU (requires an mdev-capable driver, e.g. NVIDIA vGPU). SR-IOV virtual functions appear here as whole GPUs once enabled on the Hardware page." }
+                        span.hint { "Pick a whole GPU for full passthrough, or a vGPU profile to hand a station one slice of a shared GPU (requires an mdev-capable driver, e.g. NVIDIA vGPU). The " b { "recommended" } " vGPU profile is the gaming sweet spot for your card — ≥4 GB per station while splitting the card as far as it sensibly goes. SR-IOV virtual functions appear here as whole GPUs once enabled on the Hardware page." }
                     }
                     div.field.install-only { label { "Username" } input name="username" value="player"; }
                     div.field.install-only { label { "Password" } input name="password" value="tendril"; }

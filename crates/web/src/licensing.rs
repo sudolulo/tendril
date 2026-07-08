@@ -250,20 +250,24 @@ fn panel_with(banner: Option<Markup>) -> Markup {
                     "gray area — enable it only with your own vGPU entitlement."
                 }
                 form hx-post="/hardware/dls/enable" hx-target="#dls-panel" hx-swap="outerHTML" {
-                    div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; align-items:end" {
-                        div.field style="margin:0" {
-                            label { "Address guests reach it at" }
-                            input type="text" name="url" value=(c.url) required
-                                title="Hostname or IP routable from the VMs — must match the server cert";
-                        }
-                        div.field style="margin:0" {
-                            label { "Port" }
-                            input type="number" name="port" min="1" max="65535" value=(c.port)
-                                title="Host port for the DLS (kept off 443 so it doesn't clash with this web UI)";
-                        }
-                        div.field style="margin:0" {
-                            label { "Lease days" }
-                            input type="number" name="lease_days" min="1" max="365" value=(c.lease_days);
+                    p.sub style="margin:0 0 8px" { "Sensible defaults are filled in (this host's IP, port " (c.port) ", " (c.lease_days) "-day leases) — just start it. Tweak them under Advanced only if needed." }
+                    details style="margin:0 0 4px" {
+                        summary.sub style="cursor:pointer" { "Advanced" }
+                        div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; align-items:end; margin-top:10px" {
+                            div.field style="margin:0" {
+                                label { "Address guests reach it at" }
+                                input type="text" name="url" value=(c.url) required
+                                    title="Hostname or IP routable from the VMs — must match the server cert";
+                            }
+                            div.field style="margin:0" {
+                                label { "Port" }
+                                input type="number" name="port" min="1" max="65535" value=(c.port)
+                                    title="Host port for the DLS (kept off 443 so it doesn't clash with this web UI)";
+                            }
+                            div.field style="margin:0" {
+                                label { "Lease days" }
+                                input type="number" name="lease_days" min="1" max="365" value=(c.lease_days);
+                            }
                         }
                     }
                     div.btnrow style="margin-top:12px" {

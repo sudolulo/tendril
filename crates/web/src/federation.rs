@@ -472,8 +472,18 @@ fn demo_fleet() -> Vec<NodeInfo> {
                 station("test-bench", "Shutoff", true),
             ],
             gpus: vec![
-                gpu("0000:01:00.0", "NVIDIA RTX 4090", "Passthrough", Some("win-arcade")),
-                gpu("0000:41:00.0", "NVIDIA RTX 3080", "Passthrough", Some("steam-den")),
+                gpu(
+                    "0000:01:00.0",
+                    "NVIDIA RTX 4090",
+                    "Passthrough",
+                    Some("win-arcade"),
+                ),
+                gpu(
+                    "0000:41:00.0",
+                    "NVIDIA RTX 3080",
+                    "Passthrough",
+                    Some("steam-den"),
+                ),
             ],
             health: health("6 days", 38.0, 64.0),
         },
@@ -485,7 +495,12 @@ fn demo_fleet() -> Vec<NodeInfo> {
                 station("guest-1", "Shutoff", true),
             ],
             gpus: vec![
-                gpu("0000:01:00.0", "NVIDIA RTX 4080", "Passthrough", Some("couch-coop")),
+                gpu(
+                    "0000:01:00.0",
+                    "NVIDIA RTX 4080",
+                    "Passthrough",
+                    Some("couch-coop"),
+                ),
                 gpu("0000:81:00.0", "NVIDIA RTX 4080", "Passthrough", None),
             ],
             health: health("13 days", 22.0, 32.0),
@@ -499,7 +514,12 @@ fn demo_fleet() -> Vec<NodeInfo> {
                 station("vgpu-c", "Running", true),
             ],
             gpus: vec![
-                gpu("0000:01:00.0", "NVIDIA A40", "VgpuOfficial", Some("vgpu-a, vgpu-b, vgpu-c")),
+                gpu(
+                    "0000:01:00.0",
+                    "NVIDIA A40",
+                    "VgpuOfficial",
+                    Some("vgpu-a, vgpu-b, vgpu-c"),
+                ),
                 gpu("0000:c1:00.0", "NVIDIA RTX 4070", "Passthrough", None),
             ],
             health: health("2 days", 51.0, 128.0),
@@ -530,8 +550,216 @@ fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
                 strong { (up) "/" (nodes.len()) } " node(s) reachable · " (total_stations) " station(s)."
             }
             @for n in &nodes { (node_card(n)) }
+            @if !ui::is_demo() { (setup_panel()) }
         },
     )
+}
+
+// ── fleet setup / onboarding ─────────────────────────────────────────────────────────────────
+
+/// A node-name override forced by env (then the setup panel shows it read-only).
+fn env_node_name_override() -> Option<String> {
+    std::env::var("TENDRIL_NODE_NAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// True when the join token is auto-managed on the shared store (so it can be rotated from the UI),
+/// rather than pinned by env/conf.
+fn token_is_store_managed() -> bool {
+    std::env::var("TENDRIL_FEDERATION_TOKEN").is_err()
+        && conf().1.is_none()
+        && crate::storage::store_root().is_some()
+}
+
+/// Update the node name in `federation.conf`, preserving other keys.
+fn set_conf_name(new: &str) -> Result<(), String> {
+    let p = conf_path();
+    let mut lines: Vec<String> = std::fs::read_to_string(&p)
+        .ok()
+        .map(|t| {
+            t.lines()
+                .filter(|l| !l.trim_start().starts_with("name="))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    lines.push(format!("name={new}"));
+    if let Some(d) = std::path::Path::new(&p).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+pub struct NameForm {
+    name: String,
+}
+
+/// Rename this node (writes `federation.conf`), drop its old presence file, and re-advertise.
+pub async fn setup_name(axum::Form(f): axum::Form<NameForm>) -> Markup {
+    if ui::is_demo() {
+        return setup_body(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+    }
+    if env_node_name_override().is_some() {
+        return setup_body(Some(
+            html! { div.banner.warn { "This node's name is set via the " code { "TENDRIL_NODE_NAME" } " env var — change it there." } },
+        ));
+    }
+    let new = safe_component(f.name.trim());
+    if new.is_empty() {
+        return setup_body(Some(html! { div.banner.error { "Enter a node name." } }));
+    }
+    let old = node_name();
+    if let Err(e) = set_conf_name(&new) {
+        return setup_body(Some(
+            html! { div.banner.error { "Couldn't save the name: " (e) } },
+        ));
+    }
+    if new != old {
+        if let Some(dir) = nodes_dir() {
+            let _ = std::fs::remove_file(format!("{dir}/{}.json", safe_component(&old)));
+        }
+    }
+    heartbeat();
+    setup_body(Some(
+        html! { div.banner.ok { "Node renamed to " b { (new) } "." } },
+    ))
+}
+
+/// Rotate the shared join token (only when it's store-managed). Every node on the shared store picks the
+/// new token up automatically.
+pub async fn rotate_token() -> Markup {
+    if ui::is_demo() {
+        return setup_body(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+    }
+    if !token_is_store_managed() {
+        return setup_body(Some(
+            html! { div.banner.warn { "The join token is pinned via env/conf — rotate it there, not here." } },
+        ));
+    }
+    let Some(root) = crate::storage::store_root() else {
+        return setup_body(Some(
+            html! { div.banner.error { "No shared store to hold the token." } },
+        ));
+    };
+    let Some(tok) = new_random_token() else {
+        return setup_body(Some(
+            html! { div.banner.error { "Couldn't generate a new token." } },
+        ));
+    };
+    let p = format!("{root}/fleet-token");
+    if let Err(e) = std::fs::write(&p, &tok) {
+        return setup_body(Some(
+            html! { div.banner.error { "Couldn't write the token: " (e) } },
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+    }
+    setup_body(Some(
+        html! { div.banner.ok { "Join token rotated. Other nodes on the shared store pick it up automatically." } },
+    ))
+}
+
+/// The Fleet setup / onboarding panel — how to form and grow a fleet, shown wherever a lone node needs
+/// to discover federation (System page) and on the Fleet page itself.
+pub fn setup_panel() -> Markup {
+    ui::panel("Fleet setup", Some("form & grow a fleet"), setup_body(None))
+}
+
+fn setup_body(banner: Option<Markup>) -> Markup {
+    let name = node_name();
+    let env_name = env_node_name_override().is_some();
+    let store = crate::storage::store_root();
+    let mtls = crate::fedtls::available();
+    let reach = if mtls {
+        crate::fedtls::fed_advertise_url()
+    } else {
+        advertise_url()
+    };
+    let token = federation_token();
+    let peers = peers();
+    let row =
+        |k: &str, v: Markup| html! { tr { td.sub style="white-space:nowrap" { (k) } td { (v) } } };
+    html! {
+        div.pad #fleet-setup {
+            @if let Some(b) = banner { (b) }
+            p.sub style="margin-top:0" {
+                "A fleet forms when nodes see each other — easiest by pointing them at the "
+                b { "same shared store" } " (auto-discovery + shared token + mTLS), or by listing peers by hand."
+            }
+            table { tbody {
+                (row("This node", html! {
+                    @if env_name {
+                        b { (name) } " " span.sub { "(set via TENDRIL_NODE_NAME)" }
+                    } @else {
+                        form.inline hx-post="/fleet/setup/name" hx-target="#fleet-setup" hx-swap="outerHTML"
+                            style="display:inline-flex; gap:6px; align-items:center" {
+                            input name="name" value=(name) style="width:12em";
+                            button.btn.sm type="submit" { "Rename" }
+                        }
+                    }
+                }))
+                (row("Shared store", match &store {
+                    Some(p) => html! { span.mono { (p) } " " span.badge title="Nodes on this store auto-join" { "auto-membership" } },
+                    None => html! { "none — " a href="/storage" { "add an NFS/SMB store" } " to auto-federate, or list peers manually below" },
+                }))
+                (row("Secure transport", if mtls {
+                    html! { span.badge { "mTLS" } " — CA auto-managed on the shared store" }
+                } else {
+                    html! { "token + TLS (no shared CA) — add a shared store or " code { "TENDRIL_FED_CA_DIR" } " for mTLS" }
+                }))
+                (row("Reachable at", html! { span.mono { (reach) } }))
+            } }
+
+            div style="margin-top:12px" {
+                details {
+                    summary.sub style="cursor:pointer" { "Join token" }
+                    div style="margin-top:8px" {
+                        p.sub style="margin:0 0 6px" { "Any node with this token (or mounting the shared store) joins the fleet — treat it as a secret." }
+                        pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px; word-break:break-all" { (token) }
+                        @if token_is_store_managed() {
+                            button.btn.sm style="margin-top:8px"
+                                hx-post="/fleet/setup/rotate-token" hx-target="#fleet-setup" hx-swap="outerHTML"
+                                hx-confirm="Rotate the join token? Nodes on the shared store update automatically; any manually-configured node must be given the new token." { "Rotate token" }
+                        }
+                    }
+                }
+            }
+
+            div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line)" {
+                div.sub style="font-weight:600; margin-bottom:6px" { "Nodes in the fleet" }
+                @if peers.is_empty() {
+                    p.sub style="margin:0" { "Just this node so far. Add another below." }
+                } @else {
+                    ul style="margin:0; padding-left:18px" {
+                        li.sub { b { (name) } " (this node)" }
+                        @for p in &peers {
+                            li.sub { (p.name) " — " span.mono { (p.url) }
+                                @if p.fed.is_some() { " " span.badge { "mTLS" } }
+                            }
+                        }
+                    }
+                }
+            }
+
+            details style="margin-top:12px" {
+                summary.sub style="cursor:pointer" { "Add another node" }
+                div style="margin-top:8px" {
+                    p.sub style="margin:0 0 6px" { b { "Easiest:" } " on the other box, mount the " b { "same" } " shared store under " a href="/storage" { "Storage" } ". It heartbeats in, reads the shared token + CA, and appears here automatically." }
+                    p.sub style="margin:0 0 6px" { b { "Manual (no shared store):" } " set these on the other node, then restart it:" }
+                    pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px" {
+                        "TENDRIL_PEERS=" (name) "=" (reach) "\nTENDRIL_FEDERATION_TOKEN=" (token)
+                    }
+                    p.sub style="margin:6px 0 0" { "…and point this node back at it the same way (peers are listed per node)." }
+                }
+            }
+        }
+    }
 }
 
 // ── remote provision + GPU-aware placement (Phase B) ────────────────────────────────────────────

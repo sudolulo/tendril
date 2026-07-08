@@ -53,6 +53,8 @@ async fn main() {
         .route("/fleet/new", get(federation::new_page))
         .route("/fleet/create", post(federation::create))
         .route("/fleet/rehome", post(federation::rehome))
+        .route("/fleet/setup/name", post(federation::setup_name))
+        .route("/fleet/setup/rotate-token", post(federation::rotate_token))
         .route("/api/node", get(federation::api_node))
         .route("/api/provision", post(federation::api_provision))
         .route("/api/reimage", post(federation::api_reimage))

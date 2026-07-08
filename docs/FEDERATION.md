@@ -108,7 +108,10 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 
 ### Configuration (Phase A)
 
-Federation is off until peers are configured; then a **Fleet** tab appears. Configure each node via env
+Federation is off until peers are configured; then a **Fleet** tab appears. A lone node's **System →
+Fleet setup** panel is the onboarding entry point: it shows this node's name (editable), the shared-store
+status, secure-transport (mTLS) status, the join token (with a rotate button when store-managed), the
+nodes seen so far, and copy-paste instructions for adding another node. Configure each node via env
 (systemd `Environment=`) or `/etc/tendril/federation.conf` (`key=value` lines):
 
 | Setting | Env | conf key | Meaning |

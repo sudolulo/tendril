@@ -40,6 +40,10 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
           DL_DIR: /srv/tendril-dl
+          # Optional: a URL you legitimately control (your NVIDIA vGPU eval/licensing download) for the
+          # licensed NVIDIA vGPU host .run. Set it to auto-build the NVIDIA variant into a PRIVATE repo.
+          # Never a public mirror — NVIDIA's driver is non-redistributable (see image/vgpu/README.md).
+          NVIDIA_VGPU_RUN_URL: ${{ secrets.NVIDIA_VGPU_RUN_URL }}
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
@@ -97,7 +101,43 @@ jobs:
 
           # 5. Create the stable Gitea release for tag v$V (api/auth/tag were set + existence-checked
           #    at the top; if we got here the release doesn't exist yet).
-          notes="$(printf 'Tendril %s\n\nContainer image: `%s/%s/tendril:%s` (also `:latest`)\n\nInstaller ISO: https://dl.onetick.ninja/%s\nSHA-256: `%s`\n\nVerify: `sha256sum -c SHA256SUMS` against https://dl.onetick.ninja/SHA256SUMS' "$V" "$REG" "$OWNER" "$V" "$name" "$ISO_SHA")"
+          notes="$(printf 'Tendril %s\n\nContainer image: `%s/%s/tendril:%s` (also `:latest`)\nvGPU (AMD): `%s/%s/tendril:vgpu-amd` — auto-updates + rolls back like the base\n\nInstaller ISO: https://dl.onetick.ninja/%s\nSHA-256: `%s`\n\nVerify: `sha256sum -c SHA256SUMS` against https://dl.onetick.ninja/SHA256SUMS' "$V" "$REG" "$OWNER" "$V" "$REG" "$OWNER" "$name" "$ISO_SHA")"
           body="$(TAG="$tag" NAME="Tendril $V" NOTES="$notes" SHA="$SHA" python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":os.environ["SHA"],"name":os.environ["NAME"],"body":os.environ["NOTES"],"draft":False,"prerelease":False}))')"
           curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
             -d "$body" "$api/releases" >/dev/null && echo "Created Gitea release $tag."
+
+          # 6. vGPU host-driver image variants — layer a vGPU driver onto the base we just built so
+          #    vGPU appliances get the SAME auto-update + rollback guarantees as the base (bootc pulls
+          #    the whole variant image atomically; the kernel module is baked against this exact base
+          #    kernel, so there's never module/kernel skew). Non-fatal: the base release + ISO are
+          #    already published above, and an unvalidated variant build must never fail a good release.
+          echo "== vGPU variants =="
+          set +e
+          # AMD GIM is open-source and redistributable → publish it publicly alongside the base.
+          if podman build -f image/vgpu/Containerfile.amd-gim --build-arg BASE=localhost/tendril:dev \
+               -t "$REG/$OWNER/tendril:vgpu-amd-$V" -t "$REG/$OWNER/tendril:vgpu-amd" . ; then
+            podman push "$REG/$OWNER/tendril:vgpu-amd-$V" && podman push "$REG/$OWNER/tendril:vgpu-amd" \
+              && echo "Published tendril:vgpu-amd ($V)" || echo "WARNING: vgpu-amd push failed (non-fatal)"
+          else
+            echo "WARNING: vgpu-amd build failed (non-fatal) — base release is unaffected."
+          fi
+
+          # NVIDIA vGPU host driver is LICENSED and non-redistributable. We build it ONLY when you
+          # supply a URL you legitimately control (your NVIDIA eval/licensing download — NOT a public
+          # mirror), and push it to a SEPARATE repo you must keep PRIVATE (for your own licensed use).
+          if [ -n "${NVIDIA_VGPU_RUN_URL:-}" ]; then
+            echo "== NVIDIA vGPU variant (private, licensed) =="
+            if curl -fSL -o image/vgpu/nvidia-vgpu.run "$NVIDIA_VGPU_RUN_URL" \
+               && podman build -f image/vgpu/Containerfile.nvidia-vgpu-unlock --build-arg BASE=localhost/tendril:dev \
+                    -t "$REG/$OWNER/tendril-vgpu-nvidia:$V" -t "$REG/$OWNER/tendril-vgpu-nvidia:latest" . ; then
+              podman push "$REG/$OWNER/tendril-vgpu-nvidia:$V" && podman push "$REG/$OWNER/tendril-vgpu-nvidia:latest" \
+                && echo "Published tendril-vgpu-nvidia ($V) — ensure this repo is PRIVATE." \
+                || echo "WARNING: tendril-vgpu-nvidia push failed (non-fatal)"
+            else
+              echo "WARNING: NVIDIA vGPU variant build failed (non-fatal)."
+            fi
+            rm -f image/vgpu/nvidia-vgpu.run
+          else
+            echo "NVIDIA_VGPU_RUN_URL not set — skipping the NVIDIA vGPU variant (supply your licensed .run URL to enable)."
+          fi
+          set -e

@@ -202,13 +202,14 @@ fn amd_guide(active: bool) -> Markup {
             p.sub style="margin:0" { "vGPU profiles are advertised — the AMD GIM driver is loaded. Create split stations from the station wizard." }
         } @else {
             p.sub style="margin:0 0 4px" {
-                "AMD's GIM (GPU-IOV Module) is open-source and redistributable, so this builds fully "
-                "unattended. It covers SR-IOV-capable pro/datacenter cards (FirePro S7150, Instinct MI-series) — "
-                b { "not" } " consumer Radeon, which has no vGPU."
+                "AMD's GIM (GPU-IOV Module) is open-source and redistributable, so Tendril ships a "
+                "prebuilt variant. It covers SR-IOV-capable pro/datacenter cards (FirePro S7150, "
+                "Instinct MI-series) — " b { "not" } " consumer Radeon, which has no vGPU."
             }
-            (cmd("scripts/build-vgpu-variant.sh amd"))
-            div.sub { "Then, on the appliance:" }
-            (cmd("sudo bootc switch localhost/tendril:vgpu-amd && sudo reboot"))
+            div.sub { b { "Recommended — prebuilt, auto-updating:" } " switch to the published image (kernel module always matches, updates + rolls back like the base):" }
+            (cmd("sudo bootc switch git.onetick.ninja/flan/tendril:vgpu-amd && sudo reboot"))
+            div.sub { "Or build it yourself (produces a local-only tag that won't auto-update):" }
+            (cmd("scripts/build-vgpu-variant.sh amd\nsudo bootc switch localhost/tendril:vgpu-amd && sudo reboot"))
         }
     }
 }

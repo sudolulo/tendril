@@ -20,6 +20,24 @@ light up automatically.
 
 The wrapper `scripts/build-vgpu-variant.sh nvidia|amd` builds the base (if needed) and the variant.
 
+## Auto-update & rollback
+
+A variant is a normal bootc image, so it gets the **same auto-update and rollback** as the base — with
+one requirement: the appliance must track a **registry ref**, not a `localhost/…` tag. `bootc upgrade`
+pulls whatever ref you booted into, so switch to a published image:
+
+- **AMD** is redistributable — CI publishes it on every release, so just
+  `bootc switch git.onetick.ninja/flan/tendril:vgpu-amd` and it auto-updates + rolls back like the base.
+- **NVIDIA** is licensed, so there's no public image. Build it, push it to **your own private registry**,
+  and switch to that ref for the same behaviour (or rebuild + `bootc switch` on each base bump).
+
+The kernel module is baked against the base kernel **at build time**, so every published variant image
+is internally consistent — `bootc upgrade` swaps in a whole new consistent image atomically (never a
+module/kernel mismatch), and a bad update rolls back to the previous deployment. The only obligation is
+on the *publishing* side: when the base ships a new kernel, the variant must be **rebuilt and
+republished** (CI does this for AMD automatically). If host Secure Boot is on, the baked module must be
+signed at build time.
+
 ## AMD — MxGPU / GIM (fully automated)
 
 `Containerfile.amd-gim` clones AMD's **open-source** GIM (GPU-IOV Module) and builds it as a kernel

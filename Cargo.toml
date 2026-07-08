@@ -12,6 +12,7 @@ edition = "2021"
 version = "0.18.0"
 repository = "https://git.onetick.ninja/flan/tendril"
 authors = ["Tendril contributors"]
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 tendril-capability-engine = { path = "crates/capability-engine" }

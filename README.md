@@ -65,6 +65,9 @@ Tendril's own registry (tags `latest` and the current version):
 sudo bootc switch git.onetick.ninja/flan/tendril:latest && sudo reboot
 ```
 
+Three channels are published — rolling `:dev`, per-release `:latest`, and validated `:stable`
+(promoted only after bake time + hardware checks) — see **[docs/CHANNELS.md](docs/CHANNELS.md)**.
+
 Once it's up, open the **web UI** at `http://<host-ip>/` and set an admin password, or use the
 `tendril` console on the attached display.
 
@@ -89,8 +92,9 @@ Full architecture, decisions, and phase detail: **[docs/PLAN.md](docs/PLAN.md)**
 
 ## Contributing
 
-Trunk-based on `dev`, Conventional Commits, changelog per change — see
-**[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Trunk-based on `dev`, Conventional Commits, changelog per change, and a one-time
+[CLA](CLA.md) with your first PR — see **[CONTRIBUTING.md](CONTRIBUTING.md)**. Security issues go to
+[SECURITY.md](SECURITY.md), not the issue tracker.
 
 ## AI disclosure
 
@@ -99,4 +103,7 @@ of AI tools. All output is reviewed by human maintainers before it lands. See [N
 
 ## License
 
-TBD — see the open questions in [docs/PLAN.md](docs/PLAN.md).
+**[AGPL-3.0-only](LICENSE)** — one edition, every feature open source. Use it freely, commercially
+included: running stations you charge for carries no obligations. If you *modify* Tendril and offer
+it to others over a network, the AGPL asks you to share those changes; organizations that need
+different terms can get a **commercial license** — see **[LICENSING.md](LICENSING.md)**.

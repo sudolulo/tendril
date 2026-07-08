@@ -9,6 +9,17 @@ This is the **literal development workflow**. Follow it for every change.
 2. **Feature work happens on a branch and lands via a Pull Request** into `dev` that passes CI (and
    review, once the project has more than one maintainer).
 3. **Pinned versions change only through a PR** (usually a Renovate PR). See [docs/VERSIONING.md](docs/VERSIONING.md).
+4. **Outside contributions require the CLA** (see below). Security issues go to
+   [SECURITY.md](SECURITY.md), never the public tracker.
+
+## Licensing & CLA
+
+Tendril is **AGPL-3.0-only**, dual-licensed commercially — which only works while a single owner
+holds all the copyright (see [LICENSING.md](LICENSING.md)). So every outside contribution needs the
+one-time [Contributor License Agreement](CLA.md): with your **first PR**, add yourself to the
+signatory table in `CLA.md` and state *"I have read and agree to the Tendril CLA"* in the PR
+description. You keep your copyright; the CLA grants the project the rights it needs. PRs from
+unsigned contributors don't get merged — no exceptions, however small the patch.
 
 ## Branching model
 

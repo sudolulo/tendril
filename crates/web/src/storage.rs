@@ -44,6 +44,7 @@ pub struct Store {
     pub mount: String,  // mount point, e.g. /var/lib/tendril/store
     pub options: String,
     pub username: String, // smb only
+    pub tls: bool,        // nfs only: encrypt the transport with RPC-over-TLS (xprtsec=tls)
 }
 
 pub fn load() -> Option<Store> {
@@ -58,6 +59,7 @@ pub fn load() -> Option<Store> {
                 "mount" => s.mount = v,
                 "options" => s.options = v,
                 "username" => s.username = v,
+                "tls" => s.tls = v == "true",
                 _ => {}
             }
         }
@@ -73,8 +75,8 @@ fn save(s: &Store) -> std::io::Result<()> {
     std::fs::write(
         &p,
         format!(
-            "type={}\nremote={}\nmount={}\noptions={}\nusername={}\n",
-            s.kind, s.remote, s.mount, s.options, s.username
+            "type={}\nremote={}\nmount={}\noptions={}\nusername={}\ntls={}\n",
+            s.kind, s.remote, s.mount, s.options, s.username, s.tls
         ),
     )
 }
@@ -153,6 +155,14 @@ fn mount_store(s: &Store, password: &str) -> Result<(), String> {
         } else {
             format!("{opts},{extra}")
         };
+    } else if s.tls {
+        // NFS over TLS (RPC-with-TLS) — encrypts the transport without Kerberos. Requires a recent
+        // kernel + `tlshd` (ktls-utils) running on both this node and the NFS server.
+        opts = if opts.is_empty() {
+            "xprtsec=tls".to_string()
+        } else {
+            format!("{opts},xprtsec=tls")
+        };
     }
     let fstype = if s.kind == "smb" { "cifs" } else { "nfs" };
     let mut args = vec!["-t", fstype, &s.remote, &s.mount];
@@ -213,6 +223,8 @@ pub struct StoreForm {
     username: String,
     #[serde(default)]
     password: String,
+    #[serde(default)]
+    tls: String,
 }
 
 pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
@@ -240,6 +252,7 @@ pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
         }
     };
     let s = Store {
+        tls: kind == "nfs" && !f.tls.trim().is_empty(),
         kind,
         remote,
         mount,
@@ -303,6 +316,11 @@ fn panel_with(note: Option<Markup>) -> Markup {
                             div.field.store-smb { label { "SMB username" } input name="username"; }
                             div.field.store-smb { label { "SMB password" } input type="password" name="password"; }
                         }
+                        div.field.check.store-nfs style="margin-top:8px" {
+                            input type="checkbox" name="tls" id="store-tls";
+                            label for="store-tls" { "Encrypt with TLS (NFS-over-TLS)" }
+                            span.hint { "Optional. Encrypts the NFS transport without Kerberos (adds xprtsec=tls) — needs a recent kernel and tlshd running on this node and the NFS server. Off = plain NFS (use only on trusted networks)." }
+                        }
                         details.advanced.wide style="margin-top:4px" {
                             summary { "Advanced: mount point & options" }
                             div.grid {
@@ -318,6 +336,7 @@ fn panel_with(note: Option<Markup>) -> Markup {
                         "<script>window.tendrilStore=function(){\
                          var k=document.getElementById('store-kind');if(!k)return;var smb=k.value==='smb';\
                          document.querySelectorAll('.store-smb').forEach(function(e){e.style.display=smb?'':'none';});\
+                         document.querySelectorAll('.store-nfs').forEach(function(e){e.style.display=smb?'none':'';});\
                          var r=document.getElementById('store-remote');\
                          if(r)r.placeholder=smb?'//10.0.0.5/tendril':'10.0.0.5:/tank/tendril';\
                          var o=document.getElementById('store-options');\

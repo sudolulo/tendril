@@ -1,10 +1,24 @@
 # bootc-image-builder installer config for the Tendril ISO.
 #
-# Goal: a simple, guided install. We pre-answer the boring, unopinionated bits (keyboard, timezone,
-# networking) and deliberately leave the three things a person actually cares about interactive:
-#   • Language        — the language spoke stays open (no `lang` line below).
-#   • Destination disk — no partitioning directives, so the installer requires a disk selection.
-#   • Admin login      — no `rootpw`/`user`, so the user-creation spoke requires a password.
+# ONE ISO, two ways to install, chosen from the GRUB boot menu (or a PXE boot argument):
+#
+#   • "Install Tendril" (default)                     — GUIDED. We pre-answer the boring bits (keyboard,
+#     timezone, networking) and leave the three things a person cares about interactive:
+#       · Language        — the language spoke stays open (no `lang`).
+#       · Destination disk — no partitioning directives, so a disk must be picked.
+#       · Admin login      — no `rootpw`/`user`, so the account spoke requires a password.
+#
+#   • "Install Tendril — Unattended (erases disk)"    — TOUCHLESS. This entry boots with
+#     `tendril.unattended` (+ `inst.text`); the %pre below then shows an ERASE countdown you can abort
+#     by powering off, picks a single disk safely, and sets a must-change default login. For setting up
+#     dedicated machines hands-off — one USB, pick the entry, walk away.
+#
+# The **same `tendril.unattended` boot argument** is what the PXE "provision the room" flow passes, so
+# the GRUB entry and net-boot share this one touchless path — there is no second kickstart to keep in
+# sync. The Unattended menu entry is injected into the ISO by scripts/build-installer.sh after the build.
+# (image/installer/config-unattended.toml is a separate "the whole ISO is always unattended" build for
+# CI, with no menu — this file is the guided ISO that *offers* unattended as a menu pick.)
+#
 # The root filesystem (xfs or btrfs) is chosen at ISO build time via `build-installer.sh --rootfs`.
 
 [customizations.installer.kickstart]
@@ -16,9 +30,99 @@ network --bootproto=dhcp --activate --hostname=tendril
 # Reboot into the installed system when the install finishes.
 reboot --eject
 
+# Guided vs. unattended is decided here by the `tendril.unattended` kernel argument (set by the
+# "Unattended" GRUB entry / the PXE boot config). Guided writes nothing extra, so Anaconda keeps the
+# language/disk/login spokes interactive; unattended writes safe single-disk partitioning + a default
+# login into an %include, after a visible ERASE countdown.
+%pre --interpreter=/bin/bash --erroronfail
+if grep -qw tendril.unattended /proc/cmdline; then
+  # Visible ERASE countdown on the primary display / console — power off during it to abort. Nothing
+  # is written until this %pre returns and the install phase begins.
+  for tty in /dev/tty1 /dev/console; do [ -w "$tty" ] && cat > "$tty" <<'B'
+
+  ############################################################
+  #   TENDRIL — UNATTENDED INSTALL                           #
+  #   This will ERASE this PC and install Tendril.           #
+  #   >>> POWER OFF NOW to cancel. <<<                       #
+  ############################################################
+
+B
+  done
+  for s in 10 9 8 7 6 5 4 3 2 1; do
+    for tty in /dev/tty1 /dev/console; do
+      [ -w "$tty" ] && printf '\r   Installing in %2d s ...  (power off to abort)     ' "$s" > "$tty"
+    done
+    sleep 1
+  done
+  for tty in /dev/tty1 /dev/console; do [ -w "$tty" ] && printf '\r   Installing now — do not power off.                 \n' > "$tty"; done
+
+  # Pick a single install target safely — never a blind wipe of every disk. Only REAL disks: skip
+  # zram (Fedora's installer env has a zram swap device reporting TYPE=disk), plus loop/ram/rom/dm/nbd.
+  disks=""
+  for d in $(lsblk -dnro NAME,TYPE | awk '$2=="disk"{print $1}'); do
+    case "$d" in zram*|loop*|ram*|sr*|fd*|nbd*|dm-*) continue ;; esac
+    disks="$disks $d"
+  done
+  set -- $disks
+  if [ "$#" -eq 0 ]; then
+    echo "unattended install: no installable disk found" >&2; exit 1
+  elif [ "$#" -eq 1 ]; then
+    target="$1"
+  else
+    # Multiple disks: choose the smallest (least likely to be a data drive). For a specific disk,
+    # present only that disk to the installer.
+    best=""; bestsz=0
+    for d in $disks; do
+      sz="$(cat /sys/block/$d/size 2>/dev/null || echo 0)"
+      if [ -z "$best" ] || [ "$sz" -lt "$bestsz" ]; then best="$d"; bestsz="$sz"; fi
+    done
+    target="$best"
+  fi
+  cat > /tmp/tendril-mode.ks <<EOF
+lang en_US.UTF-8
+ignoredisk --only-use=$target
+clearpart --drives=$target --all --initlabel
+autopart
+rootpw --plaintext tendril
+EOF
+else
+  # Guided: write nothing, so Anaconda keeps the language/disk/login spokes interactive.
+  : > /tmp/tendril-mode.ks
+fi
+%end
+%include /tmp/tendril-mode.ks
+
 %post --erroronfail
-# A friendly banner on the text VTs (tty1 lands in the `tendril` console; others get a shell).
-cat > /etc/motd <<'MOTD'
+if grep -qw tendril.unattended /proc/cmdline; then
+  # Unattended: seed a default WEB admin password + force-change on first visit, so a deployer can log
+  # in with the default to pre-seed config before a user does. (Same seed the --unattended config uses.)
+  mkdir -p /etc/tendril
+  cat > /etc/systemd/system/tendril-seed-admin.service <<'UNIT'
+[Unit]
+Description=Seed the default Tendril web admin password (once)
+ConditionPathExists=!/etc/tendril/webauth
+Before=tendril-web.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo tendril | /usr/local/bin/tendril-web --seed-default-password'
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl enable tendril-seed-admin.service || true
+  cat > /etc/motd <<'MOTD'
+
+  Tendril — one machine, many tendrils.  (unattended install)
+
+  Web UI:   http://<this-host>/   — a default admin password is set; you'll be
+            required to change it on first sign-in.
+  Console:  the `tendril` menu opens automatically on this display (tty1).
+            Local sudo/SSH is root with the default password 'tendril' — run
+            `passwd` to change it.
+
+MOTD
+else
+  cat > /etc/motd <<'MOTD'
 
   Tendril — one machine, many tendrils.
 
@@ -26,5 +130,6 @@ cat > /etc/motd <<'MOTD'
   Console:  the `tendril` menu on the primary display (tty1)
 
 MOTD
+fi
 %end
 """

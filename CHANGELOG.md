@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-08
+
+Fleet-wide station control (including live console) from any node, invisible vGPU guest drivers,
+data-preserving re-splits, persistent data volumes, and a one-ISO guided/unattended installer.
+
+### Added
+- **Control any station from any node.** A peer's stations on the Stations page now have full
+  lifecycle parity — start / stop / **force-off** / delete, dispatched to the owning node — plus a
+  **self-refreshing** panel and state pills matching local. **Open** a peer station for its **live
+  console**: this node bridges the browser's noVNC WebSocket to the owner's token/mTLS-authed
+  `/api/station/:name/vnc`.
+- **Invisible vGPU guest driver.** A vGPU station's guest driver is selected and installed
+  automatically to match the host driver branch — there's no per-VM driver step. The host branch is
+  captured when the host `.run` is staged; the matching Linux guest driver is fetched from NVIDIA's
+  official bucket on demand (Windows installer supplied once from the licensed package). Golden images
+  record their built-with branch, and the Media list flags a **branch mismatch** so a stale driver on
+  a moved/pushed image is never silent.
+- **Non-destructive GPU re-split.** Change a station's vGPU profile from its detail page **without
+  recreating the disk** — the qcow2 (Windows / games / saves) is kept; only the mediated device swaps.
+- **Persistent data volume.** An optional per-station data disk (`vdb`) — set via the wizard's
+  *"Persistent data volume (GiB)"* field and auto-mounted in the guest (Bazzite + Windows) — that
+  **survives OS reinstalls, base-image pushes, and re-splits** (a reimage replaces only the boot disk
+  `vda`, never `vdb`).
+- **One ISO, guided or unattended.** The installer ISO now carries a second GRUB entry, **"Install
+  Tendril — Unattended (ERASES THIS DISK)"**: a visible ERASE countdown you can abort by powering off,
+  then a hands-off single-disk install. The same `tendril.unattended` boot path is what the PXE
+  "provision the room" flow will use. The guided install stays the default.
+- **Dev-channel installer ISO** — an on-demand + nightly workflow builds an ISO from the rolling
+  `:dev` image, so testers can install the dev channel directly and roll forward via `bootc`.
+
 ## [0.17.0] - 2026-07-08
 
 Easier fleet-building, a touchless installer, and gaming provisioning (games + streaming).
@@ -477,7 +507,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...HEAD
+[0.18.0]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...v0.18.0
 [0.17.0]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...v0.17.0
 [0.16.0]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...v0.16.0
 [0.15.0]: https://git.onetick.ninja/flan/tendril/compare/v0.14.0...v0.15.0

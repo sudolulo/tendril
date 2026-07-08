@@ -1,0 +1,44 @@
+name: deploy-dev
+
+# Auto-redeploy the test + demo instances (this box) on every push to `dev`, so both always run the
+# latest edge build. Runs on the self-hosted `host` runner (root, same machine as the services) — the
+# Docker-mode `ubuntu-latest` runner can't touch the host's systemd. Builds are incremental: the repo
+# and cargo caches live under /var/lib/tendril-deploy and persist between runs.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: host
+    timeout-minutes: 30
+    steps:
+      - name: Build + redeploy tendril-web
+        env:
+          REG: git.onetick.ninja
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euxo pipefail
+          # Persistent build tree so cargo's target/ and the toolchain survive between runs.
+          work=/var/lib/tendril-deploy
+          export CARGO_HOME="$work/cargo" RUSTUP_HOME="$work/rustup"
+          export PATH="$CARGO_HOME/bin:$PATH"
+          mkdir -p "$work"
+          if [ ! -d "$work/repo/.git" ]; then
+            git clone "https://oauth2:${TOKEN}@${REG}/${REPO}.git" "$work/repo"
+          fi
+          cd "$work/repo"
+          git fetch --prune origin dev
+          git reset --hard origin/dev
+          # Rust toolchain pinned by rust-toolchain.toml; install once into the persistent RUSTUP_HOME.
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          # Runner is root on the host → deploy-dev.sh installs + restarts without sudo.
+          ./scripts/deploy-dev.sh

@@ -62,7 +62,14 @@ Turn the image into a USB-flashable installer with `bootc-image-builder`:
 ```bash
 scripts/build-installer.sh --type iso     # installer ISO -> flash to USB, boot the target, install
 scripts/build-installer.sh --type raw     # raw disk image -> dd straight onto the target's disk
+scripts/build-installer.sh --unattended   # opt-in TOUCHLESS install (CI/test VMs, fleet provisioning)
 ```
+
+The default ISO is **guided** (you pick the disk, admin login, and language). `--unattended` builds a
+**touchless** variant that installs hands-off — safe single-disk partitioning (targets one real disk;
+never a blind wipe) and a seeded **must-change** default web admin password (you're forced to set a new
+one on first sign-in). Use it for repeatable test VMs and fleet provisioning, not as the shipping
+media.
 
 Then flash the ISO and boot the target machine from it:
 

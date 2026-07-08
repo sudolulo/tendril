@@ -37,10 +37,19 @@ password auth, and **configurable networking** with a 60-second **test-and-rever
 
 ![Configurable networking with test-and-revert](docs/images/network.png)
 
-**New in 0.16 (experimental, pending real-hardware validation):** split a single GPU across multiple
-stations with **vGPU** (mdev / SR-IOV — see the [supported-card list](docs/VGPU.md)), save installed
-stations as **golden images** and clone them instantly (integrity-verified by SHA-256), and manage a
-**fleet** of nodes from one UI with GPU-aware placement and one-click re-home ([docs/FEDERATION.md](docs/FEDERATION.md)).
+**New in 0.17 (experimental, pending real-hardware validation):**
+- **Easier fleet-building** — join a fleet by pasting a **join code** (no shared store needed; mutual
+  membership over mTLS), with **mDNS LAN discovery** surfacing nearby machines. Control a peer's
+  stations right from the Stations page ([docs/FEDERATION.md](docs/FEDERATION.md)).
+- **Touchless installer** (`--unattended`) for CI/test VMs and fleet provisioning — safe single-disk,
+  seeded must-change admin password (the shipping ISO stays guided).
+- **Gaming provisioning** — a **shared Steam library** over virtio-fs (install games once, read by
+  many — [docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)), **Moonlight** receiver on Windows *and* Bazzite,
+  and Windows stations auto-installing the vGPU guest driver + Steam/Sunshine/Discord.
+
+**From 0.16:** split a single GPU across stations with **vGPU** (mdev / SR-IOV — see the
+[supported-card list](docs/VGPU.md)), and save installed stations as **golden images** to clone
+instantly (SHA-256 integrity-verified).
 
 Drive it all from the web UI, the console, or the CLIs — see **[docs/CLI.md](docs/CLI.md)**.
 
@@ -72,8 +81,9 @@ installs, the console, and the web control plane (incl. networking) are **done**
 | Area | Capability | Status |
 |---|---|---|
 | vGPU | >1 VM per GPU — mdev (official + `vgpu_unlock`) & SR-IOV — see **[docs/VGPU.md](docs/VGPU.md)** | 🧪 Experimental (needs hardware validation) |
-| Federation | Manage a fleet of nodes from one UI; GPU-aware placement + assisted re-home — see **[docs/FEDERATION.md](docs/FEDERATION.md)** | 🧪 Experimental |
-| Streaming | Sunshine/Moonlight for headless / remote play | 🔭 Future |
+| Federation | Fleet from one UI; **join codes** + **mDNS discovery**, GPU-aware placement, peer-station control, assisted re-home — see **[docs/FEDERATION.md](docs/FEDERATION.md)** | 🧪 Experimental |
+| Streaming | Sunshine host + **Moonlight** receiver on stations (Windows & Bazzite) | 🧪 Experimental |
+| Games | Shared Steam library over virtio-fs + golden-image workflow — see **[docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)** | 🧪 Experimental |
 
 Full architecture, decisions, and phase detail: **[docs/PLAN.md](docs/PLAN.md)**.
 

@@ -108,8 +108,8 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 
 ### Configuration (Phase A)
 
-Federation is off until peers are configured; then a **Fleet** tab appears. A lone node's **System →
-Fleet setup** panel is the onboarding entry point: it shows this node's name (editable), the shared-store
+The **Fleet** tab is always visible; a lone node's Fleet page shows a create/join empty state. The
+**Fleet setup** panel is the onboarding entry point: it shows this node's name (editable), the shared-store
 status, secure-transport (mTLS) status, the join token (with a rotate button when store-managed), the
 nodes seen so far, and copy-paste instructions for adding another node. Configure each node via env
 (systemd `Environment=`) or `/etc/tendril/federation.conf` (`key=value` lines):
@@ -123,6 +123,27 @@ nodes seen so far, and copy-paste instructions for adding another node. Configur
 The aggregator reads peers over `GET /api/node` (JSON) with a short timeout; an unresponsive peer is
 shown as **unreachable** (its stations keep running — it's just not manageable until it's back). Nodes
 otherwise stay fully independent; there is no shared state in Phase A.
+
+### Joining a fleet: join codes + LAN discovery
+
+The easiest way to add a node needs **no shared store**. On an existing node, **Fleet → Fleet setup →
+Join code** produces a one-time **join code** (base64: the founder's UI + mTLS URLs, the shared token,
+and the fleet CA cert+key — founding a local CA if there's no store). On the new node, **Fleet → Join a
+fleet** applies that code and:
+
+- installs the fleet CA locally (so mTLS works store-lessly),
+- adopts the shared token,
+- adds the founder as a peer *with* its mTLS URL (peer entries now accept `name=<ui-url>|<fed-url>`), and
+- **registers back** with the founder (`POST /api/fleet/register`, token-authed) so membership is
+  **mutual** — no shared presence directory required.
+
+Treat the code as a secret — it grants trust, like a Proxmox join blob. Federation works immediately
+over the token+TLS path; full mTLS engages once the joining node restarts to bring up its listener.
+
+**mDNS discovery** (`_tendril._tcp`): each node advertises itself and browses the LAN, so nearby
+machines appear under **Nearby on the LAN** in Fleet setup — no hand-typed IPs on a flat network (the
+convention-floor case). Discovery only *finds* nodes; a join code still grants trust (no auto-join).
+It's best-effort — where multicast is unavailable, the join-code and shared-store paths still work.
 
 ### Transport security: mTLS
 

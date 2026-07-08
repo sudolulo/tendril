@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-08
+
+Easier fleet-building, a touchless installer, and gaming provisioning (games + streaming).
+
+### Added
+- **Fleet-building without hand-typed IPs.** A store-less **join code** (base64 carrying the founder's
+  URLs, the shared token, and the fleet CA) lets a new node join with no shared store: paste it on the
+  node's **Join a fleet** screen and it adopts the CA + token, adds the founder as a peer, and
+  **registers back** so membership is mutual (`/api/fleet/register`). **mDNS LAN discovery**
+  (`_tendril._tcp`) surfaces nearby Tendril machines in Fleet setup — discovery finds them, the code
+  grants trust (no auto-join). Peer entries can now carry an mTLS URL (`name=<ui>|<fed>`).
+- **Touchless installer** (`scripts/build-installer.sh --unattended`, opt-in — the shipping ISO stays
+  guided). Hands-off install for CI/test VMs and fleet provisioning: safe single-disk partitioning
+  (targets one real disk — never a blind wipe, and skips zram/loop/rom), and a seeded **must-change**
+  default web admin password.
+- **Change the admin password in the UI** (System → Admin password), and a **force-change** flow: a
+  seeded default password forces `/setup` on first use before the console is usable. New
+  `tendril-web --seed-default-password`.
+- **Load games into stations.** A **Shared Steam library** toggle shares the fleet store's
+  `steam-library/` folder into a station over **virtio-fs** (games installed once, read by many),
+  auto-mounted in-guest; plus a golden-image workflow guide ([docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)).
+- **Moonlight receiver** on stations (Windows via winget, Bazzite via Flathub) so a station can also
+  *receive* a stream — the client to Sunshine's host.
+- **Windows station auto-provisioning:** NVIDIA vGPU **guest driver** + FastAPI-DLS licensing token
+  injected into the unattended install, plus optional **Steam / Sunshine / Discord** from official
+  URLs on first logon.
+- **Dark/light theme toggle** in the top bar (persisted, pre-paint to avoid flash).
+- **CI: auto-deploy + rolling `:dev` edge image.** Every push to `dev` redeploys the local test/demo
+  instances and publishes `git.onetick.ninja/flan/tendril:dev` (a bootc VM tracks it via
+  `bootc switch …:dev`). `:latest` stays the stable main-release tag.
+
+### Changed
+- **Stations vs Fleet, re-cut along workloads vs infrastructure.** Stations is the single station
+  surface (grouped by node in a fleet; **control a peer's stations** from it); Fleet is the
+  infrastructure view (nodes/GPUs/health/setup). **Dashboard folded into Stations** as a summary strip
+  (one fewer tab); the **Fleet tab is always visible** with a create/join empty state for a lone node.
+- vGPU driver + licensing panels moved up under OS updates on the System page.
+
+### Fixed
+- Touchless installer: the disk-picker no longer selects Fedora's `zram0` swap device (Anaconda
+  aborted with "Disk zram0 … does not exist"); it keeps root usable for the tty1 console autologin
+  (a locked root dead-ended the login).
+
 ## [0.16.0] - 2026-07-07
 
 vGPU, fleet federation, and hardened golden images.
@@ -434,7 +477,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...HEAD
+[0.17.0]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...v0.17.0
 [0.16.0]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...v0.16.0
 [0.15.0]: https://git.onetick.ninja/flan/tendril/compare/v0.14.0...v0.15.0
 [0.5.0]: https://git.onetick.ninja/flan/tendril/compare/v0.4.0...v0.5.0

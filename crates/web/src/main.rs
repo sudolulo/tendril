@@ -12,6 +12,7 @@ mod fedtls;
 mod hardware;
 mod images;
 mod licensing;
+mod mdns;
 mod network;
 mod pages;
 mod seats;
@@ -174,6 +175,10 @@ async fn main() {
         federation::heartbeat();
         std::thread::sleep(std::time::Duration::from_secs(30));
     });
+
+    // Advertise this node + browse for peers over mDNS so nearby machines appear in Fleet setup for
+    // one-click joining (best-effort; no-op in the demo or where multicast is unavailable).
+    mdns::start();
 
     // Federation mTLS listener: a separate port that requires a client cert signed by the shared
     // federation CA (and presents this node's cert). Runs alongside the browser UI so node-to-node

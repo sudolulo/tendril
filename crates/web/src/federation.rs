@@ -1040,6 +1040,25 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                 }
             }
 
+            @let discovered = crate::mdns::nearby();
+            @if !discovered.is_empty() {
+                div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line)" {
+                    div.sub style="font-weight:600; margin-bottom:6px" { "Nearby on the LAN (mDNS)" }
+                    p.sub style="margin:0 0 6px" {
+                        "Other Tendril machines discovered on this network. To add one, generate a join "
+                        "code on it and paste it above — discovery finds them, the code grants trust."
+                    }
+                    ul style="margin:0; padding-left:18px" {
+                        @for d in &discovered {
+                            li.sub {
+                                b { (d.name) } " — " a href=(d.url) target="_blank" rel="noreferrer" { span.mono { (d.url) } }
+                                @if d.fed.is_some() { " " span.badge title="Advertises an mTLS federation endpoint" { "mTLS" } }
+                            }
+                        }
+                    }
+                }
+            }
+
             div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line)" {
                 div.sub style="font-weight:600; margin-bottom:6px" { "Nodes in the fleet" }
                 @if peers.is_empty() {

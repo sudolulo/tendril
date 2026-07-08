@@ -22,6 +22,7 @@ maud = { version = "0.26", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"  # compact single-line encoding for fleet join codes
+mdns-sd = "0.11" # LAN discovery of fleet peers (_tendril._tcp) for easier fleet-building
 include_dir = "0.7"
 argon2 = "0.5"
 # HTTPS for the web UI (and, later, federation mTLS): a rustls TLS server. Self-signed certs are

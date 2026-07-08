@@ -1714,6 +1714,170 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
     }
 }
 
+// ── cross-node VNC console proxy ───────────────────────────────────────────────────────────────
+
+/// Cross-node console: relay the browser's noVNC WebSocket to a PEER station's VNC. This node opens an
+/// mTLS WebSocket to the peer's `/api/station/:name/vnc` (fed client cert + shared token) and pipes
+/// bytes both ways, so a station on any node can be opened and watched from here. Session-authed on the
+/// browser side; the peer side is authed by the fed cert + token.
+///
+/// SCAFFOLDING: compiles + fully wired, but needs two real nodes with a running station's VNC to
+/// validate end to end.
+pub async fn peer_vnc_ws(
+    axum::extract::Path((node, name)): axum::extract::Path<(String, String)>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some(peer) = peers().into_iter().find(|p| p.name == node) else {
+        return (axum::http::StatusCode::NOT_FOUND, "unknown fleet node").into_response();
+    };
+    let Some(fed) = peer.fed.clone() else {
+        return (
+            axum::http::StatusCode::BAD_GATEWAY,
+            "peer has no mTLS console endpoint yet (it must restart to bring up its cert listener)",
+        )
+            .into_response();
+    };
+    let Some(tls) = crate::fedtls::client_config() else {
+        return (
+            axum::http::StatusCode::BAD_GATEWAY,
+            "no federation identity for the mTLS console",
+        )
+            .into_response();
+    };
+    let ws_url = format!(
+        "{}/api/station/{}/vnc",
+        fed.trim_end_matches('/').replacen("https://", "wss://", 1),
+        name
+    );
+    let token = federation_token();
+    ws.on_upgrade(move |browser| peer_vnc_relay(browser, ws_url, token, tls))
+}
+
+/// Pump bytes between the browser WebSocket (axum) and the peer's mTLS WebSocket (tokio-tungstenite).
+async fn peer_vnc_relay(
+    browser: axum::extract::ws::WebSocket,
+    url: String,
+    token: String,
+    tls: std::sync::Arc<rustls::ClientConfig>,
+) {
+    use axum::extract::ws::Message as AxMsg;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message as TgMsg;
+
+    let mut req = match url.into_client_request() {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    if let Ok(v) = token.parse() {
+        req.headers_mut().insert("X-Tendril-Federation", v);
+    }
+    let connector = tokio_tungstenite::Connector::Rustls(tls);
+    let peer_ws =
+        match tokio_tungstenite::connect_async_tls_with_config(req, None, false, Some(connector))
+            .await
+        {
+            Ok((s, _)) => s,
+            Err(_) => {
+                let mut b = browser;
+                let _ = b.send(AxMsg::Close(None)).await;
+                return;
+            }
+        };
+    let (mut peer_tx, mut peer_rx) = peer_ws.split();
+    let (mut b_tx, mut b_rx) = browser.split();
+
+    let to_peer = async {
+        while let Some(Ok(msg)) = b_rx.next().await {
+            let out = match msg {
+                AxMsg::Binary(b) => TgMsg::Binary(b.into()),
+                AxMsg::Text(t) => TgMsg::Text(t.as_str().into()),
+                AxMsg::Close(_) => break,
+                _ => continue,
+            };
+            if peer_tx.send(out).await.is_err() {
+                break;
+            }
+        }
+    };
+    let to_browser = async {
+        while let Some(Ok(msg)) = peer_rx.next().await {
+            let out = match msg {
+                TgMsg::Binary(b) => AxMsg::Binary(b.to_vec()),
+                TgMsg::Text(t) => AxMsg::Text(t.to_string()),
+                TgMsg::Close(_) => break,
+                _ => continue,
+            };
+            if b_tx.send(out).await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::select! { _ = to_peer => {}, _ = to_browser => {} }
+}
+
+/// "Open" a peer station: a detail page served by this node with the station's live console proxied
+/// from the owning node (via [`peer_vnc_ws`]). Full control of a station from any node.
+pub async fn peer_station_detail(
+    axum::extract::Path((node, name)): axum::extract::Path<(String, String)>,
+) -> Markup {
+    let (nd, st) = (node.clone(), name.clone());
+    let info = tokio::task::spawn_blocking(move || {
+        fleet()
+            .into_iter()
+            .find(|x| x.name == nd)
+            .and_then(|x| x.stations.into_iter().find(|s| s.name == st))
+    })
+    .await
+    .ok()
+    .flatten();
+    let running = info
+        .as_ref()
+        .map(|s| s.state.eq_ignore_ascii_case("running"))
+        .unwrap_or(false);
+    ui::page(
+        "stations",
+        &name,
+        html! {
+            div style="display:flex; align-items:center; gap:12px; margin-bottom:16px" {
+                a.btn.sm href="/stations" { "\u{2190}" }
+                h1 style="margin:0; font-size:1.3rem" { (name) }
+                span.sub { "on " (node) }
+            }
+            (ui::panel("Console", Some(&format!("live console proxied from {node} over the fleet's secure channel")), html! {
+                @if running {
+                    div.pad {
+                        div.console style="position:relative" {
+                            div id="screen" {}
+                            div id="console-status" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#8b97a6; font-size:14px; pointer-events:none" { "Connecting to " (node) " console\u{2026}" }
+                        }
+                    }
+                    script type="module" { (maud::PreEscaped(peer_console_script(&node, &name))) }
+                } @else {
+                    div.emptybox { "The station isn't running. Start it from the " a href="/stations" { "Stations" } " page, then open its console." }
+                }
+            }))
+        },
+    )
+}
+
+fn peer_console_script(node: &str, name: &str) -> String {
+    format!(
+        r#"import RFB from '/assets/novnc/core/rfb.js';
+const screen=document.getElementById('screen');const s=document.getElementById('console-status');const say=(m)=>{{if(s)s.textContent=m;}};
+try{{
+  const proto=location.protocol==='https:'?'wss://':'ws://';
+  const rfb=new RFB(screen,proto+location.host+'/fleet/{node}/station/{name}/vnc');
+  rfb.scaleViewport=true;rfb.background='#000';
+  rfb.addEventListener('connect',()=>say(''));
+  rfb.addEventListener('disconnect',(e)=>say((e.detail&&e.detail.clean)?'Console closed.':'Console connection lost — reload to reconnect.'));
+  rfb.addEventListener('securityfailure',(e)=>say('Auth failed: '+((e.detail&&e.detail.reason)||'unknown')));
+}}catch(err){{say('Console failed to start: '+(err&&err.message?err.message:err));}}
+"#
+    )
+}
+
 /// A peer node's stations panel — rendered on the Stations page for every node other than this one.
 /// Its lifecycle controls (start/stop/force-off/delete) dispatch to the owning node over the
 /// federation API, so a peer's stations are fully controllable from here, not just visible.
@@ -1756,6 +1920,7 @@ fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
                             }
                             td { (crate::ui::state_pill_str(&s.state)) }
                             td.right { div.actions {
+                                a.btn.sm href=(format!("/fleet/{}/station/{}", n.name, s.name)) { "Open" }
                                 @if running {
                                     (peer_action_btn(&n.name, &s.name, "stop", "Shut down", false, &wrap))
                                     (peer_action_btn(&n.name, &s.name, "forceoff", "Force off", true, &wrap))

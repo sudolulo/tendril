@@ -80,6 +80,15 @@ async fn main() {
         )
         // Self-refresh poll for a single peer's stations panel.
         .route("/fleet/:node/panel", get(federation::peer_panel_fragment))
+        // Open a peer station (detail page with its console) + the cross-node console WS proxy.
+        .route(
+            "/fleet/:node/station/:name",
+            get(federation::peer_station_detail),
+        )
+        .route(
+            "/fleet/:node/station/:name/vnc",
+            get(federation::peer_vnc_ws),
+        )
         .route("/api/node", get(federation::api_node))
         .route("/api/provision", post(federation::api_provision))
         .route(

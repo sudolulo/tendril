@@ -386,3 +386,21 @@ pub fn server_config() -> Option<Arc<rustls::ServerConfig>> {
         .ok()?;
     Some(Arc::new(cfg))
 }
+
+/// A rustls **client** config for calling a peer's mTLS endpoint: trusts the federation CA and presents
+/// this node's cert (mutual auth). The counterpart to [`server_config`] — used by the cross-node VNC
+/// console proxy to open a WebSocket to a peer's `/api/station/:name/vnc`. `None` with no identity.
+pub fn client_config() -> Option<Arc<rustls::ClientConfig>> {
+    let id = identity()?;
+    let mut roots = rustls::RootCertStore::empty();
+    for c in load_certs(&id.ca)? {
+        roots.add(c).ok()?;
+    }
+    let certs = load_certs(&id.cert)?;
+    let key = load_key(&id.key)?;
+    let cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_client_auth_cert(certs, key)
+        .ok()?;
+    Some(Arc::new(cfg))
+}

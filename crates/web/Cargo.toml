@@ -30,3 +30,8 @@ argon2 = "0.5"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
+# WebSocket client for the cross-node VNC console proxy: this node opens an mTLS WebSocket to a peer's
+# /api/station/:name/vnc (using fedtls::client_config) and relays it to the browser's noVNC socket.
+# tokio-tungstenite 0.24 rides tokio-rustls 0.26 → rustls 0.23 (matches the server above).
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"

@@ -15,3 +15,7 @@
 .env
 *.local
 out/
+
+# installer build output
+out/
+out-unattended/

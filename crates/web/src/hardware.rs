@@ -223,18 +223,9 @@ fn nvidia_guide(active: bool) -> Markup {
             p.sub style="margin:0" { "vGPU profiles are advertised — the NVIDIA vGPU host driver is loaded. Create split stations from the station wizard." }
         } @else {
             p.sub style="margin:0 0 4px" {
-                "The NVIDIA vGPU host driver is licensed and non-redistributable, so "
-                b { "you supply the " } code { ".run" }
-                " — free via NVIDIA's 90-day vGPU evaluation. The build then installs it, applies "
-                code { "vgpu_unlock" } " for consumer GeForce cards, and enables the vGPU services."
-            }
-            p.sub style="margin:6px 0 0" {
-                "Get the licensed " code { ".run" } " free from NVIDIA's "
-                a href="https://www.nvidia.com/en-us/data-center/resources/vgpu-evaluation/" { "90-day vGPU evaluation" }
-                ". A detailed community walkthrough of the whole vGPU + " code { "vgpu_unlock" } " process: "
-                a href="https://wvthoog.nl/proxmox-vgpu-v3/" { "wvthoog's guide" }
-                " — follow the driver/unlock steps, but source your " code { ".run" }
-                " from your own NVIDIA eval rather than any mirror it links."
+                "Supply the licensed " code { ".run" }
+                " — the build installs it, applies " code { "vgpu_unlock" }
+                " for consumer cards, and enables the vGPU services."
             }
             (crate::vgpudrv::section(None))
         }

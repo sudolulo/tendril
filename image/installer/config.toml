@@ -131,5 +131,25 @@ else
 
 MOTD
 fi
+
+# Dev-channel installs track the rolling `:dev` tag, so turn on bootc auto-updates: they should always
+# roll forward with the channel. Stable installs (tracking a release tag) leave this to the operator via
+# the System page. We can't read `bootc status` reliably from the anaconda %post chroot, so decide at
+# first boot with a self-retiring oneshot — the same pattern as tendril-seed-admin.
+cat > /etc/systemd/system/tendril-dev-autoupdate.service <<'UNIT'
+[Unit]
+Description=Enable bootc auto-updates on dev-channel installs (once)
+ConditionPathExists=!/etc/tendril/.dev-autoupdate-checked
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'if bootc status --format json 2>/dev/null | grep -q "tendril:dev"; then systemctl enable --now bootc-fetch-apply-updates.timer; fi; mkdir -p /etc/tendril; touch /etc/tendril/.dev-autoupdate-checked'
+[Install]
+WantedBy=multi-user.target
+UNIT
+mkdir -p /etc/tendril
+systemctl enable tendril-dev-autoupdate.service || true
 %end
 """

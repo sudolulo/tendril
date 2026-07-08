@@ -46,6 +46,26 @@ fn read_hash() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Marker file (beside the auth file) meaning the current admin password is a **baked default** — set
+/// by an unattended install — that the user must replace before using the console. Any real password
+/// change clears it.
+fn default_marker() -> String {
+    format!("{}.default", auth_file())
+}
+
+/// True when the admin password is a default that must be changed before the console is usable.
+pub fn password_is_default() -> bool {
+    std::path::Path::new(&default_marker()).exists()
+}
+
+/// Flag the current password as a must-change default (called by the unattended-install seed path).
+pub fn mark_password_default() {
+    let _ = std::fs::write(
+        default_marker(),
+        "seeded by unattended install — change on first login\n",
+    );
+}
+
 /// Hash and store a new admin password (file mode 0600).
 pub fn set_password(pw: &str) -> std::io::Result<()> {
     let salt = SaltString::generate(&mut OsRng);
@@ -63,6 +83,8 @@ pub fn set_password(pw: &str) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     }
+    // A real password is now set — it's no longer the baked default.
+    let _ = std::fs::remove_file(default_marker());
     Ok(())
 }
 
@@ -168,7 +190,19 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
             .get("X-Tendril-Federation")
             .and_then(|v| v.to_str().ok())
             .is_some_and(crate::federation::token_ok);
-    if open || federation_api || authenticated(&req) {
+    if federation_api {
+        return next.run(req).await;
+    }
+    // A baked default password (unattended install) must be changed before anything else — force
+    // `/setup` even for an otherwise-valid session, so the default is never usable in practice.
+    if password_is_default() {
+        return if open {
+            next.run(req).await
+        } else {
+            Redirect::to("/setup").into_response()
+        };
+    }
+    if open || authenticated(&req) {
         return next.run(req).await;
     }
     // Not authenticated: first run has no password → set one; otherwise sign in.
@@ -243,14 +277,15 @@ pub async fn logout(req: Request) -> Response {
 }
 
 pub async fn setup_page() -> Response {
-    if is_configured() {
+    // A configured, non-default password → nothing to set up. A default one still needs replacing.
+    if is_configured() && !password_is_default() {
         return Redirect::to("/login").into_response();
     }
     setup_form(None).into_response()
 }
 
 pub async fn setup(Form(f): Form<SetupForm>) -> Response {
-    if is_configured() {
+    if is_configured() && !password_is_default() {
         return Redirect::to("/login").into_response();
     }
     if f.password.chars().count() < 6 {
@@ -276,18 +311,77 @@ pub async fn setup(Form(f): Form<SetupForm>) -> Response {
 }
 
 fn setup_form(error: Option<&str>) -> Markup {
+    let default = password_is_default();
     render(
-        "Welcome to Tendril",
+        if default {
+            "Change the default password"
+        } else {
+            "Welcome to Tendril"
+        },
         error,
         html! {
-            p.sub style="margin:-6px 0 14px" { "Set an admin password to secure the control plane." }
+            p.sub style="margin:-6px 0 14px" {
+                @if default {
+                    "This node shipped with a default admin password (unattended install). Choose a new one before continuing."
+                } @else {
+                    "Set an admin password to secure the control plane."
+                }
+            }
             form method="post" action="/setup" {
                 div.field { label { "New password" } input type="password" name="password" autofocus required; }
                 div.field { label { "Confirm" } input type="password" name="confirm" required; }
-                button.btn.primary type="submit" style="width:100%; margin-top:6px" { "Create & sign in" }
+                button.btn.primary type="submit" style="width:100%; margin-top:6px" {
+                    (if default { "Change & sign in" } else { "Create & sign in" })
+                }
             }
         },
     )
+}
+
+#[derive(Deserialize)]
+pub struct ChangePwForm {
+    current: String,
+    new: String,
+    confirm: String,
+}
+
+/// Change the admin password from the console (verifies the current one first). Returns a result
+/// banner, HTMX-swapped into the System page panel.
+pub async fn change_password(Form(f): Form<ChangePwForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn style="margin:0" { "Disabled in the live demo." } };
+    }
+    if !verify_password(&f.current) {
+        return html! { div.banner.error style="margin:0" { "Current password is incorrect." } };
+    }
+    if f.new.chars().count() < 6 {
+        return html! { div.banner.error style="margin:0" { "New password must be at least 6 characters." } };
+    }
+    if f.new != f.confirm {
+        return html! { div.banner.error style="margin:0" { "New password and confirmation don't match." } };
+    }
+    match set_password(&f.new) {
+        Ok(()) => html! { div.banner.ok style="margin:0" { "Admin password updated." } },
+        Err(e) => {
+            html! { div.banner.error style="margin:0" { "Couldn't save the new password: " (e) } }
+        }
+    }
+}
+
+/// The "Admin password" panel body for the System page.
+pub fn password_panel() -> Markup {
+    html! {
+        div.pad {
+            p.sub style="margin:0 0 10px" { "Change the password you use to sign in to this web console." }
+            form.grid hx-post="/system/password" hx-target="#pw-result" hx-swap="innerHTML" {
+                div.field.wide { label { "Current password" } input type="password" name="current" required; }
+                div.field { label { "New password" } input type="password" name="new" required; }
+                div.field { label { "Confirm new password" } input type="password" name="confirm" required; }
+                div.field.wide { div.btnrow { button.btn.primary type="submit" { "Change password" } } }
+            }
+            div #pw-result style="margin-top:10px" {}
+        }
+    }
 }
 
 /// A minimal, nav-less page for the auth screens, styled with the shared tokens.

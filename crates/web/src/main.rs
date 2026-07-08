@@ -35,6 +35,14 @@ static NOVNC: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/
 
 #[tokio::main]
 async fn main() {
+    // `tendril-web --seed-default-password` (used by the unattended installer) reads a password from
+    // stdin, stores it, and flags it as a must-change default — so the web console forces the user to
+    // replace it on first sign-in.
+    if std::env::args().any(|a| a == "--seed-default-password") {
+        set_password_cli();
+        auth::mark_password_default();
+        return;
+    }
     // `tendril-web --set-password` (used by the console) reads a password from stdin and stores it.
     if std::env::args().any(|a| a == "--set-password") {
         set_password_cli();
@@ -134,6 +142,7 @@ async fn main() {
         .route("/system/shutdown", post(pages::system_shutdown))
         .route("/system/logs", get(pages::logs))
         .route("/system/logs/download", get(pages::logs_download))
+        .route("/system/password", post(auth::change_password))
         .route("/system/tls/upload", post(tls::upload))
         .route("/system/tls/regenerate", post(tls::regenerate))
         // auth

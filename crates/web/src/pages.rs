@@ -488,6 +488,7 @@ pub async fn system() -> Markup {
                     div #power-result style="margin-top:10px" {}
                 }
             }))
+            (ui::panel("Admin password", None, crate::auth::password_panel()))
             @if let Some(s) = status {
                 (ui::panel("OS image", None, html! {
                     div.pad {

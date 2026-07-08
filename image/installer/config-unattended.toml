@@ -20,17 +20,29 @@ timezone UTC --utc
 network --bootproto=dhcp --activate --hostname=tendril
 
 # Pick a single install target safely and write the partitioning directives (never wipe every disk).
+# Only REAL disks: skip zram (Fedora's installer env has a zram swap device that reports TYPE=disk),
+# plus loop/ram/rom/dm/nbd — none are valid install targets.
 %pre --interpreter=/bin/bash --erroronfail
-mapfile -t disks < <(lsblk -dnro NAME,TYPE | awk '$2=="disk"{print $1}')
-if [ "${#disks[@]}" -eq 0 ]; then
-  echo "unattended install: no disks found" >&2
+disks=""
+for d in $(lsblk -dnro NAME,TYPE | awk '$2=="disk"{print $1}'); do
+  case "$d" in zram*|loop*|ram*|sr*|fd*|nbd*|dm-*) continue ;; esac
+  disks="$disks $d"
+done
+set -- $disks
+if [ "$#" -eq 0 ]; then
+  echo "unattended install: no installable disk found" >&2
   exit 1
-elif [ "${#disks[@]}" -eq 1 ]; then
-  target="${disks[0]}"
+elif [ "$#" -eq 1 ]; then
+  target="$1"
 else
   # Multiple disks: choose the smallest (least likely to be a data drive). Deployers wanting a
   # specific disk should present only that disk, or supply their own inst.ks.
-  target="$(lsblk -dnbro NAME,SIZE,TYPE | awk '$3=="disk"{print $2" "$1}' | sort -n | head -1 | awk '{print $2}')"
+  best=""; bestsz=0
+  for d in $disks; do
+    sz="$(cat /sys/block/$d/size 2>/dev/null || echo 0)"
+    if [ -z "$best" ] || [ "$sz" -lt "$bestsz" ]; then best="$d"; bestsz="$sz"; fi
+  done
+  target="$best"
 fi
 cat > /tmp/tendril-part.ks <<EOF
 ignoredisk --only-use=$target

@@ -103,6 +103,7 @@ async fn main() {
         .route("/stations/:name/sendenter", post(stations::send_enter))
         .route("/stations/:name/progress", get(stations::progress))
         .route("/stations/:name/save-image", post(images::save))
+        .route("/stations/:name/resplit", post(stations::resplit_action))
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         .route("/images/delete", post(images::delete))
         .route("/images/panel", get(images::panel_route))

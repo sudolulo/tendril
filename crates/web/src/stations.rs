@@ -204,6 +204,118 @@ pub(crate) fn station_mdev_uuid(name: &str) -> Option<String> {
     Some(after[start..end].to_string())
 }
 
+/// Change a station's vGPU split **without touching its disk** — the qcow2 (Windows/games/saves) is
+/// kept as-is. The station must be stopped: we create the new slice on the host, repoint the persistent
+/// domain definition at it (swapping just the mdev UUID — everything else, including the disk, stays
+/// identical), and it boots into the new split. The guest driver already matches the host driver branch,
+/// which a re-split does not change, so no driver reinstall is needed. On failure nothing is lost: the
+/// new slice is rolled back and the old definition is untouched.
+///
+/// NOTE: needs validation on real vGPU hardware (this is the experimental vGPU path).
+pub(crate) fn resplit(name: &str, new_gpu_sel: &str) -> Result<(), String> {
+    let lv = Libvirt::system();
+    if matches!(lv.state(name), DomainState::Running | DomainState::Paused) {
+        return Err("Shut the station down before changing its GPU split.".into());
+    }
+    let (parent, type_id) = crate::vgpu::parse_mdev_selection(new_gpu_sel)
+        .ok_or("Pick a vGPU profile to change to.")?;
+    let old_uuid = station_mdev_uuid(name)
+        .ok_or("This station has no vGPU slice to change (it's whole-GPU or has none).")?;
+
+    // New slice on the host first, so a failure here changes nothing on the station.
+    let new_uuid = crate::vgpu::create_mdev(&parent, &type_id)?;
+
+    // Repoint the persistent definition at the new mdev — swap only the UUID, keeping the disk and
+    // every other device identical (no disk recreation ⇒ user data preserved).
+    let xml = match ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name]) {
+        Some(x) if x.contains(&format!("uuid='{old_uuid}'")) => x,
+        _ => {
+            crate::vgpu::remove_mdev(&new_uuid);
+            return Err("couldn't locate the current vGPU slice in the station definition".into());
+        }
+    };
+    let new_xml = xml.replace(
+        &format!("uuid='{old_uuid}'"),
+        &format!("uuid='{new_uuid}'"),
+    );
+    if let Err(e) = lv.define(name, &new_xml) {
+        crate::vgpu::remove_mdev(&new_uuid); // roll back the freshly-created slice
+        return Err(format!("couldn't update the station definition: {e}"));
+    }
+
+    // Committed — release the old slice.
+    if old_uuid != new_uuid {
+        crate::vgpu::remove_mdev(&old_uuid);
+    }
+    Ok(())
+}
+
+/// POST handler: re-split a station into a new vGPU profile (data-preserving).
+pub async fn resplit_action(
+    Path(name): Path<String>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let sel = form.get("gpu").cloned().unwrap_or_default();
+    let n = name.clone();
+    let res = tokio::task::spawn_blocking(move || resplit(&n, &sel))
+        .await
+        .unwrap_or_else(|_| Err("re-split task panicked".into()));
+    match res {
+        Ok(()) => html! { div.banner.ok {
+            "GPU split changed — your disk and data are untouched. Start the station to boot into the new split."
+        } },
+        Err(e) => html! { div.banner.error { (e) } },
+    }
+}
+
+/// The "GPU split" panel on a station's detail page — only for stations bound to a vGPU (mdev) slice.
+/// Lets you re-slice the same GPU without recreating the disk. Returns None for non-vGPU stations.
+fn resplit_panel(name: &str, running: bool) -> Option<Markup> {
+    let uuid = station_mdev_uuid(name)?;
+    let parent = crate::vgpu::mdev_parent(&uuid)?; // no parent found ⇒ don't offer a re-split
+    // Precompute the selectable profiles (value, label) so the markup stays simple.
+    let sup = tendril_capability_engine::vgpu::probe(&parent);
+    let opts: Vec<(String, String)> = sup
+        .mdev_types
+        .iter()
+        .filter(|m| m.available > 0)
+        .map(|m| {
+            let label = m.name.clone().unwrap_or_else(|| m.id.clone());
+            (format!("mdev:{parent}:{}", m.id), label)
+        })
+        .collect();
+    Some(ui::panel(
+        "GPU split",
+        Some("change how this station's GPU is sliced — the disk and its data are kept"),
+        html! {
+            div.pad {
+                @if running {
+                    p.muted { "Shut the station down first — the split changes on the next boot." }
+                } @else if opts.is_empty() {
+                    p.sub { "No other vGPU profiles are currently available on the parent GPU." }
+                } @else {
+                    form hx-post=(format!("/stations/{name}/resplit")) hx-target="#resplit-result" hx-swap="innerHTML" {
+                        div.field { label { "New profile" }
+                            select name="gpu" {
+                                @for (val, label) in &opts {
+                                    option value=(val) { (label) }
+                                }
+                            }
+                        }
+                        button.btn.primary type="submit" style="margin-top:8px"
+                            hx-confirm="Change this station's GPU split? Its disk and data are kept; it boots into the new split." { "Change split" }
+                    }
+                    div #resplit-result style="margin-top:10px" {}
+                    p.sub style="margin-top:8px" { "Only the GPU slice changes — Windows, games, and saves on the disk are untouched." }
+                }
+            }
+        },
+    ))
+}
+
 fn act(f: impl FnOnce(&Libvirt) -> std::io::Result<()>) -> Markup {
     let lv = Libvirt::system();
     let err = f(&lv).err().map(|e| e.to_string());
@@ -1136,6 +1248,7 @@ pub async fn detail(Path(name): Path<String>) -> Response {
             }
         }))
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
+        @if let Some(p) = resplit_panel(&name, running) { (p) }
         (ui::panel("Save as image", Some("capture this station's disk as a reusable golden image"), html! {
             div.pad {
                 @if running {

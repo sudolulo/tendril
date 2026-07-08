@@ -114,6 +114,25 @@ pub fn state_pill(s: DomainState) -> Markup {
     html! { span class=(format!("pill {}", state_class(s))) { span.led {} (state_label(s)) } }
 }
 
+/// Render a state pill from a free-form state string. A peer's station state arrives over the API as a
+/// string (not a `DomainState`), so normalize common spellings and reuse the same pill styling — this
+/// keeps peer stations visually consistent with local ones.
+pub fn state_pill_str(s: &str) -> Markup {
+    let low = s.to_ascii_lowercase();
+    let st = if low.contains("run") {
+        DomainState::Running
+    } else if low.contains("paus") {
+        DomainState::Paused
+    } else if low.contains("shut") || low.contains("off") {
+        DomainState::ShutOff
+    } else if low.trim().is_empty() {
+        DomainState::Absent
+    } else {
+        DomainState::Other
+    };
+    state_pill(st)
+}
+
 pub fn vendor(v: GpuVendor) -> &'static str {
     match v {
         GpuVendor::Nvidia => "NVIDIA",

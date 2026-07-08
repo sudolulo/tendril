@@ -1754,7 +1754,7 @@ fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
                                 (s.name)
                                 @if !s.gpu { span.sub title="no GPU passed through" { " \u{26a0}" } }
                             }
-                            td { (s.state) }
+                            td { (crate::ui::state_pill_str(&s.state)) }
                             td.right { div.actions {
                                 @if running {
                                     (peer_action_btn(&n.name, &s.name, "stop", "Shut down", false, &wrap))

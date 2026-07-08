@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Green `dev` CI restored** — `cargo fmt` drift across five files from the 0.18 cycle and a
+  clippy `useless_conversion` in the federation WebSocket bridge failed `ci.yml` on every push.
+
 ### Added
 - **License: AGPL-3.0-only, dual-licensed.** The project's license is no longer TBD — full text in
   `LICENSE`, the dual-licensing model (one open edition, commercial licenses available) in

@@ -55,6 +55,18 @@ Features flagged 🧪 in the [README](../README.md) (vGPU, federation, streaming
 channel — there is one edition of Tendril — but the stable promise (the checklist above) covers the
 core flows. Experimental features graduate by being added to the hardware-validation matrix.
 
+## Maintainer notes
+
+- **Signing key custody.** The cosign private key and its password live only with the maintainer
+  (dev-box `~/.tendril-cosign/` + password vault) and as the repo Actions secrets
+  `COSIGN_PRIVATE_KEY` / `COSIGN_PASSWORD` — never in the repo. The public half is committed as
+  [`cosign.pub`](../cosign.pub). To rotate: `cosign generate-key-pair`, replace both secrets,
+  commit the new `cosign.pub`, and note the rotation in the changelog. If the secrets are absent
+  the release job skips signing and says so — signing is optional by design, never release-blocking.
+- **Promotion cadence.** Each release's 14-day bake clock starts at its release date; a newer
+  release restarts the clock on itself (promote the newest candidate that has baked, not several).
+  Set a reminder for release date + 14 days when cutting a release.
+
 ## Looking ahead
 
 The stable channel is also the foundation for a future paid **assurance subscription** (stable

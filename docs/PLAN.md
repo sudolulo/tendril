@@ -243,4 +243,7 @@ un-brickable. Everything after is expansion.
 3. **Golden-image distribution mechanism** for clustering (OCI registry? built-in?).
 4. **Peripheral routing default:** whole USB-controller passthrough vs. evdev — per-hardware policy.
 5. **Which GPUs to officially "bless"** at launch (a supported-hardware list reduces support load).
-6. **Licensing** (GPL/Apache/etc.) and governance for the open-source project.
+6. ~~**Licensing** (GPL/Apache/etc.) and governance for the open-source project.~~ **Decided
+   (2026-07-08): AGPL-3.0-only, dual-licensed commercially** — one open edition, no feature gating;
+   revenue model = stable-channel assurance + commercial licenses. See [LICENSING.md](../LICENSING.md),
+   [CLA.md](../CLA.md) (single-owner copyright), and [CHANNELS.md](CHANNELS.md) (dev/latest/stable).

@@ -66,6 +66,29 @@ pub fn image_os(name: &str) -> Option<GuestOs> {
     }
 }
 
+fn branch_sidecar(name: &str) -> String {
+    format!("{}/{}.vgpu-branch", images_dir(), sanitize(name))
+}
+
+/// The NVIDIA vGPU host-driver branch a golden image's baked guest driver was built for, if recorded.
+/// Used to reconcile the guest driver when the image is deployed onto a node running a different host
+/// branch (see the reconcile-on-arrival flow). `None` for non-vGPU images or ones captured pre-metadata.
+pub fn image_vgpu_branch(name: &str) -> Option<String> {
+    let v = std::fs::read_to_string(branch_sidecar(name)).ok()?;
+    let v = v.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// If deploying this golden image onto the current node would leave a mismatched vGPU guest driver,
+/// returns `(image_branch, host_branch)`. That happens when the image's baked driver was built for a
+/// different host branch than this node runs — i.e. it needs reconciling. `None` when they match, when
+/// the image carries no branch (non-vGPU), or when the host branch is unknown.
+pub fn image_vgpu_mismatch(name: &str) -> Option<(String, String)> {
+    let img = image_vgpu_branch(name)?;
+    let host = crate::vgpudrv::host_vgpu_branch()?;
+    (img != host).then_some((img, host))
+}
+
 /// Short label for a guest OS, for the sidecar and the UI.
 fn os_label(os: GuestOs) -> &'static str {
     match os {
@@ -80,6 +103,25 @@ pub(crate) fn os_display(name: &str) -> &'static str {
         Some(GuestOs::Windows) => "Windows 11",
         Some(GuestOs::SteamOs) => "SteamOS",
         None => "—",
+    }
+}
+
+/// A small badge showing a vGPU image's baked driver branch, and — when it differs from this host's
+/// branch — that the guest driver will reconcile on deploy. Empty for non-vGPU images.
+pub(crate) fn vgpu_badge(name: &str) -> Markup {
+    let Some(img) = image_vgpu_branch(name) else {
+        return html! {};
+    };
+    match image_vgpu_mismatch(name) {
+        Some((i, h)) => html! {
+            span.badge.warn style="margin-left:6px"
+                title=(format!("Baked for vGPU driver {i}; this host runs {h} — the guest driver reconciles to {h} on deploy.")) {
+                "vGPU " (i) " → " (h)
+            }
+        },
+        None => html! {
+            span.sub style="margin-left:6px" title=(format!("Baked for vGPU driver {img}")) { "vGPU " (img) }
+        },
     }
 }
 
@@ -297,6 +339,10 @@ pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Marku
     let _ = std::fs::create_dir_all(&dir);
     // Record the guest OS now (needs the still-defined domain), applied after a successful capture.
     let guest = station_guest(&station);
+    // If this is a vGPU station, record the host driver branch its baked guest driver matches, so the
+    // driver can be reconciled when the image is later deployed onto a different-branch node.
+    let vgpu_branch = crate::stations::station_mdev_uuid(&station)
+        .and_then(|_| crate::vgpudrv::host_vgpu_branch());
     let nm = name.clone();
     std::thread::spawn(move || {
         // Flatten + compress into a portable standalone image (no backing chain), to a temp path.
@@ -306,6 +352,9 @@ pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Marku
                 if std::fs::rename(&tmp, &dest).is_ok() {
                     if let Some(os) = guest {
                         let _ = std::fs::write(os_sidecar(&nm), os_label(os));
+                    }
+                    if let Some(b) = &vgpu_branch {
+                        let _ = std::fs::write(branch_sidecar(&nm), b);
                     }
                     // Record the SHA-256 so any node can verify the image's integrity before cloning
                     // or re-homing from it (the sidecar travels with the image on the shared store).
@@ -338,6 +387,7 @@ pub async fn delete(Query(q): Query<NameQuery>) -> Markup {
     if let Some(p) = path_of(&q.name) {
         let _ = std::fs::remove_file(p);
         let _ = std::fs::remove_file(os_sidecar(&q.name));
+        let _ = std::fs::remove_file(branch_sidecar(&q.name));
         let _ = std::fs::remove_file(sha_path(&q.name));
         let _ = std::fs::remove_file(mismatch_path(&q.name));
         let _ = std::fs::remove_file(verifying_path(&q.name));
@@ -599,7 +649,7 @@ fn panel_with(note: Option<Markup>) -> Markup {
                             @for (n, sz) in &imgs {
                                 tr {
                                     td.mono { (n) }
-                                    td { (os_display(n)) }
+                                    td { (os_display(n)) (vgpu_badge(n)) }
                                     td { (integrity_cell(n)) }
                                     td.right.num { (sz) }
                                     td.right {

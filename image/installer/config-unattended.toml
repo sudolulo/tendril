@@ -1,0 +1,84 @@
+# bootc-image-builder installer config for a TOUCHLESS Tendril ISO (opt-in, not the default).
+#
+# Unlike image/installer/config.toml (guided — the human picks disk/login/language), this variant
+# installs hands-off: for CI/test VMs and fleet provisioning. bootc-image-builder injects the
+# ostreecontainer payload itself; this kickstart only adds language, safe partitioning, and a default
+# login that must be changed on first use.
+#
+# SAFETY: partitioning is chosen by a %pre script that targets a SINGLE disk (the only disk, else the
+# smallest) and wipes ONLY that one — never a blind `clearpart --all` across every attached disk. On a
+# multi-disk host, attach only the intended disk, or override with your own `inst.ks`.
+#
+# Build with: scripts/build-installer.sh --unattended
+
+[customizations.installer.kickstart]
+contents = """
+# --- Tendril unattended defaults ---
+lang en_US.UTF-8
+keyboard --xlayouts='us'
+timezone UTC --utc
+network --bootproto=dhcp --activate --hostname=tendril
+
+# Pick a single install target safely and write the partitioning directives (never wipe every disk).
+%pre --interpreter=/bin/bash --erroronfail
+mapfile -t disks < <(lsblk -dnro NAME,TYPE | awk '$2=="disk"{print $1}')
+if [ "${#disks[@]}" -eq 0 ]; then
+  echo "unattended install: no disks found" >&2
+  exit 1
+elif [ "${#disks[@]}" -eq 1 ]; then
+  target="${disks[0]}"
+else
+  # Multiple disks: choose the smallest (least likely to be a data drive). Deployers wanting a
+  # specific disk should present only that disk, or supply their own inst.ks.
+  target="$(lsblk -dnbro NAME,SIZE,TYPE | awk '$3=="disk"{print $2" "$1}' | sort -n | head -1 | awk '{print $2}')"
+fi
+cat > /tmp/tendril-part.ks <<EOF
+ignoredisk --only-use=$target
+clearpart --drives=$target --all --initlabel
+autopart
+EOF
+%end
+%include /tmp/tendril-part.ks
+
+# Default console login: a `tendril` sudo user with a password that must be changed on first login
+# (chage -d 0 in %post). Root stays locked. The WEB admin password is seeded + force-changed
+# separately by the first-boot unit below.
+rootpw --lock
+user --name=tendril --groups=wheel --password=tendril --plaintext
+
+# Reboot into the installed system when the install finishes.
+reboot --eject
+
+%post --erroronfail
+# Force the default console password to be changed at first login.
+chage -d 0 tendril || true
+
+# Seed a default WEB admin password and flag it must-change, so the web console forces a new one on
+# first visit (a fleet deployer can log in with the default to pre-seed config before a human does).
+mkdir -p /etc/tendril
+cat > /etc/systemd/system/tendril-seed-admin.service <<'UNIT'
+[Unit]
+Description=Seed the default Tendril web admin password (once)
+ConditionPathExists=!/etc/tendril/webauth
+Before=tendril-web.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo tendril | /usr/local/bin/tendril-web --seed-default-password'
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl enable tendril-seed-admin.service || true
+
+cat > /etc/motd <<'MOTD'
+
+  Tendril — one machine, many tendrils.  (unattended install)
+
+  Web UI:   http://<this-host>/   — a default admin password is set; you'll be
+            required to change it on first sign-in.
+  Console:  log in as 'tendril' (default password 'tendril' — you'll be prompted
+            to change it), then the `tendril` menu on tty1.
+
+MOTD
+%end
+"""

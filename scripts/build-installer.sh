@@ -10,6 +10,7 @@
 # /dev/loop-control and cannot mount. Run this on bare metal or a full VM.
 #
 # Usage: scripts/build-installer.sh [--image localhost/tendril:dev] [--type iso|raw] [--output ./out]
+#                                   [--unattended]   # touchless install (opt-in; safe single-disk)
 set -euo pipefail
 
 IMAGE="localhost/tendril:dev"
@@ -33,6 +34,9 @@ while [ $# -gt 0 ]; do
     --rootfs) ROOTFS="$2"; shift 2 ;;
     --config) CONFIG="$2"; shift 2 ;;
     --no-config) CONFIG=""; shift ;;
+    # Touchless install (opt-in): safe single-disk partitioning + a must-change default login, for
+    # CI/test VMs and fleet provisioning. Not the shipping default (which stays guided).
+    --unattended) CONFIG="image/installer/config-unattended.toml"; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done

@@ -133,14 +133,8 @@ pub(crate) fn vgpu_system_panels() -> Option<Markup> {
     if !has_dgpu {
         return None;
     }
-    let has_nvidia = matrix
-        .gpus
-        .iter()
-        .any(|g| g.gpu.vendor == GpuVendor::Nvidia);
-    Some(html! {
-        (vgpu_driver_panel())
-        @if has_nvidia { (crate::licensing::panel()) }
-    })
+    // One panel: host driver + guest driver + licensing (licensing is folded into the NVIDIA guide).
+    Some(vgpu_driver_panel())
 }
 
 /// True when an NVIDIA GPU on this host already advertises vGPU profiles (the host driver is loaded) —
@@ -177,8 +171,8 @@ fn vgpu_driver_panel() -> Markup {
             .any(|g| g.gpu.vendor == vendor && g.vgpu.is_capable())
     };
     ui::panel(
-        "vGPU host driver",
-        Some("split one GPU across stations"),
+        "vGPU",
+        Some("split one GPU across stations — driver, guest driver + licensing, all automatic"),
         html! {
             div.pad {
                 p.sub style="margin-top:0" {
@@ -261,6 +255,12 @@ fn nvidia_guide(active: bool) -> Markup {
         // public bucket at station-create time. This is a read-only status, not a staging step.
         div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
             (crate::vgpuguest::section())
+        }
+        // Licensing is folded in here (not a separate panel): the built-in license server auto-starts
+        // when the driver is active, or point Tendril at your own. One vGPU panel, driver → guest →
+        // license, all automatic.
+        div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
+            (crate::licensing::fragment())
         }
     }
 }

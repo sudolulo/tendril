@@ -1,21 +1,19 @@
-//! NVIDIA vGPU guest licensing — automatic, with a "bring your own license server" escape.
+//! NVIDIA vGPU guest licensing — automatic, folded into the vGPU host-driver panel.
 //!
 //! The host `.run` makes vGPU *work*; NVIDIA licensing makes it run *un-throttled*. Each guest's vGPU
 //! driver leases a license on boot — unlicensed it runs degraded and drops sessions (~24h). So licensing
-//! isn't optional for NVIDIA vGPU, and Tendril makes it invisible:
+//! isn't optional for NVIDIA vGPU, and it's not a separate step:
 //!
 //! - **Built-in (default):** Tendril runs a self-hosted
 //!   [FastAPI-DLS](https://git.collinwebdesigns.de/oscar.krause/fastapi-dls) container the guests lease
-//!   from. It **auto-starts** (sane defaults) as soon as the vGPU host driver is active, and station
-//!   provisioning auto-installs the token into each guest — the user pastes nothing. Emulating NVIDIA's
-//!   license server is a gray area, so this is for admins who hold their own vGPU entitlement.
+//!   from. It **auto-starts** (sane defaults) as soon as the vGPU host driver is active — staging the
+//!   licensed `.run` (only obtainable with a vGPU entitlement) is the single gate — and provisioning
+//!   auto-installs the token into each guest. The admin pastes nothing.
 //! - **Your own license server:** if you already run a real NVIDIA license server (on-prem DLS/NLS
 //!   appliance or CLS), point Tendril at its client-token URL and it **won't run the built-in one at
-//!   all** — guests are licensed by your legitimate server. Having a valid license means you don't need
-//!   Tendril's emulation.
+//!   all** — a valid license means you don't need Tendril's emulation.
 //!
-//! The choice is made once (a single informed opt-in); after that driver + license + guest driver are
-//! automatic and silent. See the `tendril-vgpu-guest-driver-invisible` design note.
+//! This module renders a *fragment* embedded in the vGPU panel ([`crate::hardware`]), not its own panel.
 
 use axum::extract::Form;
 use maud::{html, Markup};
@@ -31,14 +29,11 @@ fn conf_path() -> String {
     std::env::var("TENDRIL_DLS_CONF").unwrap_or_else(|_| "/etc/tendril/dls.conf".to_string())
 }
 
-/// Which licensing path the admin has chosen for this host.
+/// Which licensing path is in effect. Built-in is the default (automatic); external means the admin
+/// runs their own real NVIDIA license server and Tendril runs none.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// Not chosen yet — prompt once (the single informed opt-in).
-    Unset,
-    /// Tendril's built-in FastAPI-DLS, auto-started when vGPU is active.
     Builtin,
-    /// The admin's own real NVIDIA license server — Tendril never runs its own.
     External,
 }
 
@@ -61,7 +56,9 @@ fn default_url() -> String {
 }
 
 fn read_conf() -> DlsConf {
-    let mut mode = Mode::Unset;
+    // Built-in is the default — licensing needs no opt-in; staging the host driver is the entitlement
+    // gate. External only when the admin explicitly points at their own server.
+    let mut mode = Mode::Builtin;
     let mut external = String::new();
     let mut url = default_url();
     let mut port = 8443u16;
@@ -71,13 +68,7 @@ fn read_conf() -> DlsConf {
             if let Some((k, v)) = line.split_once('=') {
                 let v = v.trim();
                 match k.trim() {
-                    "mode" => {
-                        mode = match v {
-                            "builtin" => Mode::Builtin,
-                            "external" => Mode::External,
-                            _ => Mode::Unset,
-                        }
-                    }
+                    "mode" if v == "external" => mode = Mode::External,
                     "external" if !v.is_empty() => external = v.to_string(),
                     "url" if !v.is_empty() => url = v.to_string(),
                     "port" => {
@@ -95,6 +86,10 @@ fn read_conf() -> DlsConf {
             }
         }
     }
+    // A stored external URL implies external mode even if the mode line is stale/missing.
+    if !external.is_empty() {
+        mode = Mode::External;
+    }
     DlsConf {
         mode,
         external,
@@ -110,7 +105,6 @@ fn write_conf(c: &DlsConf) -> Result<(), String> {
         let _ = std::fs::create_dir_all(d);
     }
     let mode = match c.mode {
-        Mode::Unset => "",
         Mode::Builtin => "builtin",
         Mode::External => "external",
     };
@@ -219,15 +213,15 @@ fn start(c: &DlsConf) -> Result<(), String> {
 }
 
 /// Idempotently ensure the built-in license server is running — the automatic path. No-op unless the
-/// admin chose the built-in server, this host's vGPU is actually active, and it isn't already running.
-/// Never touches anything in demo mode or when the admin runs their own license server. Called at
-/// startup (and after the mode is chosen) so licensing "just happens" once the vGPU host driver loads.
+/// built-in mode is in effect (i.e. the admin hasn't pointed at their own server), this host's vGPU is
+/// actually active, and it isn't already running. Never touches anything in demo mode. Called at startup
+/// (and after settings change) so licensing "just happens" once the vGPU host driver loads.
 pub fn ensure_auto_started() {
     if ui::is_demo() {
         return;
     }
     let c = read_conf();
-    if c.mode != Mode::Builtin || running() {
+    if c.mode == Mode::External || running() {
         return;
     }
     if !crate::hardware::nvidia_vgpu_active() {
@@ -237,7 +231,7 @@ pub fn ensure_auto_started() {
 }
 
 /// The client-token URL to hand a new NVIDIA-vGPU guest so it leases a license automatically, or `None`
-/// if licensing isn't set up. For [`Mode::External`] this is the admin's own server; for [`Mode::Builtin`]
+/// if licensing isn't ready. For [`Mode::External`] this is the admin's own server; for [`Mode::Builtin`]
 /// it's the running FastAPI-DLS. Station provisioning consumes this so the admin pastes nothing.
 pub fn guest_token_url() -> Option<String> {
     let c = read_conf();
@@ -256,11 +250,11 @@ pub struct BuiltinForm {
     lease_days: Option<u32>,
 }
 
-/// Choose (or re-apply) the built-in license server: record the mode, then start it now if vGPU is
-/// already active, else it auto-starts when the host driver loads.
+/// Switch to / re-apply the built-in license server (also the way back from an external server): record
+/// built-in mode, then start it now if vGPU is already active, else it auto-starts when the driver loads.
 pub async fn use_builtin(Form(f): Form<BuiltinForm>) -> Markup {
     if ui::is_demo() {
-        return panel_with(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+        return fragment_with(Some(html! { div.banner.warn { "Disabled in the demo." } }));
     }
     let mut c = read_conf();
     c.mode = Mode::Builtin;
@@ -274,7 +268,7 @@ pub async fn use_builtin(Form(f): Form<BuiltinForm>) -> Markup {
         c.lease_days = d.max(1);
     }
     if let Err(e) = write_conf(&c) {
-        return panel_with(Some(
+        return fragment_with(Some(
             html! { div.banner.error { "Couldn't save settings: " (e) } },
         ));
     }
@@ -286,9 +280,9 @@ pub async fn use_builtin(Form(f): Form<BuiltinForm>) -> Markup {
             Err(e) => html! { div.banner.error { (e) } },
         }
     } else {
-        html! { div.banner.ok { "Built-in licensing selected — it starts automatically once the vGPU host driver is active." } }
+        html! { div.banner.ok { "Using the built-in license server — it starts automatically once the vGPU host driver is active." } }
     };
-    panel_with(Some(banner))
+    fragment_with(Some(banner))
 }
 
 #[derive(Deserialize)]
@@ -299,11 +293,11 @@ pub struct ExternalForm {
 /// Point Tendril at the admin's own real NVIDIA license server and stop/never-run the built-in one.
 pub async fn use_external(Form(f): Form<ExternalForm>) -> Markup {
     if ui::is_demo() {
-        return panel_with(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+        return fragment_with(Some(html! { div.banner.warn { "Disabled in the demo." } }));
     }
     let url = f.url.trim().to_string();
     if url.is_empty() {
-        return panel_with(Some(
+        return fragment_with(Some(
             html! { div.banner.error { "Enter your license server's client-token URL (the endpoint guests fetch their token from)." } },
         ));
     }
@@ -311,81 +305,34 @@ pub async fn use_external(Form(f): Form<ExternalForm>) -> Markup {
     c.mode = Mode::External;
     c.external = url;
     if let Err(e) = write_conf(&c) {
-        return panel_with(Some(
+        return fragment_with(Some(
             html! { div.banner.error { "Couldn't save settings: " (e) } },
         ));
     }
     // Tear down the built-in server — with a real license they don't need it.
     let _ = ui::run_result("podman", &["rm", "-f", CONTAINER]);
-    panel_with(Some(html! { div.banner.ok {
+    fragment_with(Some(html! { div.banner.ok {
         "Using your license server. Tendril's built-in server is off — new vGPU stations will be pointed at yours."
     } }))
 }
 
-pub fn panel() -> Markup {
-    panel_with(None)
+/// The licensing block, embedded inside the vGPU panel (not its own panel). Read-only status by default;
+/// the built-in server is automatic, with an Advanced drawer to tune it or switch to your own server.
+pub fn fragment() -> Markup {
+    fragment_with(None)
 }
 
-fn panel_with(banner: Option<Markup>) -> Markup {
+fn fragment_with(banner: Option<Markup>) -> Markup {
     let c = read_conf();
     let active = crate::hardware::nvidia_vgpu_active();
     let on = running();
-    let status = match c.mode {
-        Mode::External => "your server",
-        Mode::Builtin if on => "running",
-        Mode::Builtin => "starts when active",
-        Mode::Unset => "set up",
-    };
-    ui::panel(
-        "vGPU licensing (NVIDIA)",
-        Some(status),
-        html! {
-            div.pad #dls-panel {
-                @if let Some(b) = banner { (b) }
-                @match c.mode {
-                    Mode::External => (external_body(&c)),
-                    Mode::Builtin => (builtin_body(&c, active, on)),
-                    Mode::Unset => (choose_body(active)),
-                }
-            }
-        },
-    )
-}
-
-/// First-run: the single informed opt-in. NVIDIA vGPU can't run un-throttled without a license, so the
-/// admin picks one path once. Either records the mode and, from then on, licensing is automatic.
-fn choose_body(active: bool) -> Markup {
     html! {
-        p.sub style="margin-top:0" {
-            "NVIDIA vGPU guests throttle and drop sessions (~24h) unless they lease a license — so this "
-            "isn't optional. Pick once; after that it's automatic and you paste nothing into guests."
-        }
-        @if !active {
-            p.sub { "vGPU isn't active on this host yet — set this up after the vGPU host driver is loaded, or go ahead and choose now and it'll take effect then." }
-        }
-        div style="display:grid; gap:12px; margin-top:10px" {
-            div style="padding:10px 12px; border:1px solid var(--line); border-radius:8px" {
-                div.sub style="font-weight:600; margin-bottom:4px" { "I have my own NVIDIA license server" }
-                p.sub style="margin:0 0 8px" { "Running a real on-prem DLS/NLS appliance or CLS? Point guests at it — Tendril won't run its own. A valid license means you don't need Tendril's." }
-                form hx-post="/hardware/dls/external" hx-target="#dls-panel" hx-swap="outerHTML" {
-                    div.field style="margin:0 0 8px" {
-                        label { "Your client-token URL" }
-                        input type="url" name="url" required placeholder="https://nls.example.internal/-/client-token";
-                    }
-                    button.btn.primary type="submit" { "Use my license server" }
-                }
-            }
-            div style="padding:10px 12px; border:1px solid var(--line); border-radius:8px" {
-                div.sub style="font-weight:600; margin-bottom:4px" { "Use Tendril's built-in license server" }
-                p.sub style="margin:0 0 8px" {
-                    "Tendril runs a self-hosted "
-                    a href="https://git.collinwebdesigns.de/oscar.krause/fastapi-dls" { "FastAPI-DLS" }
-                    " server with sensible defaults and licenses guests automatically. Emulating NVIDIA's "
-                    "licensing is a gray area — choose this only if you hold your own NVIDIA vGPU entitlement."
-                }
-                form hx-post="/hardware/dls/builtin" hx-target="#dls-panel" hx-swap="outerHTML" {
-                    button.btn type="submit" { "Use built-in (I hold a vGPU entitlement)" }
-                }
+        div #dls-panel {
+            @if let Some(b) = banner { (b) }
+            div.sub style="font-weight:600; margin:0 0 4px" { "Licensing — automatic" }
+            @match c.mode {
+                Mode::External => (external_body(&c)),
+                Mode::Builtin => (builtin_body(&c, active, on)),
             }
         }
     }
@@ -395,22 +342,26 @@ fn choose_body(active: bool) -> Markup {
 fn builtin_body(c: &DlsConf, active: bool, on: bool) -> Markup {
     let token_url = format!("https://{}:{}/-/client-token", c.url, c.port);
     html! {
-        div.sub style="font-weight:600; margin:0 0 4px" { "Automatic — built-in license server" }
         @if on {
             p.sub style="margin:0" {
-                "Running at " code { (token_url) } ". New NVIDIA-vGPU stations are licensed automatically on "
-                "first boot — nothing to paste into guests."
+                "NVIDIA vGPU guests throttle without a license, so Tendril runs a built-in license server "
+                "(" code { (token_url) } ") and licenses every vGPU station automatically — nothing to paste "
+                "into guests. Emulating NVIDIA's licensing is a gray area; use it only with your own vGPU entitlement."
             }
         } @else if active {
-            p.sub style="margin:0" { "Selected, but not running yet — it should come up automatically; reload, or re-apply under Advanced." }
+            p.sub style="margin:0" { "Built-in license server selected but not running yet — it should come up automatically; reload, or re-apply under Advanced." }
         } @else {
-            p.sub style="margin:0" { "Selected. It starts automatically as soon as the vGPU host driver is active on this host." }
+            p.sub style="margin:0" {
+                "vGPU guests throttle without a license. Tendril's built-in license server starts automatically "
+                "the moment the vGPU host driver above is active, and licenses guests with no extra steps — or "
+                "point Tendril at your own license server under Advanced."
+            }
         }
-        details style="margin-top:12px" {
+        details style="margin-top:10px" {
             summary.sub style="cursor:pointer" { "Advanced" }
             div style="margin-top:10px" {
                 form hx-post="/hardware/dls/builtin" hx-target="#dls-panel" hx-swap="outerHTML" {
-                    p.sub style="margin:0 0 8px" { "Guests reach the server at this host's IP (" code { (c.url) } ") — change the port or lease length only if needed." }
+                    p.sub style="margin:0 0 8px" { "Guests reach the built-in server at this host's IP (" code { (c.url) } ") — change the port or lease length only if needed." }
                     div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:end" {
                         div.field style="margin:0" {
                             label { "Port" }
@@ -424,7 +375,7 @@ fn builtin_body(c: &DlsConf, active: bool, on: bool) -> Markup {
                     button.btn type="submit" style="margin-top:10px" { "Apply / restart" }
                 }
                 div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
-                    p.sub style="margin:0 0 6px" { "Have your own NVIDIA license server instead? Switch to it (turns the built-in one off):" }
+                    p.sub style="margin:0 0 6px" { b { "Have your own NVIDIA license server?" } " Point Tendril at it (an on-prem DLS/NLS appliance or CLS) and the built-in one is turned off — a valid license means you don't need Tendril's:" }
                     form hx-post="/hardware/dls/external" hx-target="#dls-panel" hx-swap="outerHTML" {
                         div.field style="margin:0 0 8px" {
                             label { "Your client-token URL" }
@@ -455,12 +406,11 @@ fn builtin_body(c: &DlsConf, active: bool, on: bool) -> Markup {
 /// Steady state for an external (real) license server.
 fn external_body(c: &DlsConf) -> Markup {
     html! {
-        div.sub style="font-weight:600; margin:0 0 4px" { "Using your license server" }
         p.sub style="margin:0" {
-            "New NVIDIA-vGPU stations are pointed at " code { (c.external) } " on first boot. Tendril's "
-            "built-in server is off — with a valid license you don't need it."
+            "New NVIDIA-vGPU stations are pointed at your license server (" code { (c.external) } ") on first "
+            "boot. Tendril's built-in server is off — with a valid license you don't need it."
         }
-        details style="margin-top:12px" {
+        details style="margin-top:10px" {
             summary.sub style="cursor:pointer" { "Change" }
             div style="margin-top:10px" {
                 form hx-post="/hardware/dls/external" hx-target="#dls-panel" hx-swap="outerHTML" {
@@ -471,9 +421,9 @@ fn external_body(c: &DlsConf) -> Markup {
                     button.btn type="submit" { "Update" }
                 }
                 div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
-                    p.sub style="margin:0 0 6px" { "No license server of your own? Switch to Tendril's built-in one:" }
+                    p.sub style="margin:0 0 6px" { "No license server of your own? Switch to Tendril's built-in one (auto-starts when vGPU is active):" }
                     form hx-post="/hardware/dls/builtin" hx-target="#dls-panel" hx-swap="outerHTML" {
-                        button.btn type="submit" { "Use built-in (I hold a vGPU entitlement)" }
+                        button.btn type="submit" { "Use built-in license server" }
                     }
                 }
             }

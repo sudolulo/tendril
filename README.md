@@ -8,7 +8,7 @@ on-screen console; it handles IOMMU, VFIO, driver binding, and VM setup so you d
 > **🎮 Live demo:** click around the real web UI (read-only — actions are disabled) at
 > **[demo.onetick.ninja](https://demo.onetick.ninja)**. No install needed.
 
-![The Tendril web control plane — dashboard with stations and hardware](docs/images/dashboard.png)
+![The Tendril web control plane — every station across the fleet, grouped by node](docs/images/stations.png)
 
 ## What is it for?
 
@@ -35,8 +35,6 @@ Along the way: **seats** (named USB device groups), **auto-fetched + checksum-ve
 media, **live install progress**, per-GPU `vfio-pci` binding, a live in-browser **noVNC console**,
 password auth, and **configurable networking** with a 60-second **test-and-revert** safety net.
 
-![Configurable networking with test-and-revert](docs/images/network.png)
-
 **New in 0.17 (experimental, pending real-hardware validation):**
 - **Easier fleet-building** — join a fleet by pasting a **join code** (no shared store needed; mutual
   membership over mTLS), with **mDNS LAN discovery** surfacing nearby machines. Control a peer's
@@ -46,6 +44,8 @@ password auth, and **configurable networking** with a 60-second **test-and-rever
 - **Gaming provisioning** — a **shared Steam library** over virtio-fs (install games once, read by
   many — [docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)), **Moonlight** receiver on Windows *and* Bazzite,
   and Windows stations auto-installing the vGPU guest driver + Steam/Sunshine/Discord.
+
+![The fleet view — each node's GPUs, health, and free-for-passthrough capacity](docs/images/fleet.png)
 
 **From 0.16:** split a single GPU across stations with **vGPU** (mdev / SR-IOV — see the
 [supported-card list](docs/VGPU.md)), and save installed stations as **golden images** to clone

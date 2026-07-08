@@ -1,9 +1,12 @@
 name: deploy-dev
 
-# Auto-redeploy the test + demo instances (this box) on every push to `dev`, so both always run the
-# latest edge build. Runs on the self-hosted `host` runner (root, same machine as the services) — the
-# Docker-mode `ubuntu-latest` runner can't touch the host's systemd. Builds are incremental: the repo
-# and cargo caches live under /var/lib/tendril-deploy and persist between runs.
+# On every push to `dev`, two things happen (both on the self-hosted `host` runner — the Docker-mode
+# `ubuntu-latest` runner can't touch host systemd or build bootc images):
+#   - deploy:       rebuild tendril-web and restart the co-located systemd instances (test/demo) — the
+#                   fast web-UI feedback loop. Incremental; caches live under /var/lib/tendril-deploy.
+#   - publish-edge: build the bootc host image from this commit and push it as the rolling `:dev` tag,
+#                   so a bootc VM tracking `git.onetick.ninja/flan/tendril:dev` picks it up via
+#                   `bootc upgrade`. (`:latest` stays the stable main-release tag — see release.yml.)
 on:
   push:
     branches: [dev]
@@ -42,3 +45,34 @@ jobs:
           fi
           # Runner is root on the host → deploy-dev.sh installs + restarts without sudo.
           ./scripts/deploy-dev.sh
+
+  publish-edge:
+    runs-on: host
+    # A full bootc image build (podman) is slow; give it headroom.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Build + push the dev edge image (:dev)
+        env:
+          REG: git.onetick.ninja
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A real PAT — the built-in Actions token can't authenticate to the container registry.
+          REG_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+          git clone "https://oauth2:${TOKEN}@${REG}/${REPO}.git" "$work/repo"
+          cd "$work/repo"
+          git checkout "$SHA"
+          # Build the bootc host image from this dev commit and publish it as the rolling :dev edge tag.
+          # A dev VM does `bootc switch $REG/$OWNER/tendril:dev` once, then tracks it via `bootc upgrade`.
+          podman build -f image/Containerfile -t localhost/tendril:edge .
+          echo "$REG_TOKEN" | podman login "$REG" -u "$OWNER" --password-stdin
+          podman tag localhost/tendril:edge "$REG/$OWNER/tendril:dev"
+          podman push "$REG/$OWNER/tendril:dev"
+          echo "Pushed $REG/$OWNER/tendril:dev ($SHA)"

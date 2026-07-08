@@ -54,7 +54,8 @@ async fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let app = Router::new()
-        .route("/", get(pages::dashboard))
+        // Stations is the landing page (the former Dashboard folded into it as a summary strip).
+        .route("/", get(stations::list_page))
         .route("/stats", get(pages::stats))
         // federation
         .route("/fleet", get(federation::page))

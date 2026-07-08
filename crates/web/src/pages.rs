@@ -13,18 +13,19 @@ use serde::Deserialize;
 use tendril_capability_engine::detect;
 use tendril_orchestrator::{DomainState, Libvirt};
 
-use crate::stations;
 use crate::ui;
 
 // ISO/image storage locations resolve through `storage` (local, or a mounted NFS/SMB share).
 
-// ── dashboard ───────────────────────────────────────────────────────────────────────────────
+// ── overview strip (Stations landing) ───────────────────────────────────────────────────────
 
-pub async fn dashboard() -> Markup {
-    let lv = Libvirt::system();
+/// The at-a-glance stat strip shown at the top of the Stations landing page — folded in from the
+/// former standalone Dashboard (the Hardware/Host detail it used to duplicate lives on their tabs).
+pub fn overview_strip() -> Markup {
     let (n_stations, running) = if ui::is_demo() {
         crate::demo::counts()
     } else {
+        let lv = Libvirt::system();
         let names = lv.list();
         let r = names
             .iter()
@@ -35,38 +36,14 @@ pub async fn dashboard() -> Markup {
     let matrix = detect();
     let ready = matrix.passthrough_capable().count();
     let (threads, mem_gib) = host_capacity();
-
-    ui::page(
-        "dashboard",
-        "Dashboard",
-        html! {
-            section.summary {
-                (stat("Stations", &n_stations.to_string(), false, None))
-                (stat("Running", &running.to_string(), true, None))
-                (stat("GPUs · passthrough-ready", &ready.to_string(), false, Some(&format!("/ {}", matrix.gpus.len()))))
-                (stat("Host capacity", &threads.to_string(), false, Some(&format!("threads · {mem_gib} GB RAM"))))
-            }
-            (ui::panel("Stations", None, stations::fragment(&lv)))
-            (ui::panel("Hardware", Some(&format!("{ready} of {} GPUs ready", matrix.gpus.len())), html! {
-                div.scroll {
-                    table {
-                        thead { tr { th { "GPU" } th { "Address" } th { "Capability" } th { "Passthrough" } } }
-                        tbody {
-                            @for g in &matrix.gpus {
-                                tr {
-                                    td.name { (ui::vendor(g.gpu.vendor)) " " (g.gpu.model.as_deref().unwrap_or("GPU")) }
-                                    td.addr.mono { (g.gpu.address) }
-                                    td { (format!("{:?}", g.capability)) }
-                                    td.sub { (ui::viability(g.viability)) }
-                                }
-                            }
-                        }
-                    }
-                }
-            }))
-            (ui::panel("Host", Some("live"), host_stats()))
-        },
-    )
+    html! {
+        section.summary {
+            (stat("Stations", &n_stations.to_string(), false, None))
+            (stat("Running", &running.to_string(), true, None))
+            (stat("GPUs · passthrough-ready", &ready.to_string(), false, Some(&format!("/ {}", matrix.gpus.len()))))
+            (stat("Host capacity", &threads.to_string(), false, Some(&format!("threads · {mem_gib} GB RAM"))))
+        }
+    }
 }
 
 fn stat(k: &str, v: &str, accent: bool, small: Option<&str>) -> Markup {
@@ -527,7 +504,6 @@ pub async fn system() -> Markup {
             }
             @if let Some(vgpu) = crate::hardware::vgpu_system_panels() { (vgpu) }
             (ui::panel("Host", None, host_info()))
-            @if !crate::federation::enabled() { (crate::federation::setup_panel()) }
             (crate::tls::panel())
             (ui::panel("Logs", Some("live · filterable · downloadable"), logs_fragment(false)))
         },

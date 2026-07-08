@@ -752,16 +752,28 @@ pub(crate) fn demo_fleet() -> Vec<NodeInfo> {
 fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
     let up = nodes.iter().filter(|n| n.reachable).count();
     let total_stations: usize = nodes.iter().map(|n| n.stations.len()).sum();
+    // A lone node (just this one, not the demo) gets a create/join empty state instead of the
+    // infrastructure framing — the Fleet tab is always visible now, so this is the common first view.
+    let lone = !ui::is_demo() && nodes.len() <= 1;
     ui::page(
         "fleet",
         "Fleet",
         html! {
             @if let Some(n) = note { (n) }
-            p.sub style="margin-bottom:16px" {
-                "Infrastructure view — the machines in your fleet, their GPUs and health. Every node "
-                "manages itself; create and control stations from the "
-                a href="/stations" { "Stations" } " page. "
-                strong { (up) "/" (nodes.len()) } " node(s) reachable · " (total_stations) " station(s)."
+            @if lone {
+                p.sub style="margin-bottom:16px" {
+                    strong { "This machine isn't in a fleet yet." }
+                    " A fleet manages multiple Tendril machines together and lets you place stations "
+                    "across them. Create one below to get a join code, or join an existing fleet by "
+                    "pasting its code."
+                }
+            } @else {
+                p.sub style="margin-bottom:16px" {
+                    "Infrastructure view — the machines in your fleet, their GPUs and health. Every node "
+                    "manages itself; create and control stations from the "
+                    a href="/stations" { "Stations" } " page. "
+                    strong { (up) "/" (nodes.len()) } " node(s) reachable · " (total_stations) " station(s)."
+                }
             }
             @for n in &nodes { (node_card(n)) }
             @if !ui::is_demo() { (setup_panel()) }

@@ -86,6 +86,12 @@ async fn main() {
             "/api/station/:name/:action",
             post(federation::api_station_action),
         )
+        // Peer-facing VNC bridge: exposes this node's local station console over the token/mTLS-authed
+        // fed API (reuses the same relay as the browser console). It's the owning-node half of the
+        // cross-node console — a fleet peer with the fed token can reach a station's VNC through here.
+        // The browser-side proxy that consumes it (this node ↔ peer WebSocket) is a follow-up: it needs
+        // a WS client + the fed client cert, and real cross-node hardware to validate.
+        .route("/api/station/:name/vnc", get(stations::vnc_ws))
         .route("/api/reimage", post(federation::api_reimage))
         .route("/api/image/:name", get(federation::api_image))
         .route("/api/image-pull", post(federation::api_image_pull))

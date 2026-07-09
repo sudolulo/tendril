@@ -90,7 +90,7 @@ jobs:
               echo "WARNING: could not fetch refresh-dl-sums.sh — SHA256SUMS not refreshed; re-run the promote or refresh manually." >&2
             fi
             rm -f "$sums_script"
-            echo "Published $stable -> $name and refreshed SHA256SUMS."
+            echo "Published $stable -> $name."
           else
             echo "WARNING: $name not found in $DL_DIR — stable ISO name not updated (image tags were promoted)."
           fi

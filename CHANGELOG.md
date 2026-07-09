@@ -11,6 +11,13 @@ A correctness-audit round following 0.22.0's security rounds: a full-codebase re
 and cleanups (not security), then a second pass over the fixes themselves. No feature or API changes.
 
 ### Fixed
+- **Kickstart passwords with backslashes.** pykickstart tokenizes with shlex, so a trailing `\`
+  aborted the whole unattended SteamOS install and `\\` silently changed the account password;
+  backslashes are now stripped alongside quotes (the Windows path was unaffected).
+- Media fetch/verify background jobs are reaped — each click no longer leaves a zombie process in
+  `tendril-web` until the next service restart.
+- A failed fetch of the shared sums script no longer aborts a half-done stable promote (it warns
+  and continues).
 - **Demo privacy.** The public demo no longer serves the real host's journal, nor the (possibly
   co-located real instance's) audit log — the logs/audit views and downloads return placeholders.
 - **Greenboot vs reverse-proxy.** The required post-boot health check only spoke HTTPS; with the

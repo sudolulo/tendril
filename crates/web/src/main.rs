@@ -238,7 +238,8 @@ async fn main() {
 
     let addr = std::env::var("TENDRIL_WEB_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
 
-    // HTTPS (opt-in via TENDRIL_TLS=on): terminate TLS in-app with a self-signed (or provided) cert.
+    // HTTPS (default; TENDRIL_TLS=off opts out for TLS-terminating proxies): terminate TLS in-app
+    // with a self-signed (or provided) cert.
     if tls::enabled() {
         match tls::ensure() {
             Ok((cert, key)) => {

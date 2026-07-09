@@ -58,6 +58,14 @@ and cleanups (not security), then a second pass over the fixes themselves. No fe
   responses instead of reporting success with unprotected branches.
 
 ### Changed
+- Refactor pass (zero behavior change): one shared XML escaper, sysfs reader module, and
+  detect/plan helpers replace copy-pasted scaffolding across the five CLI binaries (which now build
+  a `StationRequest` and call `provision()` like the web layer); the web crate gains shared
+  meminfo/size/LAN-IP/secret-write/curl-to-peer helpers replacing ~30 duplicated blocks; dead code
+  dropped (unused `/stats` cluster, `StationSpec.gpu_address`, `Libvirt::session`, and friends);
+  `scripts/refresh-dl-sums.sh` is the single SHA256SUMS regenerator for both release workflows.
+  Two deliberate improvements: auth password files are 0600 from the first byte, and the console
+  no longer reads sysfs twice per menu. Net ~350 lines removed.
 - The PXE server no longer extracts the whole ISO into `/tmp` (tmpfs) nor copies the multi-GB ISO
   there — only the boot trees are extracted and the ISO is symlinked into the HTTP root.
 - One-pass libvirt usage sweep for the Hardware page and station wizard (one `dumpxml` per domain

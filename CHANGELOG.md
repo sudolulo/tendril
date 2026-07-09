@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-09
+
+A security-hardening release. Four iterative multi-agent audit rounds swept the web app,
+orchestrator, capability engine, provisioning, and the installer/PXE scripts; the final round came
+back with no high- or medium-severity findings across three independent passes. This release fixes
+everything the earlier rounds turned up plus the notable defense-in-depth items from the last one.
+No feature or API changes — safe to update in place.
+
+### Security
+- **Federation input validation.** Every request-body URL that reaches a `curl` invocation or a
+  config file is now validated as a real `http(s)` URL and the `curl` calls are `--`-terminated:
+  the token-authed `/api/image-pull` source, and the `fed` (mTLS endpoint) fields on fleet-register
+  and join-code — closing a leading-dash curl-option injection reachable by a shared-token holder.
+- **`is_http_url` rejects shell metacharacters** (`$`, backtick, `;`, quotes, …) so a validated URL
+  can't smuggle a command into the guest-side `sh -c` that fetches the vGPU licensing token.
+- **Read-only enforcement.** Demo mode now blocks the VNC console WebSocket (live guest control is
+  not "read-only"), and the viewer role is refused the full audit-log and journal downloads.
+- **Private-key permissions.** TLS, federation CA + node, and DLS webserver keys are pre-created
+  `0600` before `openssl` writes them (and the installed TLS key is written `0600` from the first
+  byte) — no window where a key is world-readable.
+- **Console scripts** JSON-encode and URL-encode the station/node names instead of splicing them
+  into an inline `<script>`, and `reimage` re-validates the station name on the peer path.
+- **Installer/kickstart.** The username is clamped to a POSIX-safe charset and quotes are stripped
+  from the seed password before they reach Anaconda's `%post` shell / `user` directive; the
+  removable-disk skip filter in the unattended/PXE installers is applied at install time.
+
 ## [0.21.0] - 2026-07-09
 
 A gaming-completeness pass closing the biggest gaps against the design: low-latency tuning,
@@ -599,7 +625,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.21.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.22.0...HEAD
+[0.22.0]: https://git.onetick.ninja/flan/tendril/compare/v0.21.0...v0.22.0
 [0.21.0]: https://git.onetick.ninja/flan/tendril/compare/v0.20.0...v0.21.0
 [0.20.0]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...v0.20.0
 [0.18.0]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...v0.18.0

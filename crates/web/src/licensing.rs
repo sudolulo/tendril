@@ -165,6 +165,12 @@ fn ensure_cert(url: &str) -> Result<String, String> {
         ],
     )
     .map_err(|e| format!("openssl (DLS webserver cert) failed: {e}"))?;
+    // openssl writes the key with the default umask (usually 0644) — lock it down to 0600.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(cert_dir)
 }
 

@@ -237,7 +237,6 @@ async fn main() {
 
     // HTTPS (opt-in via TENDRIL_TLS=on): terminate TLS in-app with a self-signed (or provided) cert.
     if tls::enabled() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         match tls::ensure() {
             Ok((cert, key)) => {
                 let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)

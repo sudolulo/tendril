@@ -48,20 +48,32 @@ fn cpus_taken_by_other_domains() -> std::collections::HashSet<u32> {
     taken
 }
 
-/// Parse a libvirt cpuset (`"4"`, `"4-7"`, `"0,2,4-6"`) into individual CPU numbers.
+/// Parse a libvirt cpuset (`"4"`, `"4-7"`, `"0,2,4-6"`, with `^N`/`^A-B` exclusions) into the set of
+/// CPUs it actually covers. Exclusions are applied after the additive tokens (libvirt semantics), so a
+/// `^N` core is correctly treated as NOT taken rather than being counted.
 fn parse_cpuset(spec: &str, out: &mut std::collections::HashSet<u32>) {
-    for tok in spec.split(',') {
-        let tok = tok.trim();
+    let mut add = std::collections::HashSet::new();
+    let mut remove = std::collections::HashSet::new();
+    let expand = |tok: &str, set: &mut std::collections::HashSet<u32>| {
         if let Some((a, b)) = tok.split_once('-') {
             if let (Ok(a), Ok(b)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>()) {
                 for c in a..=b {
-                    out.insert(c);
+                    set.insert(c);
                 }
             }
         } else if let Ok(c) = tok.parse::<u32>() {
-            out.insert(c);
+            set.insert(c);
+        }
+    };
+    for tok in spec.split(',') {
+        let tok = tok.trim();
+        if let Some(excl) = tok.strip_prefix('^') {
+            expand(excl.trim(), &mut remove);
+        } else {
+            expand(tok, &mut add);
         }
     }
+    out.extend(add.difference(&remove).copied());
 }
 
 /// Whether the host has a static hugepage pool allocated (else enabling `<hugepages/>` would stop the
@@ -86,8 +98,9 @@ fn hugepages_available() -> bool {
 fn plan_low_latency(vcpus: u32) -> (Option<CpuPinning>, bool) {
     let hugepages = hugepages_available();
     let total = host_cpu_count();
-    // Need the 2 reserved host cores plus one dedicated core per vCPU.
-    if total < vcpus + 2 {
+    // Need the 2 reserved host cores plus one dedicated core per vCPU. saturating_add so an absurd
+    // `vcpus` from the form can't overflow.
+    if total < vcpus.saturating_add(2) {
         return (None, hugepages);
     }
     let taken = cpus_taken_by_other_domains();
@@ -837,6 +850,21 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         ))
         .into_response();
     }
+    // The guest account fields are interpolated into the autounattend.xml / kickstart (and a root-run
+    // %post shell). Reject control characters (newlines/tabs) so a field can't break out and inject an
+    // extra directive or command. Empty username/password is allowed (handled downstream).
+    for (label, val) in [
+        ("Username", get("username")),
+        ("Password", get("password")),
+        ("Hostname", get("hostname")),
+    ] {
+        if !val.is_empty() && !ui::safe_field(&val) {
+            return create_form(Some(&format!(
+                "{label} can't contain control characters (newlines/tabs)."
+            )))
+            .into_response();
+        }
+    }
     let disk = {
         let d = get("disk");
         if d.is_empty() {
@@ -1273,6 +1301,9 @@ fn build_seed(
 fn valid_station_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains("..")
+        // No leading '-': the name becomes a bare virsh/libvirt argv token, so `-x`/`--all` would be
+        // parsed as an option (argument injection).
+        && !name.starts_with('-')
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))

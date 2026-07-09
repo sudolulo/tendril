@@ -247,10 +247,11 @@ fn new_token() -> String {
 
 fn create_session(role: Role) -> String {
     let token = new_token();
-    SESSIONS
-        .lock()
-        .unwrap()
-        .insert(token.clone(), (Instant::now() + SESSION_TTL, role));
+    let mut s = SESSIONS.lock().unwrap();
+    // Sweep expired sessions so the map can't grow unbounded across many logins.
+    let now = Instant::now();
+    s.retain(|_, (exp, _)| *exp > now);
+    s.insert(token.clone(), (now + SESSION_TTL, role));
     token
 }
 
@@ -268,7 +269,13 @@ fn session_role(token: &str) -> Option<Role> {
 }
 
 fn session_cookie(token: &str, max_age: i64) -> String {
-    format!("tendril_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}")
+    // Mark Secure when we're serving TLS, so the session token never rides a plaintext hop.
+    let secure = if crate::tls::enabled() {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!("tendril_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}{secure}")
 }
 
 fn cookie_token(req: &Request) -> Option<String> {
@@ -279,19 +286,35 @@ fn cookie_token(req: &Request) -> Option<String> {
         .find_map(|c| c.strip_prefix("tendril_session=").map(str::to_string))
 }
 
-/// The role a request authenticates as, or `None`. A trusted reverse-proxy header authenticates as
-/// Admin (the proxy owns access control); otherwise the session cookie carries the role.
-fn role_of(req: &Request) -> Option<Role> {
+/// The role a set of request headers authenticates as, or `None`. A trusted reverse-proxy header
+/// authenticates as Admin (the proxy owns access control); otherwise the session cookie carries the
+/// role.
+pub fn role_from_headers(headers: &axum::http::HeaderMap) -> Option<Role> {
     if let Ok(name) = std::env::var("TENDRIL_TRUST_PROXY_HEADER") {
         if !name.is_empty() {
-            if let Some(v) = req.headers().get(&name) {
+            if let Some(v) = headers.get(&name) {
                 if v.to_str().map(|s| !s.is_empty()).unwrap_or(false) {
                     return Some(Role::Admin);
                 }
             }
         }
     }
-    cookie_token(req).and_then(|t| session_role(&t))
+    let cookies = headers.get(COOKIE)?.to_str().ok()?;
+    let token = cookies
+        .split(';')
+        .map(str::trim)
+        .find_map(|c| c.strip_prefix("tendril_session="))?;
+    session_role(token)
+}
+
+fn role_of(req: &Request) -> Option<Role> {
+    role_from_headers(req.headers())
+}
+
+/// Whether these request headers authenticate as an admin — used to hide secret UI (fleet token, join
+/// code) from read-only viewers on otherwise-readable pages.
+pub fn is_admin(headers: &axum::http::HeaderMap) -> bool {
+    role_from_headers(headers) == Some(Role::Admin)
 }
 
 /// The actor label for the audit log (proxy-set user if present, else the role name).
@@ -300,7 +323,9 @@ fn actor_of(req: &Request) -> String {
         if !name.is_empty() {
             if let Some(u) = req.headers().get(&name).and_then(|v| v.to_str().ok()) {
                 if !u.is_empty() {
-                    return u.to_string();
+                    // Strip control chars so a proxy-set user can't inject columns/lines into the
+                    // tab-delimited audit log.
+                    return u.chars().filter(|c| !c.is_control()).collect();
                 }
             }
         }
@@ -360,8 +385,11 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
         };
     }
     let is_post = req.method() == axum::http::Method::POST;
-    // Viewer is read-only: refuse mutations with a friendly banner (same shape as the demo's).
-    if !open && is_post && role == Some(Role::Viewer) {
+    // A few GETs return fleet trust material (the join code embeds the shared token + the fleet CA
+    // *private key*), so they're admin-only even though they're reads.
+    let sensitive_get = matches!(path, "/fleet/join-code");
+    // Viewer is read-only: refuse mutations (and secret-returning GETs) with a friendly banner.
+    if !open && role == Some(Role::Viewer) && (is_post || sensitive_get) {
         let banner = r#"<div class="banner warn" style="margin:0">👁 Read-only access — sign in as an admin to make changes.</div>"#;
         return (
             [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],

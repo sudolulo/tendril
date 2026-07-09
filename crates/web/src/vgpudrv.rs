@@ -146,9 +146,29 @@ pub async fn stage(mut mp: Multipart) -> Markup {
         }
     }
 
-    // A URL was given and no file was uploaded → fetch it.
+    // A URL was given and no file was uploaded → fetch it. Require an absolute http(s) URL so a value
+    // like `file:///…` (SSRF/local read) or a `-K`/`--config` token (curl argument injection) can't be
+    // fetched server-side.
     if wrote == 0 && !url.is_empty() {
-        match ui::run_result("curl", &["-fL", "--max-time", "3600", "-o", &tmp, &url]) {
+        if !ui::is_http_url(&url) {
+            return section(Some(
+                html! { div.banner.error { "Provide an http(s):// URL to download the driver from." } },
+            ));
+        }
+        match ui::run_result(
+            "curl",
+            &[
+                "-fL",
+                "--proto",
+                "=https,http",
+                "--max-time",
+                "3600",
+                "-o",
+                &tmp,
+                "--",
+                &url,
+            ],
+        ) {
             Ok(_) => wrote = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0),
             Err(e) => {
                 let _ = std::fs::remove_file(&tmp);

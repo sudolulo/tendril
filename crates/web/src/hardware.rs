@@ -349,6 +349,11 @@ pub async fn sriov(
     Path(addr): Path<String>,
     axum::extract::Form(f): axum::extract::Form<SriovForm>,
 ) -> Markup {
+    // `addr` becomes a sysfs path (`/sys/bus/pci/devices/{addr}/sriov_numvfs`); reject anything that
+    // isn't a real PCI address so it can't target another file.
+    if !crate::vgpu::is_pci_address(&addr) {
+        return gpu_fragment(Some(html! { div.banner.error { "Invalid PCI address." } }));
+    }
     // Changing numvfs zeroes the VFs first, which would yank a VF out from under a running station.
     // Refuse if any current VF is passed through to a station.
     let users = gpu_users();

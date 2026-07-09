@@ -162,8 +162,24 @@ pub fn prefetch(branch: &str) {
 /// Stream `url` to `dest` via curl (multi-hundred-MB), atomically renaming into place. Returns the size.
 fn fetch_to(url: &str, dest: &str) -> Result<u64, String> {
     let tmp = format!("{dest}.part");
-    ui::run_result("curl", &["-fL", "--max-time", "3600", "-o", &tmp, url])
-        .map_err(|e| e.to_string())?;
+    if !crate::ui::is_http_url(url) {
+        return Err("driver URL must be http(s)".into());
+    }
+    ui::run_result(
+        "curl",
+        &[
+            "-fL",
+            "--proto",
+            "=https,http",
+            "--max-time",
+            "3600",
+            "-o",
+            &tmp,
+            "--",
+            url,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
     let n = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
     if n < 1 << 20 {
         let _ = std::fs::remove_file(&tmp);

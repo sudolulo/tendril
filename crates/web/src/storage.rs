@@ -139,15 +139,25 @@ fn mount_store(s: &Store, password: &str) -> Result<(), String> {
         if let Some(d) = FsPath::new(SMB_CREDS).parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        std::fs::write(
-            SMB_CREDS,
-            format!("username={}\npassword={}\n", s.username, password),
-        )
-        .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
+        // Create the credentials file 0600 *before* writing the cleartext password (no world-readable
+        // race window).
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(SMB_CREDS, std::fs::Permissions::from_mode(0o600));
+            use std::io::Write as _;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(SMB_CREDS).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+            }
+            file.write_all(format!("username={}\npassword={}\n", s.username, password).as_bytes())
+                .map_err(|e| e.to_string())?;
         }
         let extra = format!("credentials={SMB_CREDS},uid=0,gid=0,file_mode=0660,dir_mode=0770");
         opts = if opts.is_empty() {
@@ -233,6 +243,15 @@ pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
         return panel_with(Some(
             html! { div.banner.error { "A server/share address is required." } },
         ));
+    }
+    // These fields are written line-by-line into storage.conf and /etc/fstab; a newline/control char
+    // would inject an arbitrary fstab entry (mount anything at boot). Reject them.
+    for v in [&f.remote, &f.mount, &f.options, &f.username] {
+        if v.chars().any(|c| c.is_control()) {
+            return panel_with(Some(
+                html! { div.banner.error { "Fields can't contain control characters (newlines/tabs)." } },
+            ));
+        }
     }
     let kind = if f.kind == "smb" { "smb" } else { "nfs" }.to_string();
     let mount = {

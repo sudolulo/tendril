@@ -61,7 +61,7 @@ pub fn mdev_parent(uuid: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn is_pci_address(s: &str) -> bool {
+pub fn is_pci_address(s: &str) -> bool {
     // dddd:dd:dd.d
     let b = s.as_bytes();
     s.len() == 12

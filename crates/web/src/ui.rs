@@ -189,6 +189,35 @@ pub fn is_demo() -> bool {
     std::env::var("TENDRIL_DEMO").is_ok()
 }
 
+/// True when `s` is safe to interpolate into a single line of config / XML / a shell answer-file: no
+/// control characters (newlines, tabs, NUL, …) that could break out of a field or inject a new one.
+/// Used to validate free-form form fields (usernames, passwords, hostnames, mount options, seat names)
+/// before they reach a kickstart, autounattend.xml, fstab, or a `.conf`.
+pub fn safe_field(s: &str) -> bool {
+    !s.is_empty() && !s.chars().any(|c| c.is_control())
+}
+
+/// Whether a URL is safe to fetch server-side / render as a link: an absolute `http`/`https` URL.
+/// Blocks `file:`, `-`-leading curl-option tokens, `javascript:`, and other schemes (SSRF / XSS / curl
+/// argument injection).
+pub fn is_http_url(s: &str) -> bool {
+    let s = s.trim();
+    (s.starts_with("http://") || s.starts_with("https://")) && !s.contains(char::is_whitespace)
+}
+
+/// Constant-time equality for secrets (tokens), so a comparison doesn't leak length/prefix via timing.
+pub fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 /// Run a command and return trimmed stdout on success (read-only host queries).
 pub fn run_stdout(cmd: &str, args: &[&str]) -> Option<String> {
     Command::new(cmd)

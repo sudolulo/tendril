@@ -161,7 +161,9 @@ pub async fn create(axum::Form(form): axum::Form<Vec<(String, String)>>) -> Mark
         .find(|(k, _)| k == "name")
         .map(|(_, v)| v.trim().to_string())
         .unwrap_or_default();
-    if !name.is_empty() {
+    // Reject control chars (tabs/newlines) — a seat is stored as one `name\t<ids>` line, so they'd
+    // corrupt the file or forge extra seats.
+    if !name.is_empty() && crate::ui::safe_field(&name) {
         let devices: Vec<(u16, u16)> = form
             .iter()
             .filter(|(k, _)| k == "usb")

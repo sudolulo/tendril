@@ -275,7 +275,7 @@ fn federation_token() -> String {
 /// True if `presented` matches the configured token (and a token is set).
 pub fn token_ok(presented: &str) -> bool {
     let t = federation_token();
-    !t.is_empty() && presented == t
+    !t.is_empty() && crate::ui::ct_eq(presented, &t)
 }
 
 /// Persist a federation token to `federation.conf` (replacing any existing `token=` line). Used when
@@ -648,13 +648,14 @@ pub async fn api_node() -> axum::Json<NodeInfo> {
 }
 
 /// The aggregated fleet page.
-pub async fn page() -> Markup {
+pub async fn page(headers: axum::http::HeaderMap) -> Markup {
     if ui::is_demo() {
-        return fleet_page(demo_fleet(), None);
+        return fleet_page(demo_fleet(), None, false);
     }
+    let is_admin = crate::auth::is_admin(&headers);
     // Peer fetches shell out with a timeout; run off the async worker.
     let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
-    fleet_page(nodes, None)
+    fleet_page(nodes, None, is_admin)
 }
 
 /// A synthetic multi-node fleet for the public demo: a few heterogeneous boxes with stations and GPUs,
@@ -749,7 +750,7 @@ pub(crate) fn demo_fleet() -> Vec<NodeInfo> {
     ]
 }
 
-fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
+fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>, is_admin: bool) -> Markup {
     let up = nodes.iter().filter(|n| n.reachable).count();
     let total_stations: usize = nodes.iter().map(|n| n.stations.len()).sum();
     // A lone node (just this one, not the demo) gets a create/join empty state instead of the
@@ -776,7 +777,7 @@ fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
                 }
             }
             @for n in &nodes { (node_card(n)) }
-            @if !ui::is_demo() { (setup_panel()) (crate::pxe::panel()) }
+            @if !ui::is_demo() { (setup_panel(is_admin)) (crate::pxe::panel()) }
         },
     )
 }
@@ -826,22 +827,32 @@ pub struct NameForm {
 /// Rename this node (writes `federation.conf`), drop its old presence file, and re-advertise.
 pub async fn setup_name(axum::Form(f): axum::Form<NameForm>) -> Markup {
     if ui::is_demo() {
-        return setup_body(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+        return setup_body(
+            true,
+            Some(html! { div.banner.warn { "Disabled in the demo." } }),
+        );
     }
     if env_node_name_override().is_some() {
-        return setup_body(Some(
-            html! { div.banner.warn { "This node's name is set via the " code { "TENDRIL_NODE_NAME" } " env var — change it there." } },
-        ));
+        return setup_body(
+            true,
+            Some(
+                html! { div.banner.warn { "This node's name is set via the " code { "TENDRIL_NODE_NAME" } " env var — change it there." } },
+            ),
+        );
     }
     let new = safe_component(f.name.trim());
     if new.is_empty() {
-        return setup_body(Some(html! { div.banner.error { "Enter a node name." } }));
+        return setup_body(
+            true,
+            Some(html! { div.banner.error { "Enter a node name." } }),
+        );
     }
     let old = node_name();
     if let Err(e) = set_conf_name(&new) {
-        return setup_body(Some(
-            html! { div.banner.error { "Couldn't save the name: " (e) } },
-        ));
+        return setup_body(
+            true,
+            Some(html! { div.banner.error { "Couldn't save the name: " (e) } }),
+        );
     }
     if new != old {
         if let Some(dir) = nodes_dir() {
@@ -849,46 +860,59 @@ pub async fn setup_name(axum::Form(f): axum::Form<NameForm>) -> Markup {
         }
     }
     heartbeat();
-    setup_body(Some(
-        html! { div.banner.ok { "Node renamed to " b { (new) } "." } },
-    ))
+    setup_body(
+        true,
+        Some(html! { div.banner.ok { "Node renamed to " b { (new) } "." } }),
+    )
 }
 
 /// Rotate the shared join token (only when it's store-managed). Every node on the shared store picks the
 /// new token up automatically.
 pub async fn rotate_token() -> Markup {
     if ui::is_demo() {
-        return setup_body(Some(html! { div.banner.warn { "Disabled in the demo." } }));
+        return setup_body(
+            true,
+            Some(html! { div.banner.warn { "Disabled in the demo." } }),
+        );
     }
     if !token_is_store_managed() {
-        return setup_body(Some(
-            html! { div.banner.warn { "The join token is pinned via env/conf — rotate it there, not here." } },
-        ));
+        return setup_body(
+            true,
+            Some(
+                html! { div.banner.warn { "The join token is pinned via env/conf — rotate it there, not here." } },
+            ),
+        );
     }
     let Some(root) = crate::storage::store_root() else {
-        return setup_body(Some(
-            html! { div.banner.error { "No shared store to hold the token." } },
-        ));
+        return setup_body(
+            true,
+            Some(html! { div.banner.error { "No shared store to hold the token." } }),
+        );
     };
     let Some(tok) = new_random_token() else {
-        return setup_body(Some(
-            html! { div.banner.error { "Couldn't generate a new token." } },
-        ));
+        return setup_body(
+            true,
+            Some(html! { div.banner.error { "Couldn't generate a new token." } }),
+        );
     };
     let p = format!("{root}/fleet-token");
     if let Err(e) = std::fs::write(&p, &tok) {
-        return setup_body(Some(
-            html! { div.banner.error { "Couldn't write the token: " (e) } },
-        ));
+        return setup_body(
+            true,
+            Some(html! { div.banner.error { "Couldn't write the token: " (e) } }),
+        );
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
     }
-    setup_body(Some(
-        html! { div.banner.ok { "Join token rotated. Other nodes on the shared store pick it up automatically." } },
-    ))
+    setup_body(
+        true,
+        Some(
+            html! { div.banner.ok { "Join token rotated. Other nodes on the shared store pick it up automatically." } },
+        ),
+    )
 }
 
 /// The Fleet setup / onboarding panel — how to form and grow a fleet, shown wherever a lone node needs
@@ -954,11 +978,15 @@ pub async fn join(axum::Form(f): axum::Form<JoinForm>) -> Markup {
     }
 }
 
-pub fn setup_panel() -> Markup {
-    ui::panel("Fleet setup", Some("form & grow a fleet"), setup_body(None))
+pub fn setup_panel(is_admin: bool) -> Markup {
+    ui::panel(
+        "Fleet setup",
+        Some("form & grow a fleet"),
+        setup_body(is_admin, None),
+    )
 }
 
-fn setup_body(banner: Option<Markup>) -> Markup {
+fn setup_body(is_admin: bool, banner: Option<Markup>) -> Markup {
     let name = node_name();
     let env_name = env_node_name_override().is_some();
     let store = crate::storage::store_root();
@@ -1009,11 +1037,14 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                 }
             }
 
-            // Primary action 1 — add a machine (one path: a join code).
-            div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)" {
-                div.sub style="font-weight:600; margin-bottom:4px" { "Add a machine" }
-                p.sub style="margin:0 0 8px" { "Generate a code, then paste it into " b { "Join a fleet" } " on the machine you want to add. The code carries this node's address, trust, and security — treat it as a secret." }
-                div #join-code-box { button.btn hx-get="/fleet/join-code" hx-target="#join-code-box" hx-swap="innerHTML" { "Generate join code" } }
+            // Primary action 1 — add a machine (one path: a join code). Admin only: the code carries the
+            // fleet CA private key, so a read-only viewer must not be able to mint one.
+            @if is_admin {
+                div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)" {
+                    div.sub style="font-weight:600; margin-bottom:4px" { "Add a machine" }
+                    p.sub style="margin:0 0 8px" { "Generate a code, then paste it into " b { "Join a fleet" } " on the machine you want to add. The code carries this node's address, trust, and security — treat it as a secret." }
+                    div #join-code-box { button.btn hx-get="/fleet/join-code" hx-target="#join-code-box" hx-swap="innerHTML" { "Generate join code" } }
+                }
             }
 
             // Primary action 2 — join someone else's fleet.
@@ -1040,22 +1071,25 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                         }))
                     } }
 
-                    div style="margin-top:12px" {
-                        div.sub style="font-weight:600; margin-bottom:4px" { "Raw join token" }
-                        p.sub style="margin:0 0 6px" { "The shared secret a join code wraps. Only needed for manual peering (below) or a shared store — treat it as a secret." }
-                        pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px; word-break:break-all" { (token) }
-                        @if token_is_store_managed() {
-                            button.btn.sm style="margin-top:8px"
-                                hx-post="/fleet/setup/rotate-token" hx-target="#fleet-setup" hx-swap="outerHTML"
-                                hx-confirm="Rotate the join token? Nodes on the shared store update automatically; any manually-configured node must be given the new token." { "Rotate token" }
+                    // The raw token IS full fleet-join capability — admin only.
+                    @if is_admin {
+                        div style="margin-top:12px" {
+                            div.sub style="font-weight:600; margin-bottom:4px" { "Raw join token" }
+                            p.sub style="margin:0 0 6px" { "The shared secret a join code wraps. Only needed for manual peering (below) or a shared store — treat it as a secret." }
+                            pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px; word-break:break-all" { (token) }
+                            @if token_is_store_managed() {
+                                button.btn.sm style="margin-top:8px"
+                                    hx-post="/fleet/setup/rotate-token" hx-target="#fleet-setup" hx-swap="outerHTML"
+                                    hx-confirm="Rotate the join token? Nodes on the shared store update automatically; any manually-configured node must be given the new token." { "Rotate token" }
+                            }
                         }
-                    }
 
-                    div style="margin-top:12px" {
-                        div.sub style="font-weight:600; margin-bottom:4px" { "Manual peering (no join code)" }
-                        p.sub style="margin:0 0 6px" { "Set these on the other node and restart it (then point this node back the same way):" }
-                        pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px" {
-                            "TENDRIL_PEERS=" (name) "=" (reach) "\nTENDRIL_FEDERATION_TOKEN=" (token)
+                        div style="margin-top:12px" {
+                            div.sub style="font-weight:600; margin-bottom:4px" { "Manual peering (no join code)" }
+                            p.sub style="margin:0 0 6px" { "Set these on the other node and restart it (then point this node back the same way):" }
+                            pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px" {
+                                "TENDRIL_PEERS=" (name) "=" (reach) "\nTENDRIL_FEDERATION_TOKEN=" (token)
+                            }
                         }
                     }
 
@@ -1067,7 +1101,15 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                             ul style="margin:0; padding-left:18px" {
                                 @for d in &discovered {
                                     li.sub {
-                                        b { (d.name) } " — " a href=(d.url) target="_blank" rel="noreferrer" { span.mono { (d.url) } }
+                                        // The advertised URL is attacker-controllable over the LAN — only
+                                        // link it if it's a real http(s) URL, else show inert text (blocks
+                                        // a `javascript:` advert running in the admin's session).
+                                        b { (d.name) } " — "
+                                        @if ui::is_http_url(&d.url) {
+                                            a href=(d.url) target="_blank" rel="noreferrer" { span.mono { (d.url) } }
+                                        } @else {
+                                            span.mono { (d.url) }
+                                        }
                                         @if d.fed.is_some() { " " span.badge title="Advertises an mTLS federation endpoint" { "mTLS" } }
                                     }
                                 }
@@ -1523,11 +1565,15 @@ pub struct FleetCreateForm {
 pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>) -> Markup {
     let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
     if f.name.trim().is_empty() {
-        return fleet_page(nodes, Some(banner(false, "Station name is required.")));
+        return fleet_page(
+            nodes,
+            Some(banner(false, "Station name is required.")),
+            true,
+        );
     }
     let (target, gpu) = match place(&nodes, f.target.trim()) {
         Ok(x) => x,
-        Err(e) => return fleet_page(nodes, Some(banner(false, &e))),
+        Err(e) => return fleet_page(nodes, Some(banner(false, &e)), true),
     };
     let spec = ProvisionSpec {
         name: f.name.trim().to_string(),
@@ -1559,10 +1605,12 @@ pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>
                     spec.name
                 ),
             )),
+            true,
         ),
         Err(e) => fleet_page(
             nodes,
             Some(banner(false, &format!("Failed on {target}: {e}"))),
+            true,
         ),
     }
 }
@@ -1672,6 +1720,7 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
         return fleet_page(
             nodes,
             Some(banner(false, "No registry record for that station.")),
+            true,
         );
     };
     let Some(base) = rec.base_image.clone().filter(|b| !b.is_empty()) else {
@@ -1684,6 +1733,7 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
                     rec.name, f.from
                 ),
             )),
+            true,
         );
     };
     // Survivors: reachable nodes other than the down one.
@@ -1694,7 +1744,13 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
         .collect();
     let (target, gpu) = match place(&survivors, "") {
         Ok(x) => x,
-        Err(e) => return fleet_page(nodes, Some(banner(false, &format!("Can't re-home: {e}")))),
+        Err(e) => {
+            return fleet_page(
+                nodes,
+                Some(banner(false, &format!("Can't re-home: {e}"))),
+                true,
+            )
+        }
     };
     let spec = ProvisionSpec {
         name: rec.name.clone(),
@@ -1729,11 +1785,13 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
                         rec.name, f.from
                     ),
                 )),
+                true,
             )
         }
         Err(e) => fleet_page(
             nodes,
             Some(banner(false, &format!("Re-home failed on {target}: {e}"))),
+            true,
         ),
     }
 }

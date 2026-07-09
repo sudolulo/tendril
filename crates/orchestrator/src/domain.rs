@@ -252,6 +252,10 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("      <source network='default'/>\n");
     xml.push_str("      <model type='virtio'/>\n");
     xml.push_str("    </interface>\n");
+    // QEMU guest agent channel: once qemu-guest-agent is installed inside (Windows via virtio-win,
+    // Bazzite via the qemu-guest-agent package), the host can read the guest's IP/hostname/OS and do
+    // graceful shutdown. Harmless when the agent isn't present.
+    xml.push_str("    <channel type='unix'>\n      <target type='virtio' name='org.qemu.guest_agent.0'/>\n    </channel>\n");
     // TPM 2.0 (Windows 11).
     xml.push_str("    <tpm model='tpm-crb'>\n");
     xml.push_str("      <backend type='emulator' version='2.0'/>\n");

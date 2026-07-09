@@ -230,6 +230,40 @@ impl Libvirt {
         Self::ok(self.run(&["snapshot-delete", name, snap])?).map(|_| ())
     }
 
+    /// Query the in-guest QEMU agent for this domain. `connected` is false if the agent isn't running
+    /// (no qemu-guest-agent installed, or the guest is off) — everything else is best-effort.
+    pub fn guest_agent(&self, name: &str) -> GuestAgentInfo {
+        let mut info = GuestAgentInfo::default();
+        // `guestinfo` talks to the agent; failure ⇒ not connected.
+        if let Ok(out) = self.run(&["guestinfo", name]) {
+            if out.status.success() {
+                info.connected = true;
+                let text = String::from_utf8_lossy(&out.stdout);
+                info.hostname = guestinfo_field(&text, "hostname");
+                info.os = guestinfo_field(&text, "os.pretty-name")
+                    .or_else(|| guestinfo_field(&text, "os.name"));
+            }
+        }
+        if info.connected {
+            // Agent-sourced interface addresses (the guest's real IPs).
+            if let Ok(out) = self.run(&["domifaddr", name, "--source", "agent"]) {
+                if out.status.success() {
+                    for line in String::from_utf8_lossy(&out.stdout).lines() {
+                        if let Some(ip) = line.split_whitespace().nth(3) {
+                            let ip = ip.split('/').next().unwrap_or(ip);
+                            if ip.contains('.') && !ip.starts_with("127.") {
+                                info.ips.push(ip.to_string());
+                            }
+                        }
+                    }
+                    info.ips.sort();
+                    info.ips.dedup();
+                }
+            }
+        }
+        info
+    }
+
     /// List a domain's snapshots (newest first), each with its creation time + state. Empty on error.
     pub fn snapshots(&self, name: &str) -> Vec<Snapshot> {
         let Ok(out) = self.run(&["snapshot-list", name]) else {
@@ -240,6 +274,33 @@ impl Libvirt {
         }
         parse_snapshot_list(&String::from_utf8_lossy(&out.stdout))
     }
+}
+
+/// What the in-guest QEMU agent reports about a station.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GuestAgentInfo {
+    /// The agent responded (qemu-guest-agent is installed + the guest is up).
+    pub connected: bool,
+    pub hostname: Option<String>,
+    /// OS pretty name, e.g. `Fedora Linux 40` / `Microsoft Windows 11`.
+    pub os: Option<String>,
+    /// The guest's IPv4 addresses (agent-sourced), excluding loopback.
+    pub ips: Vec<String>,
+}
+
+/// Pull a `key : value` field out of `virsh guestinfo` output (keys are dotted, e.g. `os.pretty-name`).
+fn guestinfo_field(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim() == key {
+                let v = v.trim();
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A libvirt snapshot (restore point) of a station.

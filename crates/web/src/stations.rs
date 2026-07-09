@@ -15,8 +15,8 @@ use tokio::net::TcpStream;
 use tendril_capability_engine::{detect, iommu, pci, usb};
 use tendril_orchestrator::guest::{build_kickstart_seed_with, build_seed_iso_with, create_overlay};
 use tendril_orchestrator::{
-    provision, CpuPinning, DomainState, GuestApp, GuestOs, InstallMedia, KickstartSpec, Libvirt,
-    StationRequest, UnattendSpec, UsbPassthrough,
+    provision, CpuPinning, DomainState, GuestAgentInfo, GuestApp, GuestOs, InstallMedia,
+    KickstartSpec, Libvirt, StationRequest, UnattendSpec, UsbPassthrough,
 };
 
 // ── low-latency CPU pinning + hugepages (opt-in) ────────────────────────────────────────────────
@@ -346,6 +346,43 @@ pub async fn resplit_action(
         } },
         Err(e) => html! { div.banner.error { (e) } },
     }
+}
+
+// ── in-guest agent status ───────────────────────────────────────────────────────────────────────
+
+/// The "Guest" panel: what the in-VM QEMU agent reports (OS, hostname, IPs) — health/telemetry for a
+/// running station. Empty/hint when the agent isn't connected yet.
+fn guest_panel(lv: &Libvirt, name: &str, running: bool) -> Markup {
+    let info: GuestAgentInfo = if running {
+        lv.guest_agent(name)
+    } else {
+        GuestAgentInfo::default()
+    };
+    ui::panel(
+        "Guest",
+        Some("in-VM agent — OS, hostname, IP"),
+        html! {
+            div.pad {
+                @if !running {
+                    p.sub style="margin:0" { "Start the station to see guest details." }
+                } @else if info.connected {
+                    table { tbody {
+                        tr { td.sub style="white-space:nowrap" { "Agent" } td { span.pill.running { span.led {} "connected" } } }
+                        @if let Some(os) = &info.os { tr { td.sub { "OS" } td { (os) } } }
+                        @if let Some(h) = &info.hostname { tr { td.sub { "Hostname" } td { (h) } } }
+                        @if !info.ips.is_empty() {
+                            tr { td.sub { "IP" } td { @for ip in &info.ips { span.mono { (ip) } " " } } }
+                        }
+                    } }
+                } @else {
+                    p.sub style="margin:0" {
+                        "No guest agent response yet. New stations install it automatically (QEMU guest agent); "
+                        "once it's up the guest reports its OS, hostname and IP here and can be shut down gracefully."
+                    }
+                }
+            }
+        },
+    )
 }
 
 // ── snapshots (restore points) ──────────────────────────────────────────────────────────────────
@@ -1486,6 +1523,7 @@ pub async fn detail(Path(name): Path<String>) -> Response {
                 div.emptybox { "The station is not running. Start it to open the console." }
             }
         }))
+        (guest_panel(&lv, &name, running))
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
         (snapshots_panel(&lv, &name))
         @if let Some(p) = resplit_panel(&name, running) { (p) }

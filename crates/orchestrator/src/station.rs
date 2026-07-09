@@ -14,8 +14,6 @@ pub struct StationSpec {
     pub name: String,
     /// Guest OS to run.
     pub guest: GuestOs,
-    /// PCI address of the GPU to pass through.
-    pub gpu_address: String,
     /// Apply the opt-in "native-hardware" compatibility overlay (off by default).
     pub native_hardware: bool,
 }

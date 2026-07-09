@@ -76,16 +76,14 @@ jobs:
           stable="tendril-stable-installer-x86_64.iso"
           if [ -f "$DL_DIR/$name" ]; then
             ln -sfn "$name" "$DL_DIR/$stable"
-            ( cd "$DL_DIR"
-              : > SHA256SUMS.new
-              for f in *.iso; do
-                [ -e "$f" ] || continue
-                # Hash symlinks via their target once; record under every served name.
-                h="$(sha256sum "$(readlink -f "$f")" | awk '{print $1}')"
-                printf '%s  %s\n' "$h" "$f" >> SHA256SUMS.new
-              done
-              mv SHA256SUMS.new SHA256SUMS )
-            chcon -R -t httpd_sys_content_t "$DL_DIR" 2>/dev/null || true
+            # Refresh SHA256SUMS with the script shared with release.yml. This workflow has no
+            # checkout, so fetch it via the raw API — pinned to the promoted release's tag, falling
+            # back to main for tags that predate the script (don't fail a half-done promote).
+            sums_script="$(mktemp)"
+            curl -fsS -H "$auth" "$api/raw/scripts/refresh-dl-sums.sh?ref=v$V" -o "$sums_script" \
+              || curl -fsS -H "$auth" "$api/raw/scripts/refresh-dl-sums.sh?ref=main" -o "$sums_script"
+            bash "$sums_script" "$DL_DIR"
+            rm -f "$sums_script"
             echo "Published $stable -> $name and refreshed SHA256SUMS."
           else
             echo "WARNING: $name not found in $DL_DIR — stable ISO name not updated (image tags were promoted)."

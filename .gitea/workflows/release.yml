@@ -121,19 +121,10 @@ jobs:
           install -d "$DL_DIR"
           cp -f "$iso" "$DL_DIR/$name"
           ln -sfn "$name" "$DL_DIR/$latest"
-          # Regenerate SHA256SUMS for EVERY ISO currently served (same loop as promote-stable.yml) —
-          # writing only this release's pair would clobber the entries for the stable ISO and every
-          # older versioned ISO still linked from release notes.
-          ( cd "$DL_DIR"
-            : > SHA256SUMS.new
-            for f in *.iso; do
-              [ -e "$f" ] || continue
-              # Hash symlinks via their target once; record under every served name.
-              h="$(sha256sum "$(readlink -f "$f")" | awk '{print $1}')"
-              printf '%s  %s\n' "$h" "$f" >> SHA256SUMS.new
-            done
-            mv SHA256SUMS.new SHA256SUMS )
-          chcon -R -t httpd_sys_content_t "$DL_DIR" 2>/dev/null || true
+          # Regenerate SHA256SUMS for EVERY ISO currently served (script shared with
+          # promote-stable.yml) — writing only this release's pair would clobber the entries for the
+          # stable ISO and every older versioned ISO still linked from release notes.
+          bash "$work/repo/scripts/refresh-dl-sums.sh" "$DL_DIR"
           ISO_SHA="$(sha256sum "$DL_DIR/$name" | awk '{print $1}')"
           echo "Published $name → https://dl.onetick.ninja/$name"
 

@@ -15,8 +15,7 @@
 use std::fs;
 use std::path::Path;
 
-/// Default sysfs path holding one directory per PCI device.
-const PCI_DEVICES: &str = "/sys/bus/pci/devices";
+use crate::sysfs::{read_trimmed, read_uint, PCI_DEVICES};
 
 /// One mdev profile a GPU can hand out (e.g. `nvidia-256` → "GRID RTX6000-4Q").
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,10 +47,6 @@ impl VgpuSupport {
     /// True if the GPU can be split by *either* mechanism.
     pub fn is_capable(&self) -> bool {
         !self.mdev_types.is_empty() || self.sriov_totalvfs > 0
-    }
-    /// True if any mdev profile still has capacity to hand out.
-    pub fn mdev_available(&self) -> bool {
-        self.mdev_types.iter().any(|t| t.available > 0)
     }
 }
 
@@ -93,21 +88,6 @@ fn read_mdev_types(dir: &Path) -> Vec<MdevType> {
     types
 }
 
-/// Read a sysfs file as a base-10 unsigned integer; 0 (and absent) both read as 0.
-fn read_uint(path: &Path) -> u32 {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
-}
-
-/// Read a sysfs file, trimmed, dropping empty/missing to `None`.
-fn read_trimmed(path: &Path) -> Option<String> {
-    let s = fs::read_to_string(path).ok()?;
-    let t = s.trim();
-    (!t.is_empty()).then(|| t.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,7 +118,6 @@ mod tests {
         assert_eq!(s.mdev_types[1].name.as_deref(), Some("GRID RTX6000-4Q"));
         assert_eq!(s.mdev_types[1].available, 2);
         assert!(s.is_capable());
-        assert!(s.mdev_available()); // nvidia-256 has 2 free
         assert_eq!(s.sriov_totalvfs, 0);
         let _ = fs::remove_dir_all(&tmp);
     }

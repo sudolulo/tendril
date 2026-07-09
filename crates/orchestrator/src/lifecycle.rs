@@ -76,13 +76,6 @@ impl Libvirt {
         }
     }
 
-    /// The per-user session instance (`qemu:///session`).
-    pub fn session() -> Self {
-        Self {
-            uri: "qemu:///session".to_string(),
-        }
-    }
-
     /// Build the full `virsh` argument list for a subcommand (connection URI + args). Pure.
     pub fn virsh_args(&self, sub: &[&str]) -> Vec<String> {
         let mut args = vec!["-c".to_string(), self.uri.clone()];
@@ -104,6 +97,11 @@ impl Libvirt {
         }
     }
 
+    /// Run a `virsh` subcommand for its side effect: succeed silently, or surface stderr as the error.
+    fn run_ok(&self, sub: &[&str]) -> io::Result<()> {
+        Self::ok(self.run(sub)?).map(|_| ())
+    }
+
     /// Define a persistent domain from its XML. Validates, but does not start it.
     pub fn define(&self, name: &str, xml: &str) -> io::Result<()> {
         let path = scratch_path(&format!("tendril-{name}.xml"));
@@ -116,12 +114,12 @@ impl Libvirt {
 
     /// Start a defined domain (this is when a passthrough GPU is detached from the host).
     pub fn start(&self, name: &str) -> io::Result<()> {
-        Self::ok(self.run(&["start", name])?).map(|_| ())
+        self.run_ok(&["start", name])
     }
 
     /// Send a key by Linux input keycode (e.g. 28 = Enter) to the domain's console.
     pub fn send_key(&self, name: &str, keycode: u32) -> io::Result<()> {
-        Self::ok(self.run(&["send-key", name, &keycode.to_string()])?).map(|_| ())
+        self.run_ok(&["send-key", name, &keycode.to_string()])
     }
 
     /// Tap Enter repeatedly across the boot window.
@@ -138,17 +136,17 @@ impl Libvirt {
 
     /// Request a graceful shutdown.
     pub fn shutdown(&self, name: &str) -> io::Result<()> {
-        Self::ok(self.run(&["shutdown", name])?).map(|_| ())
+        self.run_ok(&["shutdown", name])
     }
 
     /// Force a domain off.
     pub fn destroy(&self, name: &str) -> io::Result<()> {
-        Self::ok(self.run(&["destroy", name])?).map(|_| ())
+        self.run_ok(&["destroy", name])
     }
 
     /// Remove a domain definition (and its nvram).
     pub fn undefine(&self, name: &str) -> io::Result<()> {
-        Self::ok(self.run(&["undefine", name, "--nvram"])?).map(|_| ())
+        self.run_ok(&["undefine", name, "--nvram"])
     }
 
     /// Attach a USB device (by vendor/product id) to a domain. Applies to the persistent config, and
@@ -241,17 +239,17 @@ impl Libvirt {
 
     /// Create a snapshot `snap` of `name` (atomic; disk state).
     pub fn snapshot_create(&self, name: &str, snap: &str) -> io::Result<()> {
-        Self::ok(self.run(&["snapshot-create-as", name, snap, "--atomic"])?).map(|_| ())
+        self.run_ok(&["snapshot-create-as", name, snap, "--atomic"])
     }
 
     /// Revert `name` to snapshot `snap` (forced, so it works from a running/paused state too).
     pub fn snapshot_revert(&self, name: &str, snap: &str) -> io::Result<()> {
-        Self::ok(self.run(&["snapshot-revert", name, snap, "--force"])?).map(|_| ())
+        self.run_ok(&["snapshot-revert", name, snap, "--force"])
     }
 
     /// Delete snapshot `snap` of `name`.
     pub fn snapshot_delete(&self, name: &str, snap: &str) -> io::Result<()> {
-        Self::ok(self.run(&["snapshot-delete", name, snap])?).map(|_| ())
+        self.run_ok(&["snapshot-delete", name, snap])
     }
 
     /// Query the in-guest QEMU agent for this domain. `connected` is false if the agent isn't running
@@ -411,10 +409,8 @@ pub fn parse_pci_hostdevs(xml: &str) -> Vec<String> {
             .map(|(inner, _)| inner)
             .unwrap_or(block);
         let attr = |key: &str| -> Option<u32> {
-            let pat = format!("{key}='");
-            let i = src.find(&pat)? + pat.len();
-            let end = src[i..].find('\'')? + i;
-            u32::from_str_radix(src[i..end].trim_start_matches("0x"), 16).ok()
+            let val = quoted_after(src, &format!("{key}='"))?;
+            u32::from_str_radix(val.trim_start_matches("0x"), 16).ok()
         };
         if let (Some(d), Some(b), Some(s), Some(f)) =
             (attr("domain"), attr("bus"), attr("slot"), attr("function"))
@@ -427,11 +423,16 @@ pub fn parse_pci_hostdevs(xml: &str) -> Vec<String> {
 
 /// Pull the hex id from a `<{elem} id='0x....'/>` element within `block`.
 fn hex_attr(block: &str, elem: &str) -> Option<u16> {
-    let needle = format!("<{elem} id='0x");
-    let start = block.find(&needle)? + needle.len();
-    let rest = &block[start..];
-    let end = rest.find('\'')?;
-    u16::from_str_radix(&rest[..end], 16).ok()
+    let val = quoted_after(block, &format!("<{elem} id='0x"))?;
+    u16::from_str_radix(val, 16).ok()
+}
+
+/// The text between the first occurrence of `pat` in `src` and the next single quote — i.e. the
+/// value of a single-quoted attribute when `pat` ends at (or inside) the opening quote.
+fn quoted_after<'a>(src: &'a str, pat: &str) -> Option<&'a str> {
+    let start = src.find(pat)? + pat.len();
+    let end = src[start..].find('\'')? + start;
+    Some(&src[start..end])
 }
 
 #[cfg(test)]

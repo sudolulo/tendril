@@ -10,13 +10,15 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
-use tendril_capability_engine::{detect, iommu, usb, GpuVendor, PassthroughViability};
+use tendril_capability_engine::{
+    detect, detect_with_groups, usb, GpuCapability, PassthroughViability,
+};
 use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso};
 use tendril_orchestrator::{
     provision, DomainState, GuestOs, InstallMedia, KickstartSpec, Libvirt, StationRequest,
     UnattendSpec,
 };
-use tendril_provisioning::{apply, Mode, PassthroughStrategy, ProvisioningStrategy};
+use tendril_provisioning::{apply, plan_for, Mode};
 
 const ISO_DIR: &str = "/var/lib/tendril/isos";
 const DISK_DIR: &str = "/var/lib/tendril";
@@ -135,7 +137,7 @@ fn menu_hardware() {
         println!(
             "  {}. {} {}  \x1b[2m[{}]\x1b[0m",
             i + 1,
-            vendor(g.gpu.vendor),
+            g.gpu.vendor.label(),
             model,
             g.gpu.address
         );
@@ -182,26 +184,17 @@ fn menu_usb() {
 
 fn menu_passthrough() {
     header("GPU passthrough");
-    let matrix = detect();
-    let groups = iommu::read_groups();
+    let (matrix, groups) = detect_with_groups();
     let capable: Vec<_> = matrix.passthrough_capable().collect();
     if capable.is_empty() {
         println!("No passthrough-capable GPU. Enable IOMMU in BIOS, then re-check Hardware.");
         return pause();
     }
-    for (i, g) in capable.iter().enumerate() {
-        println!(
-            "  {}. {} {}  [{}]",
-            i + 1,
-            vendor(g.gpu.vendor),
-            g.gpu.model.as_deref().unwrap_or("GPU"),
-            g.gpu.address
-        );
-    }
+    print_gpu_choices(&capable);
     let Some(g) = pick("\nGPU to plan (0 to cancel): ", &capable) else {
         return;
     };
-    let plan = PassthroughStrategy.plan(&g.gpu, iommu::group_of(&g.gpu.address, &groups));
+    let plan = plan_for(&g.gpu, &groups);
     println!("\n{}", plan.summary);
     println!("Would bind these devices to \x1b[1m{}\x1b[0m:", plan.driver);
     for addr in &plan.bind_addresses {
@@ -246,28 +239,17 @@ fn menu_create_station() {
     };
 
     // GPU selection.
-    let matrix = detect();
-    let groups = iommu::read_groups();
+    let (matrix, groups) = detect_with_groups();
     let capable: Vec<_> = matrix.passthrough_capable().collect();
     let mut passthrough = Vec::new();
     if capable.is_empty() {
         println!("(No passthrough-capable GPU found — the station will install headless via VNC.)");
     } else {
         println!("Assign a GPU:");
-        for (i, g) in capable.iter().enumerate() {
-            println!(
-                "  {}. {} {} [{}]",
-                i + 1,
-                vendor(g.gpu.vendor),
-                g.gpu.model.as_deref().unwrap_or("GPU"),
-                g.gpu.address
-            );
-        }
+        print_gpu_choices(&capable);
         println!("  0. None (headless / attach later)");
         if let Some(g) = pick("GPU: ", &capable) {
-            passthrough = PassthroughStrategy
-                .plan(&g.gpu, iommu::group_of(&g.gpu.address, &groups))
-                .bind_addresses;
+            passthrough = plan_for(&g.gpu, &groups).bind_addresses;
         }
     }
 
@@ -561,12 +543,17 @@ fn parent_of(path: &str) -> String {
         .unwrap_or_else(|| ".".to_string())
 }
 
-fn vendor(v: GpuVendor) -> &'static str {
-    match v {
-        GpuVendor::Nvidia => "NVIDIA",
-        GpuVendor::Amd => "AMD",
-        GpuVendor::Intel => "Intel",
-        GpuVendor::Unknown => "GPU",
+/// Print a numbered pick-list of passthrough-capable GPUs (used by the passthrough and
+/// create-station menus).
+fn print_gpu_choices(capable: &[&GpuCapability]) {
+    for (i, g) in capable.iter().enumerate() {
+        println!(
+            "  {}. {} {}  [{}]",
+            i + 1,
+            g.gpu.vendor.label(),
+            g.gpu.model.as_deref().unwrap_or("GPU"),
+            g.gpu.address
+        );
     }
 }
 

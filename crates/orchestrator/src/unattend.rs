@@ -11,7 +11,7 @@
 
 use std::fmt::Write as _;
 
-use crate::station::GuestOs;
+use crate::xml;
 
 /// An application to fetch-and-silent-install on the station's first logon.
 ///
@@ -51,7 +51,7 @@ impl GuestApp {
         let url_app = |url: &str, exe: &str, args: &str| {
             format!(
                 "cmd /c curl.exe -fL \"{url}\" -o \"%TEMP%\\{exe}\" &amp; start /wait \"\" \"%TEMP%\\{exe}\" {args}",
-                url = xml_escape(url)
+                url = xml::escape(url)
             )
         };
         match self {
@@ -132,35 +132,12 @@ impl Default for UnattendSpec {
     }
 }
 
-impl UnattendSpec {
-    /// SteamOS/Linux guests don't use an answer file; this is Windows-only. Provided for symmetry so
-    /// callers can branch on [`GuestOs`].
-    pub fn for_guest(guest: GuestOs) -> Option<Self> {
-        match guest {
-            GuestOs::Windows => Some(Self::default()),
-            GuestOs::SteamOs => None,
-        }
-    }
-}
-
 /// virtio-win driver folders needed while installing (storage so the disk is visible, plus network,
 /// serial for the guest agent, and balloon), injected into the offline image so they survive reboot.
 const DRIVER_DIRS: &[&str] = &["viostor", "vioscsi", "NetKVM", "vioserial", "Balloon"];
 /// The virtio ISO's drive letter isn't deterministic in WinPE; list the likely ones. Paths that
 /// don't resolve are skipped by Setup, so over-listing is harmless.
 const DRIVER_DRIVES: &[char] = &['d', 'e', 'f'];
-
-/// Escape `&`/`<`/`>` for text embedded in the XML answer file — notably URLs with query strings
-/// (e.g. Discord's `?channel=stable&platform=win`), whose raw `&` would otherwise be invalid XML. The
-/// answer-file parser turns these back into literal characters, and the URLs are double-quoted on the
-/// command line so cmd doesn't treat a decoded `&` as a separator.
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
 
 /// One `<SynchronousCommand>` entry for the `oobeSystem` `FirstLogonCommands` block. Commands run in
 /// `order` sequence after auto-logon; a failing one doesn't abort the rest.
@@ -196,8 +173,8 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
              \n        <LogonCount>2147483647</LogonCount>\
              \n        <Password><Value>{pass}</Value><PlainText>true</PlainText></Password>\
              \n      </AutoLogon>",
-            user = xml_escape(&spec.username),
-            pass = xml_escape(&spec.password),
+            user = xml::escape(&spec.username),
+            pass = xml::escape(&spec.password),
         )
     } else {
         String::new()
@@ -232,7 +209,8 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
         );
         order += 1;
     }
-    if let Some(exe) = &spec.vgpu_driver_exe.as_deref().map(xml_escape) {
+    if let Some(exe) = spec.vgpu_driver_exe.as_deref() {
+        let exe = xml::escape(exe);
         // NVIDIA's DCH installer supports a silent, no-reboot install; the vGPU binds after the
         // station's next boot. The seed disc's drive letter isn't deterministic, so probe the likely ones.
         first_logon += &logon_cmd(
@@ -254,7 +232,7 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
             "Fetch FastAPI-DLS vGPU licensing token",
             &format!(
                 "cmd /c mkdir \"{dir}\" &amp; curl.exe --insecure -L \"{url}\" -o \"{dir}\\client_config_token.tok\"",
-                url = xml_escape(url),
+                url = xml::escape(url),
             ),
         );
         order += 1;
@@ -367,13 +345,13 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
 
 </unattend>
 "#,
-        locale = xml_escape(&spec.locale),
+        locale = xml::escape(&spec.locale),
         driver_paths = driver_paths,
-        edition = xml_escape(&spec.edition_name),
-        computer = xml_escape(&spec.computer_name),
-        timezone = xml_escape(&spec.timezone),
-        user = xml_escape(&spec.username),
-        pass = xml_escape(&spec.password),
+        edition = xml::escape(&spec.edition_name),
+        computer = xml::escape(&spec.computer_name),
+        timezone = xml::escape(&spec.timezone),
+        user = xml::escape(&spec.username),
+        pass = xml::escape(&spec.password),
         autologon = autologon,
         first_logon = first_logon,
     )
@@ -450,12 +428,6 @@ mod tests {
         assert!(xml.contains("virtio-win-guest-tools.exe"));
     }
 
-    #[test]
-    fn no_answer_file_for_steamos() {
-        assert!(UnattendSpec::for_guest(GuestOs::SteamOs).is_none());
-        assert!(UnattendSpec::for_guest(GuestOs::Windows).is_some());
-    }
-
     /// Number of first-logon `<SynchronousCommand>` entries in the answer file.
     fn logon_count(xml: &str) -> usize {
         xml.matches("<SynchronousCommand").count()
@@ -467,7 +439,7 @@ mod tests {
         assert!(!xml.contains("NVIDIA vGPU guest driver"));
         assert!(!xml.contains("ClientConfigToken"));
         assert!(!xml.contains("SteamSetup.exe"));
-        // Only the virtio guest-tools command — nothing follows it.
+        // Only the virtio guest-tools and virtio-fs service commands — nothing follows them.
         assert_eq!(logon_count(&xml), 2);
     }
 
@@ -514,7 +486,7 @@ mod tests {
         assert!(xml.contains("Sunshine-Windows-AMD64-installer.exe"));
         assert!(xml.contains("SunshineSetup.exe\" /S"));
         assert!(xml.contains("DiscordSetup.exe\" -s"));
-        // Steam before Sunshine before Discord; virtio + 3 apps = 4 commands.
+        // Steam before Sunshine before Discord; virtio + virtio-fs + 3 apps = 5 commands.
         assert!(xml.find("Install Steam").unwrap() < xml.find("Install Discord").unwrap());
         assert_eq!(logon_count(&xml), 5);
     }

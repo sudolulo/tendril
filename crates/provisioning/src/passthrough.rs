@@ -1,7 +1,13 @@
 //! VFIO full-GPU passthrough — the reliable default path (1 GPU -> 1 VM).
 
 use crate::strategy::{ProvisioningPlan, ProvisioningStrategy};
-use tendril_capability_engine::{GpuDevice, IommuGroup};
+use tendril_capability_engine::{iommu, GpuDevice, IommuGroup};
+
+/// Plan whole-GPU passthrough for `gpu`: [`PassthroughStrategy::plan`] with the GPU's IOMMU group
+/// looked up in `groups`. The one-stop call for the common detect-then-plan flow.
+pub fn plan_for(gpu: &GpuDevice, groups: &[IommuGroup]) -> ProvisioningPlan {
+    PassthroughStrategy.plan(gpu, iommu::group_of(&gpu.address, groups))
+}
 
 /// Binds a GPU — and every other function in its IOMMU group — to `vfio-pci` for exclusive
 /// passthrough to a single VM.

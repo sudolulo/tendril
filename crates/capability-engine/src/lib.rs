@@ -9,6 +9,7 @@
 pub mod iommu;
 pub mod matrix;
 pub mod pci;
+mod sysfs;
 pub mod usb;
 pub mod vgpu;
 
@@ -20,7 +21,14 @@ pub use vgpu::{MdevType, VgpuSupport};
 
 /// Detect all display devices on the live host and classify each into a [`CapabilityMatrix`].
 pub fn detect() -> CapabilityMatrix {
+    detect_with_groups().0
+}
+
+/// Like [`detect`], but also returns the host's IOMMU groups — for callers that need both (e.g. to
+/// plan passthrough for a chosen GPU) without reading sysfs twice.
+pub fn detect_with_groups() -> (CapabilityMatrix, Vec<IommuGroup>) {
     let gpus = pci::enumerate();
     let groups = iommu::read_groups();
-    matrix::build(gpus, &groups)
+    let matrix = matrix::build(gpus, &groups);
+    (matrix, groups)
 }

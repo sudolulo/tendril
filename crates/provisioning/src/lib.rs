@@ -9,5 +9,5 @@ pub mod passthrough;
 pub mod strategy;
 
 pub use apply::{Action, Mode};
-pub use passthrough::PassthroughStrategy;
+pub use passthrough::{plan_for, PassthroughStrategy};
 pub use strategy::{ProvisioningPlan, ProvisioningStrategy};

@@ -19,12 +19,12 @@
 
 use std::path::{Path, PathBuf};
 
-use tendril_capability_engine::{iommu, matrix, pci};
+use tendril_capability_engine::detect_with_groups;
 use tendril_orchestrator::guest::{build_kickstart_seed, build_seed_iso};
 use tendril_orchestrator::{
     provision, GuestOs, InstallMedia, KickstartSpec, Libvirt, StationRequest, UnattendSpec,
 };
-use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
+use tendril_provisioning::plan_for;
 
 fn arg_value(flag: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -40,6 +40,16 @@ fn has_flag(flag: &str) -> bool {
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("{msg}");
     std::process::exit(1);
+}
+
+/// The seed ISO's output path: `--seed-iso` if given, else `<name>-seed.iso` next to the disk.
+fn seed_path(name: &str, disk: &str) -> PathBuf {
+    arg_value("--seed-iso")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let dir = Path::new(disk).parent().unwrap_or_else(|| Path::new("."));
+            dir.join(format!("{name}-seed.iso"))
+        })
 }
 
 fn main() {
@@ -179,12 +189,7 @@ fn build_unattend_seed(name: &str, disk: &str) -> String {
         spec.autologon = false;
     }
 
-    let seed = arg_value("--seed-iso")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let dir = Path::new(disk).parent().unwrap_or_else(|| Path::new("."));
-            dir.join(format!("{name}-seed.iso"))
-        });
+    let seed = seed_path(name, disk);
     match build_seed_iso(&spec, &seed) {
         Ok(()) => {
             eprintln!("built unattended-setup seed ISO at {}", seed.display());
@@ -225,12 +230,7 @@ fn build_kickstart_seed_file(name: &str, disk: &str) -> String {
         spec.enable_ssh = false;
     }
 
-    let seed = arg_value("--seed-iso")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let dir = Path::new(disk).parent().unwrap_or_else(|| Path::new("."));
-            dir.join(format!("{name}-seed.iso"))
-        });
+    let seed = seed_path(name, disk);
     match build_kickstart_seed(&spec, &seed) {
         Ok(()) => {
             eprintln!("built kickstart seed ISO (OEMDRV) at {}", seed.display());
@@ -242,12 +242,9 @@ fn build_kickstart_seed_file(name: &str, disk: &str) -> String {
 
 /// The first passthrough-capable GPU's whole IOMMU group, or exit if there is none.
 fn resolve_passthrough_group() -> Vec<String> {
-    let gpus = pci::enumerate();
-    let groups = iommu::read_groups();
-    let matrix = matrix::build(gpus, &groups);
+    let (matrix, groups) = detect_with_groups();
     let Some(cap) = matrix.passthrough_capable().next() else {
         die("No passthrough-capable GPU found. Pass --no-gpu to install headless via VNC first.");
     };
-    let group = iommu::group_of(&cap.gpu.address, &groups);
-    PassthroughStrategy.plan(&cap.gpu, group).bind_addresses
+    plan_for(&cap.gpu, &groups).bind_addresses
 }

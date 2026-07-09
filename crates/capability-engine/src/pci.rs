@@ -3,8 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-/// Default sysfs path holding one directory per PCI device.
-const PCI_DEVICES: &str = "/sys/bus/pci/devices";
+use crate::sysfs::{read_hex, PCI_DEVICES};
 
 /// Where the `hwdata` package installs the PCI id database (the one `lspci` reads).
 const PCI_IDS_PATHS: &[&str] = &["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"];
@@ -26,6 +25,16 @@ impl GpuVendor {
             0x1002 => GpuVendor::Amd,
             0x8086 => GpuVendor::Intel,
             _ => GpuVendor::Unknown,
+        }
+    }
+
+    /// Short human label for menus and logs (`Unknown` reads as just "GPU").
+    pub fn label(self) -> &'static str {
+        match self {
+            GpuVendor::Nvidia => "NVIDIA",
+            GpuVendor::Amd => "AMD",
+            GpuVendor::Intel => "Intel",
+            GpuVendor::Unknown => "GPU",
         }
     }
 }
@@ -135,15 +144,6 @@ pub fn enumerate_from(devices_dir: &Path) -> Vec<GpuDevice> {
 
     gpus.sort_by(|a, b| a.address.cmp(&b.address));
     gpus
-}
-
-/// Read a sysfs file containing a hex value, with or without a `0x` prefix
-/// (e.g. PCI `class`/`vendor`, or USB `idVendor`).
-pub(crate) fn read_hex(path: &Path) -> Option<u32> {
-    let raw = fs::read_to_string(path).ok()?;
-    let trimmed = raw.trim();
-    let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    u32::from_str_radix(hex, 16).ok()
 }
 
 #[cfg(test)]

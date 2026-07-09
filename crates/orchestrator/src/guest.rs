@@ -10,6 +10,18 @@ use std::process::Command;
 use crate::kickstart::{render_kickstart, KickstartSpec};
 use crate::unattend::{render_autounattend, UnattendSpec};
 
+/// Run `cmd` to completion; a non-zero exit becomes an `io::Error` carrying the trimmed stderr.
+fn run_checked(cmd: &mut Command) -> io::Result<()> {
+    let out = cmd.output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
+    }
+}
+
 /// Create a qcow2 disk of `size_gib` gigabytes at `path` (fails if it already exists).
 pub fn create_disk(path: &Path, size_gib: u32) -> io::Result<()> {
     if path.exists() {
@@ -18,22 +30,13 @@ pub fn create_disk(path: &Path, size_gib: u32) -> io::Result<()> {
             format!("disk already exists: {}", path.display()),
         ));
     }
-    let out = Command::new("qemu-img")
-        .args([
-            "create",
-            "-f",
-            "qcow2",
-            &path.to_string_lossy(),
-            &format!("{size_gib}G"),
-        ])
-        .output()?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ))
-    }
+    run_checked(Command::new("qemu-img").args([
+        "create",
+        "-f",
+        "qcow2",
+        &path.to_string_lossy(),
+        &format!("{size_gib}G"),
+    ]))
 }
 
 /// Create a qcow2 **overlay** at `path` backed by `base` (copy-on-write). The base image is shared,
@@ -53,25 +56,16 @@ pub fn create_overlay(path: &Path, base: &Path) -> io::Result<()> {
             format!("base image not found: {}", base.display()),
         ));
     }
-    let out = Command::new("qemu-img")
-        .args([
-            "create",
-            "-f",
-            "qcow2",
-            "-F",
-            "qcow2",
-            "-b",
-            &base.to_string_lossy(),
-            &path.to_string_lossy(),
-        ])
-        .output()?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ))
-    }
+    run_checked(Command::new("qemu-img").args([
+        "create",
+        "-f",
+        "qcow2",
+        "-F",
+        "qcow2",
+        "-b",
+        &base.to_string_lossy(),
+        &path.to_string_lossy(),
+    ]))
 }
 
 /// The install media a station needs to bring up its guest OS.
@@ -175,26 +169,19 @@ fn build_media_iso(
             "neither genisoimage nor mkisofs found (install genisoimage)",
         )
     })?;
-    let out = Command::new(mkisofs)
-        .args([
-            "-quiet",
-            "-J", // Joliet + Rock Ridge, so the long filename survives
-            "-r",
-            "-V",
-            label,
-            "-o",
-            &out_path.to_string_lossy(),
-            &staging.to_string_lossy(),
-        ])
-        .output()?;
+    let result = run_checked(Command::new(mkisofs).args([
+        "-quiet",
+        "-J", // Joliet + Rock Ridge, so the long filename survives
+        "-r",
+        "-V",
+        label,
+        "-o",
+        &out_path.to_string_lossy(),
+        &staging.to_string_lossy(),
+    ]));
+    // Clean up the staging dir on success and error alike.
     let _ = std::fs::remove_dir_all(&staging);
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ))
-    }
+    result
 }
 
 fn which_mkisofs() -> Option<&'static str> {

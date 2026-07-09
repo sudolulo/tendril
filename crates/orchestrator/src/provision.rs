@@ -98,17 +98,9 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
         }
     }
 
-    // A GPU address is required by the spec even when nothing is passed through; the renderer only
-    // emits hostdevs for `passthrough_addresses`, so this placeholder is inert when that's empty.
-    let gpu_address = req
-        .passthrough_addresses
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "0000:00:00.0".to_string());
     let station = StationSpec {
         name: req.name.clone(),
         guest: req.guest,
-        gpu_address,
         native_hardware: req.native_hardware,
     };
     let spec = DomainSpec {

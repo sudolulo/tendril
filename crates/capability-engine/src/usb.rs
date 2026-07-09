@@ -5,9 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::iommu::{self, IommuGroup, PassthroughViability};
-use crate::pci::read_hex;
+use crate::sysfs::{read_hex, PCI_DEVICES};
 
-const PCI_DEVICES: &str = "/sys/bus/pci/devices";
 const USB_DEVICES: &str = "/sys/bus/usb/devices";
 
 /// A USB host controller (PCI class `0x0c03`) — a candidate for whole-controller passthrough,

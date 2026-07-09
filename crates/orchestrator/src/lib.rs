@@ -12,6 +12,7 @@ pub mod provision;
 pub mod role;
 pub mod station;
 pub mod unattend;
+mod xml;
 
 pub use domain::{CpuPinning, DomainSpec, UsbPassthrough};
 pub use guest::{build_kickstart_seed_with, build_seed_iso_with, InstallMedia};

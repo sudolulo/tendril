@@ -3,44 +3,44 @@
 //! Demonstrates the pipeline end to end: detect → plan → domain XML. Prints XML only; it does not
 //! define or start anything with libvirt.
 
-use tendril_capability_engine::{iommu, matrix, pci};
-use tendril_orchestrator::domain::{render, DomainSpec};
-use tendril_orchestrator::{GuestOs, InstallMedia, StationSpec};
-use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
+use tendril_capability_engine::detect_with_groups;
+use tendril_orchestrator::{provision, GuestOs, InstallMedia, Libvirt, StationRequest};
+use tendril_provisioning::plan_for;
 
 fn main() {
-    let gpus = pci::enumerate();
-    let groups = iommu::read_groups();
-    let matrix = matrix::build(gpus, &groups);
+    let (matrix, groups) = detect_with_groups();
 
     let Some(cap) = matrix.passthrough_capable().next() else {
         println!("No passthrough-capable GPU to build a station for.");
         return;
     };
 
-    let group = iommu::group_of(&cap.gpu.address, &groups);
-    let plan = PassthroughStrategy.plan(&cap.gpu, group);
-
-    let station = StationSpec {
+    let req = StationRequest {
         name: "station1".to_string(),
         guest: GuestOs::Windows,
-        gpu_address: cap.gpu.address.clone(),
-        native_hardware: false,
-    };
-    let spec = DomainSpec {
-        station: &station,
+        disk_path: "/var/lib/tendril/station1.qcow2".to_string(),
+        size_gib: 128,
+        create_disk: false,
         vcpus: 8,
         memory_mib: 16384,
-        disk_path: "/var/lib/tendril/station1.qcow2".to_string(),
-        passthrough_addresses: plan.bind_addresses,
+        native_hardware: false,
+        passthrough_addresses: plan_for(&cap.gpu, &groups).bind_addresses,
         mdev_uuid: None,
         media: InstallMedia::none(),
         usb_devices: Vec::new(),
+        define: false,
+        start: false,
         steam_library_dir: None,
-        data_disk_path: None,
+        data_disk: None,
         cpu_pinning: None,
         hugepages: false,
     };
 
-    print!("{}", render(&spec));
+    match provision(&req, &Libvirt::system()) {
+        Ok(report) => print!("{}", report.xml),
+        Err(e) => {
+            eprintln!("provision failed: {e}");
+            std::process::exit(1);
+        }
+    }
 }

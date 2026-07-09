@@ -260,9 +260,10 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("    <tpm model='tpm-crb'>\n");
     xml.push_str("      <backend type='emulator' version='2.0'/>\n");
     xml.push_str("    </tpm>\n");
-    // A console for setup, before the passed-through GPU drives the real monitor. Listens on all
-    // interfaces so the web console's proxy — and a native VNC viewer on the LAN — can reach it.
-    xml.push_str("    <graphics type='vnc' port='-1' listen='0.0.0.0'/>\n");
+    // A console for setup, before the passed-through GPU drives the real monitor. Bound to localhost
+    // (NOT 0.0.0.0): the web console's proxy runs on this host and reaches it fine, but the raw,
+    // unauthenticated VNC is never exposed to the LAN.
+    xml.push_str("    <graphics type='vnc' port='-1' listen='127.0.0.1'/>\n");
     xml.push_str("    <video>\n      <model type='virtio'/>\n    </video>\n");
     // GPU passthrough: the whole IOMMU group as one unit (also an SR-IOV VF, which is a plain PCI fn).
     for addr in &spec.passthrough_addresses {

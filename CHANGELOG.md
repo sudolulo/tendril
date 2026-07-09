@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.19.0] - 2026-07-08
+## [0.20.0] - 2026-07-08
 
-Invisible-by-default NVIDIA vGPU: the Windows guest driver now auto-fetches like Linux, and licensing
-is automatic (a built-in server, or bring your own). Plus AGPL relicensing, a stable release channel,
-and optionally-signed images.
+Invisible-by-default NVIDIA vGPU: one **vGPU** panel (driver → guest driver → licensing, all automatic),
+the Windows guest driver auto-fetches like Linux, and licensing is automatic (a built-in server, or
+bring your own). Plus AGPL relicensing, a stable release channel, and optionally-signed images.
 
 ### Added
 - **NVIDIA vGPU licensing is automatic.** The built-in FastAPI-DLS license server auto-starts with
@@ -41,6 +41,10 @@ and optionally-signed images.
   public key is committed as `cosign.pub`, with verification steps in `docs/CHANNELS.md`.
 
 ### Changed
+- **One vGPU panel.** The System page's separate "vGPU host driver" and "vGPU licensing" panels are
+  merged into a single **vGPU** panel — host driver → guest driver → licensing, top to bottom, all
+  automatic. Licensing no longer has its own opt-in step: the built-in server is the default and
+  auto-starts the moment the host driver is active (staging the licensed `.run` is the single gate).
 - **The Windows vGPU guest driver is now invisible too.** It's auto-fetched from NVIDIA's own public
   bucket (paired per vGPU release, verified for 15.4–18.4) to match the staged host driver branch —
   exactly like the Linux `.run`. The old "NVIDIA doesn't publish it, upload it yourself" claim was
@@ -552,8 +556,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.19.0...HEAD
-[0.19.0]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...v0.19.0
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.20.0...HEAD
+[0.20.0]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...v0.20.0
 [0.18.0]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...v0.18.0
 [0.17.0]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...v0.17.0
 [0.16.0]: https://git.onetick.ninja/flan/tendril/compare/v0.15.0...v0.16.0

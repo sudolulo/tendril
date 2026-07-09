@@ -139,10 +139,12 @@ pub fn render_kickstart(spec: &KickstartSpec) -> String {
     let _ = writeln!(ks, "rootpw --lock");
     // Quote the values so a space / extra token in the password can't inject additional options into
     // Anaconda's `user` command (the web layer already restricts the username charset).
+    // Use the re-sanitized `user` (not raw spec.username) and strip any `"` from the password so a
+    // crafted value can't inject extra pykickstart `user` options (e.g. --uid=0) by closing the quote.
+    let password = spec.password.replace('"', "");
     let _ = writeln!(
         ks,
-        "user --name=\"{}\" --password=\"{}\" --plaintext --groups=wheel",
-        spec.username, spec.password
+        "user --name=\"{user}\" --password=\"{password}\" --plaintext --groups=wheel"
     );
     if spec.enable_ssh {
         let _ = writeln!(ks, "services --enabled=sshd");

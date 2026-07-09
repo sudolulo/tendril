@@ -619,7 +619,7 @@ fn fetch_peer(p: &Peer) -> NodeInfo {
     let url = format!("{base}/api/node");
     let auth = format!("X-Tendril-Federation: {}", federation_token());
     let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
-    args.extend(["--max-time", "5", "-H", &auth, &url]);
+    args.extend(["--max-time", "5", "-H", &auth, "--", &url]);
     let parsed = ui::run_result("curl", &args)
         .ok()
         .and_then(|s| serde_json::from_str::<NodeInfo>(&s).ok());
@@ -1253,7 +1253,7 @@ fn remote_station_action(
     let ep = format!("{base}/api/station/{name}/{action}");
     let auth = format!("X-Tendril-Federation: {}", federation_token());
     let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
-    args.extend(["--max-time", "60", "-X", "POST", "-H", &auth, &ep]);
+    args.extend(["--max-time", "60", "-X", "POST", "-H", &auth, "--", &ep]);
     let out = ui::run_result("curl", &args)?;
     let res: ProvisionResult =
         serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
@@ -1297,6 +1297,7 @@ fn remote_provision(url: &str, fed: Option<&str>, spec: &ProvisionSpec) -> Resul
         "Content-Type: application/json",
         "-d",
         &body,
+        "--",
         &ep,
     ]);
     let out = ui::run_result("curl", &args)?;
@@ -1450,6 +1451,7 @@ fn remote_reimage(url: &str, fed: Option<&str>, spec: &ReimageSpec) -> Result<()
         "Content-Type: application/json",
         "-d",
         &body,
+        "--",
         &ep,
     ]);
     let out = ui::run_result("curl", &args)?;
@@ -1542,6 +1544,7 @@ pub fn distribute_dispatch(node: &str, name: &str, source_url: &str) -> Result<(
         "Content-Type: application/json",
         "-d",
         &body,
+        "--",
         &ep,
     ]);
     let out = ui::run_result("curl", &args)?;
@@ -1970,12 +1973,17 @@ pub async fn peer_station_detail(
 }
 
 fn peer_console_script(node: &str, name: &str) -> String {
+    // JSON-encode both segments into JS string literals and URL-encode them into the path, so
+    // neither can break out of the inline `<script>` (both are already charset-constrained upstream).
+    let node_js = serde_json::to_string(node).unwrap_or_else(|_| "\"\"".to_string());
+    let name_js = serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string());
     format!(
         r#"import RFB from '/assets/novnc/core/rfb.js';
 const screen=document.getElementById('screen');const s=document.getElementById('console-status');const say=(m)=>{{if(s)s.textContent=m;}};
+const peerNode={node_js};const peerName={name_js};
 try{{
   const proto=location.protocol==='https:'?'wss://':'ws://';
-  const rfb=new RFB(screen,proto+location.host+'/fleet/{node}/station/{name}/vnc');
+  const rfb=new RFB(screen,proto+location.host+'/fleet/'+encodeURIComponent(peerNode)+'/station/'+encodeURIComponent(peerName)+'/vnc');
   rfb.scaleViewport=true;rfb.background='#000';
   rfb.addEventListener('connect',()=>say(''));
   rfb.addEventListener('disconnect',(e)=>say((e.detail&&e.detail.clean)?'Console closed.':'Console connection lost — reload to reconnect.'));

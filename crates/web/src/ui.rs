@@ -199,11 +199,18 @@ pub fn safe_field(s: &str) -> bool {
 
 /// Whether a URL is safe to fetch server-side / render as a link: an absolute `http`/`https` URL.
 /// Blocks `file:`, `-`-leading curl-option tokens, `javascript:`, and other schemes (SSRF / XSS / curl
-/// argument injection).
+/// argument injection). Also rejects shell metacharacters — several validated URLs end up inside a
+/// guest-side `sh -c '… curl "{url}" …'` (the DLS token fetch), so `$()`, backticks, `;`, quotes, etc.
+/// must never survive into that command even though they contain no whitespace.
 pub fn is_http_url(s: &str) -> bool {
     let s = s.trim();
+    const SHELL_META: &[char] = &[
+        '$', '`', ';', '"', '\'', '(', ')', '<', '>', '|', '&', '\\', '{', '}', '*', '?', '!',
+    ];
     (s.starts_with("http://") || s.starts_with("https://"))
-        && !s.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !s
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || SHELL_META.contains(&c))
 }
 
 /// Pre-create a private-key file at 0600 *before* `openssl -keyout` writes into it, so the key is

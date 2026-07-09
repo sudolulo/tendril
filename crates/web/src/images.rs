@@ -412,6 +412,11 @@ fn note(ok: bool, msg: &str) -> Markup {
 /// Only the OS boot disk (`vda`) is replaced — a station's persistent **data volume** (`vdb`), if it
 /// has one, is left untouched, so games/saves survive a base-image push.
 pub(crate) fn reimage_station(name: &str, image_path: &str) -> Result<(), String> {
+    // Reachable from the token-authed /api/reimage peer path — re-check the name (as the other
+    // federation entry points do) so a `-`-leading value can't reach virsh as an argv option.
+    if !crate::stations::valid_station_name(name) {
+        return Err("invalid station name".into());
+    }
     let lv = Libvirt::system();
     let was_running = matches!(lv.state(name), DomainState::Running);
     let disk = station_disk(name).ok_or("couldn't find the station's disk")?;

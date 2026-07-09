@@ -64,9 +64,12 @@ pub fn start() {
                     ServiceEvent::ServiceResolved(info) => {
                         let n = info.get_property_val_str("name").unwrap_or("").to_string();
                         let u = info.get_property_val_str("url").unwrap_or("").to_string();
+                        // Keep the paired federation endpoint only if it too is a real http(s) URL —
+                        // it's consumed by the federation/mTLS layer, so don't store a LAN-advertised
+                        // `fed` with a bogus scheme or shell-special characters.
                         let f = info
                             .get_property_val_str("fed")
-                            .filter(|s| !s.is_empty())
+                            .filter(|s| crate::ui::is_http_url(s))
                             .map(str::to_string);
                         // Only keep an advert with a real http(s) URL — a LAN attacker can advertise
                         // anything, and the URL is later rendered as a link (block `javascript:` etc.).

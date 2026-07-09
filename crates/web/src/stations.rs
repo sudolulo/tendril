@@ -1317,7 +1317,7 @@ pub(crate) fn valid_guest_fields(
     Ok(())
 }
 
-fn valid_station_name(name: &str) -> bool {
+pub(crate) fn valid_station_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains("..")
         // No leading '-': the name becomes a bare virsh/libvirt argv token, so `-x`/`--all` would be
@@ -1751,14 +1751,19 @@ fn usb_op(name: &str, id: &str, add: bool) -> Markup {
 }
 
 fn console_script(name: &str) -> String {
+    // JSON-encode the name into a JS string literal (rather than splice it raw into inline
+    // `<script>`) and URL-encode it into the path — so a name with JS/URL-special characters can
+    // never break out of the string, even though `valid_station_name` already constrains the charset.
+    let name_js = serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string());
     format!(
         r#"import RFB from '/assets/novnc/core/rfb.js';
 const screen = document.getElementById('screen');
 const statusEl = document.getElementById('console-status');
 const say = (m) => {{ if (statusEl) statusEl.textContent = m; }};
+const stationName = {name_js};
 try {{
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  const rfb = new RFB(screen, proto + location.host + '/stations/{name}/vnc');
+  const rfb = new RFB(screen, proto + location.host + '/stations/' + encodeURIComponent(stationName) + '/vnc');
   rfb.scaleViewport = true;
   rfb.background = '#000';
   rfb.addEventListener('connect', () => say(''));

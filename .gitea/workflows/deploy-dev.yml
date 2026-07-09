@@ -65,6 +65,13 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # Same fail-fast disk guard as release.yml — the edge image build dies cryptically
+          # mid-osbuild when / runs out.
+          free_gib="$(df -BG --output=avail / | tail -1 | tr -dc 0-9)"
+          [ "$free_gib" -ge 10 ] || {
+            echo "only ${free_gib}GiB free on / — need >=10GiB; prune /var/lib/containers (podman image prune) or /var/tmp/buildah*" >&2
+            exit 1
+          }
           work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
           git clone "https://oauth2:${TOKEN}@${REG}/${REPO}.git" "$work/repo"
           cd "$work/repo"

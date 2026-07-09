@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Image-building CI jobs (release, publish-edge) fail fast with a clear message when the runner
+  has under 10 GiB free, instead of dying 10+ minutes in with a cryptic xorrisofs/osbuild error
+  (how the first 0.22.0/0.23.0 release runs failed).
+
 ## [0.23.0] - 2026-07-09
 
 A correctness-audit and consolidation release following 0.22.0's security rounds: eight iterative

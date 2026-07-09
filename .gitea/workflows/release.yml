@@ -49,6 +49,14 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
+          # Fail fast when the runner is low on disk — an image+ISO build needs several GiB, and
+          # running out mid-build burns 10+ minutes and surfaces as a cryptic xorrisofs/osbuild
+          # error (exactly how the 0.22.0 and first 0.23.0 release runs died).
+          free_gib="$(df -BG --output=avail / | tail -1 | tr -dc 0-9)"
+          [ "$free_gib" -ge 10 ] || {
+            echo "only ${free_gib}GiB free on / — need >=10GiB; prune /var/lib/containers (podman image prune) or /var/tmp/buildah*" >&2
+            exit 1
+          }
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
 

@@ -1,8 +1,8 @@
 //! Render a [`StationSpec`] into a libvirt domain XML.
 //!
 //! Base domain plus composable overlays: GPU passthrough (the station's whole IOMMU group), OVMF
-//! Secure Boot + an emulated TPM (both required by Windows 11), and the opt-in "native-hardware"
-//! fingerprint reducer. CPU pinning and hugepages are TODO.
+//! Secure Boot + an emulated TPM (both required by Windows 11), low-latency CPU pinning + hugepages,
+//! and the opt-in "native-hardware" fingerprint reducer (hides KVM/hypervisor + spoofs SMBIOS/DMI).
 
 use std::fmt::Write as _;
 
@@ -130,7 +130,38 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("    <firmware>\n");
     xml.push_str("      <feature enabled='yes' name='secure-boot'/>\n");
     xml.push_str("    </firmware>\n");
+    // native-hardware: report the SMBIOS/DMI from <sysinfo> below, so the guest sees OEM strings
+    // instead of the give-away "QEMU"/"Bochs"/"Standard PC" that anti-cheat + VM-detection read.
+    if s.native_hardware {
+        xml.push_str("    <smbios mode='sysinfo'/>\n");
+    }
     xml.push_str("  </os>\n");
+
+    // native-hardware: OEM-like SMBIOS tables. Values look like a real consumer desktop; the serials
+    // derive from the station name so guests don't all share one (itself a tell) while render stays
+    // deterministic.
+    if s.native_hardware {
+        let serial = fingerprint_serial(&s.name);
+        xml.push_str("  <sysinfo type='smbios'>\n");
+        xml.push_str("    <bios>\n");
+        xml.push_str("      <entry name='vendor'>American Megatrends Inc.</entry>\n");
+        xml.push_str("      <entry name='version'>2803</entry>\n");
+        xml.push_str("      <entry name='date'>04/12/2023</entry>\n");
+        xml.push_str("    </bios>\n");
+        xml.push_str("    <system>\n");
+        xml.push_str("      <entry name='manufacturer'>ASUS</entry>\n");
+        xml.push_str("      <entry name='product'>System Product Name</entry>\n");
+        xml.push_str("      <entry name='version'>System Version</entry>\n");
+        let _ = writeln!(xml, "      <entry name='serial'>{serial}</entry>");
+        xml.push_str("    </system>\n");
+        xml.push_str("    <baseBoard>\n");
+        xml.push_str("      <entry name='manufacturer'>ASUSTeK COMPUTER INC.</entry>\n");
+        xml.push_str("      <entry name='product'>PRIME B550-PLUS</entry>\n");
+        xml.push_str("      <entry name='version'>Rev X.0x</entry>\n");
+        let _ = writeln!(xml, "      <entry name='serial'>{serial}</entry>");
+        xml.push_str("    </baseBoard>\n");
+        xml.push_str("  </sysinfo>\n");
+    }
 
     // Features (+ native-hardware fingerprint reduction).
     xml.push_str("  <features>\n");
@@ -261,6 +292,17 @@ pub fn render(spec: &DomainSpec) -> String {
     xml
 }
 
+/// A deterministic pseudo-serial from a station name (FNV-1a → 12 hex digits), so native-hardware
+/// guests report distinct OEM serials rather than one shared value that would itself flag a fleet.
+fn fingerprint_serial(name: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:012X}", h & 0xFFFF_FFFF_FFFF)
+}
+
 /// Convert a PCI address like `0000:83:00.0` into a libvirt `<address .../>` element.
 fn pci_address_xml(address: &str) -> Option<String> {
     let (bdf, function) = address.rsplit_once('.')?;
@@ -338,6 +380,13 @@ mod tests {
         assert!(xml.contains("<hidden state='on'/>"));
         assert!(xml.contains("policy='disable' name='hypervisor'"));
         assert!(xml.contains("offset='utc'")); // SteamOS
+                                               // SMBIOS/DMI is spoofed to OEM strings, and reported via <os><smbios mode='sysinfo'/>.
+        assert!(xml.contains("<smbios mode='sysinfo'/>"));
+        assert!(xml.contains("<sysinfo type='smbios'>"));
+        assert!(xml.contains("American Megatrends"));
+        assert!(!xml.contains("QEMU"));
+        // Different station names yield different serials (so a fleet doesn't share one).
+        assert_ne!(fingerprint_serial("alpha"), fingerprint_serial("beta"));
     }
 
     #[test]

@@ -91,7 +91,8 @@ pub async fn fetch(axum::extract::Path(which): axum::extract::Path<String>) -> M
     let iso_dir = crate::storage::iso_dir();
     match locate_script(script) {
         Some(path) => match Command::new(&path).arg("--dest").arg(&iso_dir).spawn() {
-            Ok(_) => {
+            Ok(child) => {
+                reap(child);
                 html! { div.banner.ok { "Started downloading in the background (several GB). Refresh this page to see files appear in " span.mono { (iso_dir) } "." } }
             }
             Err(e) => html! { div.banner.error { "Could not start " (path) ": " (e) } },
@@ -322,9 +323,19 @@ pub async fn verify(axum::extract::Path(iso): axum::extract::Path<String>) -> Ma
             s = shq(&script),
             p = shq(&path)
         );
-        let _ = Command::new("sh").arg("-c").arg(cmd).spawn();
+        if let Ok(child) = Command::new("sh").arg("-c").arg(cmd).spawn() {
+            reap(child);
+        }
     }
     verify_cell(&iso)
+}
+
+/// Reap a detached background child off-thread — a dropped `std::process::Child` is never waited
+/// on, so each finished job would otherwise linger as a zombie until the service restarts.
+fn reap(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 /// Poll target: re-render the verification cell.

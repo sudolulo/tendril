@@ -139,9 +139,15 @@ pub fn render_kickstart(spec: &KickstartSpec) -> String {
     let _ = writeln!(ks, "rootpw --lock");
     // Quote the values so a space / extra token in the password can't inject additional options into
     // Anaconda's `user` command (the web layer already restricts the username charset).
-    // Use the re-sanitized `user` (not raw spec.username) and strip any `"` from the password so a
-    // crafted value can't inject extra pykickstart `user` options (e.g. --uid=0) by closing the quote.
-    let password = spec.password.replace('"', "");
+    // Use the re-sanitized `user` (not raw spec.username) and strip `"` and `\` from the password:
+    // pykickstart tokenizes with shlex, where `\"` escapes the closing quote (a trailing `\` aborts
+    // the whole install with "no closing quotation") and `\\` collapses — so either character would
+    // inject options or silently change the account password.
+    let password: String = spec
+        .password
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\\'))
+        .collect();
     let _ = writeln!(
         ks,
         "user --name=\"{user}\" --password=\"{password}\" --plaintext --groups=wheel"
@@ -422,6 +428,18 @@ mod tests {
         );
         assert!(ks.contains("rootpw --lock"));
         assert!(ks.contains("services --enabled=sshd"));
+    }
+
+    #[test]
+    fn password_strips_shlex_specials() {
+        // pykickstart splits with shlex: `\"` escapes the closing quote (a trailing `\` aborts the
+        // install), `\\` collapses. Both characters must be stripped, like `"`.
+        let ks = render_kickstart(&KickstartSpec {
+            username: "gamer".to_string(),
+            password: "p\\w\"1\\".to_string(),
+            ..Default::default()
+        });
+        assert!(ks.contains("--password=\"pw1\" "));
     }
 
     #[test]

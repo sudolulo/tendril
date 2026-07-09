@@ -104,6 +104,7 @@ pub fn ensure() -> Result<(String, String), String> {
         let _ = std::fs::create_dir_all(d);
     }
     // 10-year P-256 self-signed cert covering this box's hostnames/IPs.
+    crate::ui::precreate_key(&key_p);
     crate::ui::run_result(
         "openssl",
         &[
@@ -264,12 +265,11 @@ fn install_pair(cert_pem: &[u8], key_pem: &[u8]) -> Result<(), String> {
     let cert_tmp = format!("{cert_p}.new");
     let key_tmp = format!("{key_p}.new");
     std::fs::write(&cert_tmp, cert_pem).map_err(|e| e.to_string())?;
+    // Write the key at 0600 from the first byte (never a 0644 window): pre-create it locked down,
+    // clearing any stale `.new` from a prior aborted install first.
+    let _ = std::fs::remove_file(&key_tmp);
+    crate::ui::precreate_key(&key_tmp);
     std::fs::write(&key_tmp, key_pem).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_tmp, std::fs::Permissions::from_mode(0o600));
-    }
     std::fs::rename(&cert_tmp, &cert_p).map_err(|e| e.to_string())?;
     std::fs::rename(&key_tmp, &key_p).map_err(|e| e.to_string())?;
     Ok(())

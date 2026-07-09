@@ -82,7 +82,7 @@ network --bootproto=dhcp --activate
 disks=""
 for d in \$(lsblk -dnro NAME,TYPE | awk '\$2=="disk"{print \$1}'); do
   case "\$d" in zram*|loop*|ram*|sr*|fd*|nbd*|dm-*) continue ;; esac
-  [ "$(cat /sys/block/$d/removable 2>/dev/null)" = 1 ] && continue
+  [ "\$(cat /sys/block/\$d/removable 2>/dev/null)" = 1 ] && continue
   disks="\$disks \$d"
 done
 set -- \$disks

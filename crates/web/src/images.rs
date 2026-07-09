@@ -532,6 +532,11 @@ pub(crate) fn pull_from(name: &str, from_url: &str, token: &str) -> Result<(), S
     if clean.is_empty() {
         return Err("invalid image name".into());
     }
+    // The source is a token-authed input (POST /api/image-pull); require a real http(s) URL so a
+    // `-`-leading value can't become a curl option (a `--` terminator backs this up below).
+    if !crate::ui::is_http_url(from_url) {
+        return Err("image source must be an http(s) URL".into());
+    }
     let dir = images_dir();
     let dest = format!("{dir}/{clean}.qcow2");
     if FsPath::new(&dest).exists() {
@@ -552,12 +557,15 @@ pub(crate) fn pull_from(name: &str, from_url: &str, token: &str) -> Result<(), S
     let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
     args.extend([
         "--fail",
+        "--proto",
+        "=https,http",
         "--max-time",
         "3600",
         "-H",
         &auth,
         "-o",
         &tmp,
+        "--",
         &src,
     ]);
     ui::run_result("curl", &args).map_err(|e| {

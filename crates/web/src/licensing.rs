@@ -144,6 +144,9 @@ fn ensure_cert(url: &str) -> Result<String, String> {
     } else {
         format!("subjectAltName=DNS:{url}")
     };
+    // Pre-create the key 0600 so openssl writes into an already-locked file (the chmod below then
+    // just reaffirms it) — no window where the DLS private key is world-readable.
+    crate::ui::precreate_key(&key);
     ui::run_result(
         "openssl",
         &[

@@ -344,7 +344,9 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
     // Public read-only demo: skip login, and turn every mutating request (POST) into a no-op that
     // returns a friendly banner — so the instance is safe to expose behind a proxy.
     if ui::is_demo() {
-        if req.method() == axum::http::Method::POST {
+        // A public demo is read-only: block every mutating POST, and also the VNC console socket —
+        // it hands live keyboard/mouse control of a guest to anyone, which is not "read-only".
+        if req.method() == axum::http::Method::POST || path.ends_with("/vnc") {
             let banner = r#"<div class="banner warn" style="margin:0">🎭 This is a live demo — actions are disabled. <a href="https://git.onetick.ninja/flan/tendril">Run Tendril</a> to use it for real.</div>"#;
             return (
                 [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -388,7 +390,12 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
     // Admin-only GETs even though they're reads: `/fleet/join-code` returns the shared token + the
     // fleet CA *private key*; the VNC console WebSockets (paths ending `/vnc`) relay live keyboard/mouse
     // to the guest, so a read-only viewer must not open one.
-    let sensitive_get = path == "/fleet/join-code" || path.ends_with("/vnc");
+    // The full-log downloads dump the entire audit trail / systemd journal (actor names, request
+    // paths, and anything services logged) — admin-only, unlike the truncated inline views.
+    let sensitive_get = path == "/fleet/join-code"
+        || path == "/system/audit/download"
+        || path == "/system/logs/download"
+        || path.ends_with("/vnc");
     // Viewer is read-only: refuse mutations (and secret-returning GETs) with a friendly banner.
     if !open && role == Some(Role::Viewer) && (is_post || sensitive_get) {
         let banner = r#"<div class="banner warn" style="margin:0">👁 Read-only access — sign in as an admin to make changes.</div>"#;

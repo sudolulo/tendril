@@ -232,7 +232,7 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
         );
         order += 1;
     }
-    if let Some(exe) = &spec.vgpu_driver_exe {
+    if let Some(exe) = &spec.vgpu_driver_exe.as_deref().map(xml_escape) {
         // NVIDIA's DCH installer supports a silent, no-reboot install; the vGPU binds after the
         // station's next boot. The seed disc's drive letter isn't deterministic, so probe the likely ones.
         first_logon += &logon_cmd(

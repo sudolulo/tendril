@@ -396,12 +396,17 @@ pub async fn api_fleet_register(
         });
     }
     let name = safe_component(r.name.trim());
-    // The advertised UI URL is stored and later curl'd; require a real http(s) URL so a `-`-leading
-    // value can't become a curl option and a rogue registration can't point us at a `file:`/other URL.
-    if name.is_empty() || !ui::is_http_url(r.ui.trim()) {
+    // Both URLs are stored in federation.conf and later curl'd as base URLs. Require real http(s) URLs
+    // (fed may be empty for token-only peers): a newline would inject config lines (e.g. a rogue token=),
+    // and a `-`/`file:` value would become a curl option / non-http fetch — all as root.
+    let fed = r.fed.trim();
+    if name.is_empty()
+        || !ui::is_http_url(r.ui.trim())
+        || (!fed.is_empty() && !ui::is_http_url(fed))
+    {
         return axum::Json(ProvisionResult {
             ok: false,
-            error: Some("register requires a node name and an http(s) UI url".into()),
+            error: Some("register requires a node name and http(s) UI/fed urls".into()),
         });
     }
     let entry = format!("{}={}|{}", name, r.ui.trim(), r.fed.trim());
@@ -469,13 +474,19 @@ pub fn apply_join_code(code: &str) -> Result<String, String> {
     if jc.name.trim().is_empty() || jc.token.trim().is_empty() || jc.ca.trim().is_empty() {
         return Err("join code is missing the fleet name, token, or CA".into());
     }
+    // ui/fed become peer base URLs stored in federation.conf and later curl'd — require real http(s)
+    // URLs (fed optional) so the code can't inject a config line or a curl-option/non-http endpoint.
+    let fed = jc.fed.trim();
+    if !crate::ui::is_http_url(jc.ui.trim()) || (!fed.is_empty() && !crate::ui::is_http_url(fed)) {
+        return Err("join code has an invalid node URL".into());
+    }
     crate::fedtls::install_ca(&jc.ca, &jc.cakey)?;
     set_conf_token(&jc.token)?;
     add_conf_peer(&format!(
         "{}={}|{}",
         safe_component(jc.name.trim()),
-        jc.ui,
-        jc.fed
+        jc.ui.trim(),
+        fed
     ))?;
     match register_with(&jc) {
         Ok(()) => Ok(format!(

@@ -206,6 +206,22 @@ pub fn is_http_url(s: &str) -> bool {
         && !s.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
+/// Pre-create a private-key file at 0600 *before* `openssl -keyout` writes into it, so the key is
+/// never briefly world-readable in the window between openssl creating it (with the process umask,
+/// often 0644) and a follow-up chmod. openssl opens the existing file rather than recreating it, so
+/// the tight perms carry through. No-op if the file already exists.
+#[cfg(unix)]
+pub fn precreate_key(path: &str) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path);
+}
+#[cfg(not(unix))]
+pub fn precreate_key(_path: &str) {}
+
 /// Constant-time equality for secrets (tokens), so a comparison doesn't leak length/prefix via timing.
 pub fn ct_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());

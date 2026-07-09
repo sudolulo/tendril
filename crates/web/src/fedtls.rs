@@ -179,12 +179,16 @@ fn ensure_ca_in(dir: &str) -> Option<(String, String)> {
     if Path::new(&ca_cert).exists() {
         return Some((ca_cert, ca_key));
     }
-    // Claim generation by creating the key file exclusively; losers wait for ca.pem to appear.
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&ca_key)
+    // Claim generation by creating the key file exclusively (0600, so openssl writes into an
+    // already-locked-down file — never a 0644 window); losers wait for ca.pem to appear.
+    let mut ca_key_opts = std::fs::OpenOptions::new();
+    ca_key_opts.write(true).create_new(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        ca_key_opts.mode(0o600);
+    }
+    match ca_key_opts.open(&ca_key) {
         Ok(_) => {
             let ok = ui::run_result(
                 "openssl",
@@ -245,7 +249,8 @@ fn build_identity() -> Option<Identity> {
         let csr = format!("{id_dir}/node.csr");
         let ext = format!("{id_dir}/node.ext");
         let name = crate::federation::node_name();
-        // Key + CSR.
+        // Key + CSR. Pre-create the key 0600 so openssl never leaves it briefly world-readable.
+        crate::ui::precreate_key(&node_key);
         ui::run_result(
             "openssl",
             &[

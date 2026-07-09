@@ -210,7 +210,7 @@ pub fn section() -> Markup {
                 (Some(_), Some(r)) => {
                     p.sub style="margin:0" {
                         "Guest driver: automatic — " b { (r.label) } " installed per station"
-                        @if cached { ", cached ✓" } @else { "" } "."
+                        @if cached { ", cached ✓" } "."
                     }
                 }
                 (Some(hb), None) => {

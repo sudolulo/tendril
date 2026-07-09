@@ -86,6 +86,20 @@ const GAMESCOPE_SESSION: &str = "gamescope-session.desktop";
 /// Render `spec` into an Anaconda kickstart.
 pub fn render_kickstart(spec: &KickstartSpec) -> String {
     let mut ks = String::new();
+    // The username reaches several *unquoted* shell positions in the `%post` scripts below
+    // (`usermod`, `touch .../linger/<user>`, `getent`, `install -o <user>`). The web layer already
+    // restricts the charset, but re-clamp here so kickstart rendering is self-defending: drop
+    // anything outside a POSIX-safe account charset, falling back to the default station name.
+    let user: String = spec
+        .username
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    let user = if user.is_empty() || user.starts_with('-') {
+        "player".to_string()
+    } else {
+        user
+    };
     let _ = writeln!(
         ks,
         "# Tendril unattended install for a SteamOS-style (Bazzite) gaming station.\n\
@@ -149,7 +163,7 @@ pub fn render_kickstart(spec: &KickstartSpec) -> String {
              Relogin=true\n\
              EOF\n\
              %end\n",
-            user = spec.username,
+            user = user,
             session = GAMESCOPE_SESSION,
         );
     }
@@ -305,7 +319,7 @@ EOF
 systemctl enable tendril-sunshine-setup.service
 %end
 "##,
-            user = spec.username,
+            user = user,
         );
     }
 

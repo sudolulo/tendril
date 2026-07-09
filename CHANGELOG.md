@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-A correctness-audit round following 0.22.0's security rounds: a full-codebase review for logic bugs
-and cleanups (not security), then a second pass over the fixes themselves. No feature or API changes.
+## [0.23.0] - 2026-07-09
+
+A correctness-audit and consolidation release following 0.22.0's security rounds: eight iterative
+review rounds over the whole codebase (49 fixes), a ~350-line deduplication refactor, and two CLI
+removals — the final independent full-tree pass came back with **no findings**. No new features;
+see *Removed* for the two retired binaries. PXE and unattended-install fixes still want one real
+end-to-end run (those paths were broken before, so they have never completed on hardware).
 
 ### Fixed
 - **Kickstart passwords with backslashes.** pykickstart tokenizes with shlex, so a trailing `\`
@@ -711,7 +716,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.22.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.23.0...HEAD
+[0.23.0]: https://git.onetick.ninja/flan/tendril/compare/v0.22.0...v0.23.0
 [0.22.0]: https://git.onetick.ninja/flan/tendril/compare/v0.21.0...v0.22.0
 [0.21.0]: https://git.onetick.ninja/flan/tendril/compare/v0.20.0...v0.21.0
 [0.20.0]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...v0.20.0

@@ -9,7 +9,7 @@ what we pin.
 Tendril releases follow [Semantic Versioning](https://semver.org): `MAJOR.MINOR.PATCH`.
 
 - **PATCH** — fixes, driver/security bumps, no behavior change for users.
-- **MINOR** — new capabilities (a new provisioning strategy, a new output backend, clustering, …).
+- **MINOR** — new capabilities (a new provisioning strategy, a new output backend, fleet capabilities, …).
 - **MAJOR** — breaking changes to the on-disk layout, config schema, or public API.
 
 Pre-1.0, minor releases may break; roadmap phases in [PLAN.md](PLAN.md) map to minor milestones.

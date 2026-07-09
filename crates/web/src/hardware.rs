@@ -60,11 +60,23 @@ fn used_by(station: Option<&String>) -> Markup {
     }
 }
 
+/// The IOMMU-disabled warning the first-boot hardware check writes when VT-d/AMD-Vi is off in firmware
+/// (see image/console/tendril-firstboot.sh) — the one passthrough blocker only the user can fix.
+fn iommu_warning() -> Option<String> {
+    std::fs::read_to_string("/var/lib/tendril/iommu-disabled")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub async fn page() -> Markup {
     ui::page(
         "hardware",
         "Hardware",
         html! {
+            @if let Some(w) = iommu_warning() {
+                div.banner.error style="white-space:pre-wrap" { (w) }
+            }
             (ui::panel("GPUs & passthrough", None, gpu_fragment(None)))
             (ui::panel("USB devices", None, usb_panel()))
             (ui::panel("Seats", Some("USB device groups a station passes through as one"), crate::seats::panel()))

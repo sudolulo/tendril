@@ -1,0 +1,12 @@
+[Unit]
+Description=Tendril hardware detection + adaptation (per boot)
+After=local-fs.target
+Before=tendril-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/tendril/tendril-firstboot.sh
+
+[Install]
+WantedBy=multi-user.target

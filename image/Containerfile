@@ -91,6 +91,13 @@ COPY image/vgpu/ /usr/libexec/tendril/vgpu/
 COPY image/console/getty-autologin.conf /usr/lib/systemd/system/getty@tty1.service.d/autologin.conf
 COPY image/console/tendril-console.sh /etc/profile.d/tendril-console.sh
 
+# Boot-time hardware adaptation: snapshot the GPU capability matrix and flag IOMMU-off-in-BIOS (the one
+# blocker Tendril can't fix itself) so the control plane can surface it on first boot.
+COPY image/console/tendril-firstboot.sh /usr/libexec/tendril/tendril-firstboot.sh
+COPY image/console/tendril-firstboot.service /usr/lib/systemd/system/tendril-firstboot.service
+RUN chmod +x /usr/libexec/tendril/tendril-firstboot.sh \
+    && systemctl enable tendril-firstboot.service
+
 LABEL org.opencontainers.image.source="https://git.onetick.ninja/flan/tendril"
 LABEL org.opencontainers.image.description="Tendril — Fedora bootc host for GPU-passthrough gaming VMs"
 

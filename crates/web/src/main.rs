@@ -125,6 +125,15 @@ async fn main() {
         .route("/stations/:name/progress", get(stations::progress))
         .route("/stations/:name/save-image", post(images::save))
         .route("/stations/:name/resplit", post(stations::resplit_action))
+        .route("/stations/:name/snapshot", post(stations::snapshot_create))
+        .route(
+            "/stations/:name/snapshot/revert",
+            post(stations::snapshot_revert),
+        )
+        .route(
+            "/stations/:name/snapshot/delete",
+            post(stations::snapshot_delete),
+        )
         .route("/stations/:name/vnc", get(stations::vnc_ws))
         .route("/images/delete", post(images::delete))
         .route("/images/panel", get(images::panel_route))

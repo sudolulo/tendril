@@ -348,6 +348,134 @@ pub async fn resplit_action(
     }
 }
 
+// ── snapshots (restore points) ──────────────────────────────────────────────────────────────────
+
+/// Sanitize a user-supplied snapshot name to something virsh accepts (alnum, dash, underscore, dot).
+fn clean_snap_name(s: &str) -> String {
+    s.trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn snapshots_fragment(lv: &Libvirt, name: &str, banner: Option<Markup>) -> Markup {
+    let snaps = lv.snapshots(name);
+    let running = matches!(lv.state(name), DomainState::Running | DomainState::Paused);
+    html! {
+        div #snap-list {
+            @if let Some(b) = banner { (b) }
+            div.pad {
+                p.sub style="margin-top:0" {
+                    "A restore point for this station's disk — snapshot before a risky change (a Windows "
+                    "update, a new anti-cheat) and roll back instantly if it breaks."
+                }
+                form hx-post=(format!("/stations/{name}/snapshot")) hx-target="#snap-list" hx-swap="outerHTML"
+                    style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px" {
+                    input name="snap" placeholder="restore-point name" required style="width:16em";
+                    button.btn.primary type="submit" { "Take snapshot" }
+                    @if running { span.sub { "Tip: shut the station down first for a clean snapshot." } }
+                }
+                @if snaps.is_empty() {
+                    div.emptybox { "No snapshots yet." }
+                } @else {
+                    table.list { tbody {
+                        @for s in &snaps {
+                            tr {
+                                td { b { (s.name) } }
+                                td.sub { (s.created) }
+                                td.sub { (s.state) }
+                                td style="text-align:right; white-space:nowrap" {
+                                    form.inline style="display:inline" hx-post=(format!("/stations/{name}/snapshot/revert"))
+                                        hx-target="#snap-list" hx-swap="outerHTML"
+                                        hx-confirm=(format!("Roll {name} back to “{}”? Changes since the snapshot are lost.", s.name)) {
+                                        input type="hidden" name="snap" value=(s.name);
+                                        button.btn.sm type="submit" { "Restore" }
+                                    }
+                                    " "
+                                    form.inline style="display:inline" hx-post=(format!("/stations/{name}/snapshot/delete"))
+                                        hx-target="#snap-list" hx-swap="outerHTML"
+                                        hx-confirm=(format!("Delete snapshot “{}”?", s.name)) {
+                                        input type="hidden" name="snap" value=(s.name);
+                                        button.btn.sm.danger type="submit" { "Delete" }
+                                    }
+                                }
+                            }
+                        }
+                    } }
+                }
+            }
+        }
+    }
+}
+
+/// The "Snapshots" panel on a station's detail page.
+fn snapshots_panel(lv: &Libvirt, name: &str) -> Markup {
+    ui::panel(
+        "Snapshots",
+        Some("restore points — roll back a bad update instantly"),
+        snapshots_fragment(lv, name, None),
+    )
+}
+
+#[derive(serde::Deserialize)]
+pub struct SnapForm {
+    #[serde(default)]
+    snap: String,
+}
+
+/// Run a snapshot action off-thread and re-render the list with a success/error banner.
+async fn snapshot_action(name: String, snap: String, verb: &'static str) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let snap = clean_snap_name(&snap);
+    let lv = Libvirt::system();
+    if snap.is_empty() {
+        return snapshots_fragment(
+            &lv,
+            &name,
+            Some(html! { div.banner.error { "Enter a name." } }),
+        );
+    }
+    let (n, s) = (name.clone(), snap.clone());
+    let res = tokio::task::spawn_blocking(move || {
+        let lv = Libvirt::system();
+        match verb {
+            "create" => lv.snapshot_create(&n, &s),
+            "revert" => lv.snapshot_revert(&n, &s),
+            "delete" => lv.snapshot_delete(&n, &s),
+            _ => Ok(()),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err(std::io::Error::other("snapshot task panicked")));
+    let banner = match (&res, verb) {
+        (Ok(()), "create") => html! { div.banner.ok { "Snapshot “" (snap) "” taken." } },
+        (Ok(()), "revert") => html! { div.banner.ok { "Restored to “" (snap) "”." } },
+        (Ok(()), _) => html! { div.banner.ok { "Snapshot “" (snap) "” deleted." } },
+        (Err(e), _) => html! { div.banner.error { (e.to_string()) } },
+    };
+    snapshots_fragment(&lv, &name, Some(banner))
+}
+
+pub async fn snapshot_create(Path(name): Path<String>, Form(f): Form<SnapForm>) -> Markup {
+    snapshot_action(name, f.snap, "create").await
+}
+pub async fn snapshot_revert(Path(name): Path<String>, Form(f): Form<SnapForm>) -> Markup {
+    snapshot_action(name, f.snap, "revert").await
+}
+pub async fn snapshot_delete(Path(name): Path<String>, Form(f): Form<SnapForm>) -> Markup {
+    snapshot_action(name, f.snap, "delete").await
+}
+
 /// The "GPU split" panel on a station's detail page — only for stations bound to a vGPU (mdev) slice.
 /// Lets you re-slice the same GPU without recreating the disk. Returns None for non-vGPU stations.
 fn resplit_panel(name: &str, running: bool) -> Option<Markup> {
@@ -1359,6 +1487,7 @@ pub async fn detail(Path(name): Path<String>) -> Response {
             }
         }))
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
+        (snapshots_panel(&lv, &name))
         @if let Some(p) = resplit_panel(&name, running) { (p) }
         (ui::panel("Save as image", Some("capture this station's disk as a reusable golden image"), html! {
             div.pad {

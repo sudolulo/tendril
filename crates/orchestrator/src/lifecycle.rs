@@ -209,6 +209,87 @@ impl Libvirt {
             _ => DomainState::Absent,
         }
     }
+
+    // ── snapshots (restore points) ──────────────────────────────────────────────────────────────
+    // Internal qcow2 snapshots: a cheap point-in-time restore point per station. Cleanest while the
+    // station is stopped (a running passthrough VM can't save device/memory state), so the UI stops
+    // it first. Revert rolls the disk back to the snapshot.
+
+    /// Create a snapshot `snap` of `name` (atomic; disk state).
+    pub fn snapshot_create(&self, name: &str, snap: &str) -> io::Result<()> {
+        Self::ok(self.run(&["snapshot-create-as", name, snap, "--atomic"])?).map(|_| ())
+    }
+
+    /// Revert `name` to snapshot `snap` (forced, so it works from a running/paused state too).
+    pub fn snapshot_revert(&self, name: &str, snap: &str) -> io::Result<()> {
+        Self::ok(self.run(&["snapshot-revert", name, snap, "--force"])?).map(|_| ())
+    }
+
+    /// Delete snapshot `snap` of `name`.
+    pub fn snapshot_delete(&self, name: &str, snap: &str) -> io::Result<()> {
+        Self::ok(self.run(&["snapshot-delete", name, snap])?).map(|_| ())
+    }
+
+    /// List a domain's snapshots (newest first), each with its creation time + state. Empty on error.
+    pub fn snapshots(&self, name: &str) -> Vec<Snapshot> {
+        let Ok(out) = self.run(&["snapshot-list", name]) else {
+            return Vec::new();
+        };
+        if !out.status.success() {
+            return Vec::new();
+        }
+        parse_snapshot_list(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
+/// A libvirt snapshot (restore point) of a station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub name: String,
+    /// Creation time as libvirt reports it (e.g. `2026-07-08 20:00:00 -0400`).
+    pub created: String,
+    /// Domain state captured (`shutoff`, `running`, …).
+    pub state: String,
+}
+
+/// Parse `virsh snapshot-list` table output into [`Snapshot`]s, newest first. The table is
+/// `Name  Creation Time  State`; we split off the first token (name) and the last (state), and treat
+/// the middle as the timestamp — robust to the timestamp's internal spaces.
+fn parse_snapshot_list(out: &str) -> Vec<Snapshot> {
+    let mut snaps = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        // Skip the header, the dashed separator, and blanks.
+        if line.is_empty()
+            || line.starts_with("Name")
+            || line.starts_with("---")
+            || line.chars().all(|c| c == '-')
+        {
+            continue;
+        }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 2 {
+            continue;
+        }
+        let name = cols[0].to_string();
+        let (created, state) = match cols.len() {
+            // name + state only (no timestamp)
+            2 => (String::new(), cols[1].to_string()),
+            // name + [timestamp words…] + state
+            _ => (
+                cols[1..cols.len() - 1].join(" "),
+                cols[cols.len() - 1].to_string(),
+            ),
+        };
+        snaps.push(Snapshot {
+            name,
+            created,
+            state,
+        });
+    }
+    // virsh lists oldest-first; show newest-first.
+    snaps.reverse();
+    snaps
 }
 
 /// Extract the `(vendor_id, product_id)` of every `type='usb'` `<hostdev>` in a domain's XML.
@@ -277,6 +358,24 @@ mod tests {
             lv.virsh_args(&["start", "station1"]),
             vec!["-c", "qemu:///system", "start", "station1"]
         );
+    }
+
+    #[test]
+    fn parses_snapshot_list_table() {
+        let out = "\
+ Name        Creation Time               State
+------------------------------------------------------
+ before-win  2026-07-08 20:00:00 -0400   shutoff
+ after-steam 2026-07-08 21:30:00 -0400   shutoff
+";
+        let snaps = parse_snapshot_list(out);
+        assert_eq!(snaps.len(), 2);
+        // newest-first
+        assert_eq!(snaps[0].name, "after-steam");
+        assert_eq!(snaps[0].state, "shutoff");
+        assert_eq!(snaps[0].created, "2026-07-08 21:30:00 -0400");
+        assert_eq!(snaps[1].name, "before-win");
+        assert!(parse_snapshot_list("").is_empty());
     }
 
     #[test]

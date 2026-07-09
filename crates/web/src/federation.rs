@@ -10,7 +10,7 @@
 use maud::{html, Markup};
 use serde::{Deserialize, Serialize};
 
-use tendril_capability_engine::{detect, GpuVendor};
+use tendril_capability_engine::detect;
 use tendril_orchestrator::Libvirt;
 
 use crate::ui;
@@ -120,9 +120,7 @@ pub(crate) fn advertise_url() -> String {
         .ok()
         .and_then(|a| a.rsplit(':').next().map(str::to_string))
         .unwrap_or_else(|| "8080".to_string());
-    let ip = ui::run_stdout("hostname", &["-I"])
-        .and_then(|s| s.split_whitespace().next().map(str::to_string))
-        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let ip = ui::lan_ip().unwrap_or_else(|| "127.0.0.1".to_string());
     let scheme = if crate::tls::enabled() {
         "https"
     } else {
@@ -237,24 +235,11 @@ fn federation_token() -> String {
                 return t.to_string();
             }
         }
-        // Generate once; create_new loses the race gracefully (the winner's token is then read).
+        // Generate once (0600 from the first byte); create_new loses the race gracefully (the
+        // winner's token is then read).
         if let Some(tok) = new_random_token() {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&p)
-            {
-                Ok(mut f) => {
-                    use std::io::Write as _;
-                    let _ = f.write_all(tok.as_bytes());
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ =
-                            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
-                    }
-                    return tok;
-                }
+            match ui::write_secret_new(&p, tok.as_bytes()) {
+                Ok(()) => return tok,
                 Err(_) => {
                     if let Ok(t) = std::fs::read_to_string(&p) {
                         let t = t.trim();
@@ -278,24 +263,28 @@ pub fn token_ok(presented: &str) -> bool {
     !t.is_empty() && crate::ui::ct_eq(presented, &t)
 }
 
-/// Persist a federation token to `federation.conf` (replacing any existing `token=` line). Used when
-/// founding a **store-less** fleet, where there's no shared store to auto-generate/hold the token.
-fn set_conf_token(tok: &str) -> Result<(), String> {
+/// Rewrite `federation.conf`, keeping only lines `keep` accepts and appending `line` — the shared
+/// upsert behind the `token=` / `name=` / `peer=` writers. Creates the conf (and its dir) if absent.
+fn upsert_conf(keep: impl Fn(&str) -> bool, line: String) -> Result<(), String> {
     let p = conf_path();
     let mut lines: Vec<String> = std::fs::read_to_string(&p)
         .ok()
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim_start().starts_with("token="))
-                .map(String::from)
-                .collect()
-        })
+        .map(|t| t.lines().filter(|l| keep(l)).map(String::from).collect())
         .unwrap_or_default();
-    lines.push(format!("token={tok}"));
+    lines.push(line);
     if let Some(d) = std::path::Path::new(&p).parent() {
         let _ = std::fs::create_dir_all(d);
     }
     std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+/// Persist a federation token to `federation.conf` (replacing any existing `token=` line). Used when
+/// founding a **store-less** fleet, where there's no shared store to auto-generate/hold the token.
+fn set_conf_token(tok: &str) -> Result<(), String> {
+    upsert_conf(
+        |l| !l.trim_start().starts_with("token="),
+        format!("token={tok}"),
+    )
 }
 
 /// This node's federation token, generating and persisting one to `federation.conf` if none exists
@@ -351,28 +340,20 @@ pub fn make_join_code() -> Option<String> {
 /// Append a peer to `federation.conf` (replacing any existing entry with the same name). Entry format
 /// is `name=<ui-url>|<fed-url>` (see [`parse_peer`]).
 fn add_conf_peer(entry: &str) -> Result<(), String> {
-    let p = conf_path();
     let new_name = entry
         .split_once('=')
         .map(|(n, _)| n.trim())
         .unwrap_or(entry);
-    let mut lines: Vec<String> = std::fs::read_to_string(&p)
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| {
+    upsert_conf(
+        |l| {
             l.trim()
                 .strip_prefix("peer=")
                 .and_then(|r| r.split_once('='))
                 .map(|(n, _)| n.trim() != new_name)
                 .unwrap_or(true)
-        })
-        .map(String::from)
-        .collect();
-    lines.push(format!("peer={entry}"));
-    if let Some(d) = std::path::Path::new(&p).parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+        },
+        format!("peer={entry}"),
+    )
 }
 
 /// A node introducing itself to a fleet member (join reverse-registration payload).
@@ -390,10 +371,7 @@ pub async fn api_fleet_register(
     axum::Json(r): axum::Json<RegisterReq>,
 ) -> axum::Json<ProvisionResult> {
     if ui::is_demo() {
-        return axum::Json(ProvisionResult {
-            ok: false,
-            error: Some("disabled in the demo".into()),
-        });
+        return axum::Json(ProvisionResult::err("disabled in the demo"));
     }
     let name = safe_component(r.name.trim());
     // Both URLs are stored in federation.conf and later curl'd as base URLs. Require real http(s) URLs
@@ -404,61 +382,33 @@ pub async fn api_fleet_register(
         || !ui::is_http_url(r.ui.trim())
         || (!fed.is_empty() && !ui::is_http_url(fed))
     {
-        return axum::Json(ProvisionResult {
-            ok: false,
-            error: Some("register requires a node name and http(s) UI/fed urls".into()),
-        });
+        return axum::Json(ProvisionResult::err(
+            "register requires a node name and http(s) UI/fed urls",
+        ));
     }
     let entry = format!("{}={}|{}", name, r.ui.trim(), r.fed.trim());
-    axum::Json(match add_conf_peer(&entry) {
-        Ok(()) => ProvisionResult {
-            ok: true,
-            error: None,
-        },
-        Err(e) => ProvisionResult {
-            ok: false,
-            error: Some(e),
-        },
-    })
+    axum::Json(add_conf_peer(&entry).into())
 }
 
 /// Tell the founder about this node so it adds us as a peer (mutual membership). Uses the founder's
 /// plain-TLS UI endpoint with the shared token — works before either side's mTLS listener is up.
 fn register_with(jc: &JoinCode) -> Result<(), String> {
-    let ep = format!("{}/api/fleet/register", jc.ui.trim_end_matches('/'));
     let body = serde_json::to_string(&RegisterReq {
         name: node_name(),
         ui: advertise_url(),
         fed: crate::fedtls::fed_advertise_url(),
     })
     .map_err(|e| e.to_string())?;
-    let auth = format!("X-Tendril-Federation: {}", jc.token);
-    let out = ui::run_result(
-        "curl",
-        &[
-            "-sk",
-            "--max-time",
-            "30",
-            "-X",
-            "POST",
-            "-H",
-            &auth,
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            &ep,
-        ],
-    )?;
-    let res: ProvisionResult =
-        serde_json::from_str(&out).map_err(|e| format!("bad response from founder: {e}"))?;
-    if res.ok {
-        Ok(())
-    } else {
-        Err(res
-            .error
-            .unwrap_or_else(|| "founder rejected registration".into()))
-    }
+    post_fed(
+        jc.ui.trim_end_matches('/'),
+        &["-sk".to_string()],
+        "/api/fleet/register",
+        &jc.token,
+        Some(&body),
+        "30",
+        "founder",
+        "founder rejected registration",
+    )
 }
 
 /// Apply a join code on a new node: install the fleet CA, adopt the shared token, add the founder as a
@@ -538,37 +488,24 @@ pub struct NodeInfo {
     pub health: Health,
 }
 
-fn vendor_name(v: GpuVendor) -> &'static str {
-    match v {
-        GpuVendor::Nvidia => "NVIDIA",
-        GpuVendor::Amd => "AMD",
-        GpuVendor::Intel => "Intel",
-        GpuVendor::Unknown => "GPU",
+impl NodeInfo {
+    /// The unreachable-node stub: a named node with no stations/GPUs/health.
+    fn down(name: String) -> Self {
+        Self {
+            name,
+            reachable: false,
+            stations: Vec::new(),
+            gpus: Vec::new(),
+            health: Health::default(),
+        }
     }
 }
 
 fn local_health() -> Health {
-    let read_mem = |k: &str| {
-        std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with(k))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|kb| kb.parse::<f64>().ok())
-        })
-    };
-    let (used, total) = match (read_mem("MemTotal:"), read_mem("MemAvailable:")) {
-        (Some(t), Some(a)) => ((t - a) / 1048576.0, t / 1048576.0),
-        _ => (0.0, 0.0),
-    };
+    let (used, total) = ui::mem_used_total_gb().unwrap_or((0.0, 0.0));
     Health {
-        uptime: ui::run_stdout("uptime", &["-p"])
-            .unwrap_or_default()
-            .trim()
-            .to_string(),
-        load: std::fs::read_to_string("/proc/loadavg")
-            .ok()
-            .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
-            .unwrap_or_default(),
+        uptime: ui::uptime(),
+        load: ui::loadavg(" "),
         mem_used_gb: used,
         mem_total_gb: total,
     }
@@ -595,7 +532,7 @@ pub fn local_node_info() -> NodeInfo {
             address: g.gpu.address.clone(),
             label: format!(
                 "{} {}",
-                vendor_name(g.gpu.vendor),
+                ui::vendor(g.gpu.vendor),
                 g.gpu.model.as_deref().unwrap_or("GPU")
             ),
             capability: format!("{:?}", g.capability),
@@ -628,13 +565,7 @@ fn fetch_peer(p: &Peer) -> NodeInfo {
             ni.reachable = true;
             ni
         }
-        None => NodeInfo {
-            name: p.name.clone(),
-            reachable: false,
-            stations: Vec::new(),
-            gpus: Vec::new(),
-            health: Health::default(),
-        },
+        None => NodeInfo::down(p.name.clone()),
     }
 }
 
@@ -653,6 +584,12 @@ pub fn fleet() -> Vec<NodeInfo> {
     out
 }
 
+/// [`fleet`] off the async worker (it shells out to `curl` per peer): the shared wrapper every
+/// handler uses. An empty fleet if the blocking task panics.
+pub async fn fleet_async() -> Vec<NodeInfo> {
+    tokio::task::spawn_blocking(fleet).await.unwrap_or_default()
+}
+
 // ── handlers + UI ───────────────────────────────────────────────────────────────────────────────
 
 /// JSON API consumed by peers' aggregators.
@@ -667,7 +604,7 @@ pub async fn page(headers: axum::http::HeaderMap) -> Markup {
     }
     let is_admin = crate::auth::is_admin(&headers);
     // Peer fetches shell out with a timeout; run off the async worker.
-    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let nodes = fleet_async().await;
     fleet_page(nodes, None, is_admin)
 }
 
@@ -815,21 +752,10 @@ fn token_is_store_managed() -> bool {
 
 /// Update the node name in `federation.conf`, preserving other keys.
 fn set_conf_name(new: &str) -> Result<(), String> {
-    let p = conf_path();
-    let mut lines: Vec<String> = std::fs::read_to_string(&p)
-        .ok()
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim_start().starts_with("name="))
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
-    lines.push(format!("name={new}"));
-    if let Some(d) = std::path::Path::new(&p).parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+    upsert_conf(
+        |l| !l.trim_start().starts_with("name="),
+        format!("name={new}"),
+    )
 }
 
 #[derive(Deserialize)]
@@ -910,27 +836,11 @@ pub async fn rotate_token() -> Markup {
     };
     let p = format!("{root}/fleet-token");
     // Write the rotated token 0600 from the start (no world-readable window on the shared store).
-    let write_secret = || -> std::io::Result<()> {
-        use std::io::Write as _;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        opts.open(&p)?.write_all(tok.as_bytes())
-    };
-    if let Err(e) = write_secret() {
+    if let Err(e) = ui::write_secret(&p, tok.as_bytes()) {
         return setup_body(
             true,
             Some(html! { div.banner.error { "Couldn't write the token: " (e) } }),
         );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
     }
     setup_body(
         true,
@@ -1185,6 +1095,71 @@ pub struct ProvisionResult {
     pub error: Option<String>,
 }
 
+impl ProvisionResult {
+    fn ok() -> Self {
+        Self {
+            ok: true,
+            error: None,
+        }
+    }
+    fn err(e: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(e.into()),
+        }
+    }
+}
+
+impl From<Result<(), String>> for ProvisionResult {
+    fn from(r: Result<(), String>) -> Self {
+        match r {
+            Ok(()) => Self::ok(),
+            Err(e) => Self::err(e),
+        }
+    }
+}
+
+/// POST to a node's federation API over `curl` (transport-security args from `fedtls::transport`)
+/// and parse the standard [`ProvisionResult`] envelope: `Ok(())` when the far side reports success,
+/// else its error — or `default_err` if it sent none. `who` names the far side in parse errors.
+#[allow(clippy::too_many_arguments)] // a flat curl invocation; the parameters are all distinct scalars
+fn post_fed(
+    base: &str,
+    sec: &[String],
+    path: &str,
+    token: &str,
+    body: Option<&str>,
+    max_time: &str,
+    who: &str,
+    default_err: &str,
+) -> Result<(), String> {
+    let ep = format!("{base}{path}");
+    let auth = format!("X-Tendril-Federation: {token}");
+    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
+    args.extend(["--max-time", max_time]);
+    match body {
+        Some(b) => args.extend([
+            "-H",
+            &auth,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            b,
+            "--",
+            &ep,
+        ]),
+        None => args.extend(["-X", "POST", "-H", &auth, "--", &ep]),
+    }
+    let out = ui::run_result("curl", &args)?;
+    let res: ProvisionResult =
+        serde_json::from_str(&out).map_err(|e| format!("bad response from {who}: {e}"))?;
+    if res.ok {
+        Ok(())
+    } else {
+        Err(res.error.unwrap_or_else(|| default_err.to_string()))
+    }
+}
+
 /// Remote-provision API: create a station on THIS node (called by the fleet aggregator with the
 /// federation token). Provisioning is blocking libvirt work, so it runs off the async worker.
 pub async fn api_provision(
@@ -1193,16 +1168,7 @@ pub async fn api_provision(
     let res = tokio::task::spawn_blocking(move || crate::stations::provision_spec(&spec))
         .await
         .unwrap_or_else(|_| Err("provision task panicked".into()));
-    axum::Json(match res {
-        Ok(()) => ProvisionResult {
-            ok: true,
-            error: None,
-        },
-        Err(e) => ProvisionResult {
-            ok: false,
-            error: Some(e),
-        },
-    })
+    axum::Json(res.into())
 }
 
 /// Valid remote station lifecycle actions (guards the path before it's proxied to a peer).
@@ -1216,30 +1182,15 @@ pub async fn api_station_action(
     axum::extract::Path((name, action)): axum::extract::Path<(String, String)>,
 ) -> axum::Json<ProvisionResult> {
     if ui::is_demo() {
-        return axum::Json(ProvisionResult {
-            ok: false,
-            error: Some("disabled in the demo".into()),
-        });
+        return axum::Json(ProvisionResult::err("disabled in the demo"));
     }
     if !valid_action(&action) {
-        return axum::Json(ProvisionResult {
-            ok: false,
-            error: Some(format!("unknown action: {action}")),
-        });
+        return axum::Json(ProvisionResult::err(format!("unknown action: {action}")));
     }
     let res = tokio::task::spawn_blocking(move || crate::stations::lifecycle(&name, &action))
         .await
         .unwrap_or_else(|_| Err("station action task panicked".into()));
-    axum::Json(match res {
-        Ok(()) => ProvisionResult {
-            ok: true,
-            error: None,
-        },
-        Err(e) => ProvisionResult {
-            ok: false,
-            error: Some(e),
-        },
-    })
+    axum::Json(res.into())
 }
 
 /// Call a peer's station-action API over the federation transport (mTLS, or token + plain TLS).
@@ -1250,18 +1201,16 @@ fn remote_station_action(
     action: &str,
 ) -> Result<(), String> {
     let (base, sec) = crate::fedtls::transport(url, fed);
-    let ep = format!("{base}/api/station/{name}/{action}");
-    let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
-    args.extend(["--max-time", "60", "-X", "POST", "-H", &auth, "--", &ep]);
-    let out = ui::run_result("curl", &args)?;
-    let res: ProvisionResult =
-        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
-    if res.ok {
-        Ok(())
-    } else {
-        Err(res.error.unwrap_or_else(|| "remote action failed".into()))
-    }
+    post_fed(
+        &base,
+        &sec,
+        &format!("/api/station/{name}/{action}"),
+        &federation_token(),
+        None,
+        "60",
+        "peer",
+        "remote action failed",
+    )
 }
 
 /// Dispatch a station lifecycle action to the node that owns the station — locally if it's us, else
@@ -1285,31 +1234,16 @@ pub fn station_action_dispatch(node: &str, name: &str, action: &str) -> Result<(
 fn remote_provision(url: &str, fed: Option<&str>, spec: &ProvisionSpec) -> Result<(), String> {
     let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
     let (base, sec) = crate::fedtls::transport(url, fed);
-    let ep = format!("{base}/api/provision");
-    let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
-    args.extend([
-        "--max-time",
+    post_fed(
+        &base,
+        &sec,
+        "/api/provision",
+        &federation_token(),
+        Some(&body),
         "120",
-        "-H",
-        &auth,
-        "-H",
-        "Content-Type: application/json",
-        "-d",
-        &body,
-        "--",
-        &ep,
-    ]);
-    let out = ui::run_result("curl", &args)?;
-    let res: ProvisionResult =
-        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
-    if res.ok {
-        Ok(())
-    } else {
-        Err(res
-            .error
-            .unwrap_or_else(|| "remote provision failed".into()))
-    }
+        "peer",
+        "remote provision failed",
+    )
 }
 
 /// A node's first free passthrough-capable GPU address, if any.
@@ -1403,16 +1337,7 @@ pub async fn api_reimage(axum::Json(spec): axum::Json<ReimageSpec>) -> axum::Jso
     })
     .await
     .unwrap_or_else(|_| Err("reimage task panicked".into()));
-    axum::Json(match res {
-        Ok(()) => ProvisionResult {
-            ok: true,
-            error: None,
-        },
-        Err(e) => ProvisionResult {
-            ok: false,
-            error: Some(e),
-        },
-    })
+    axum::Json(res.into())
 }
 
 /// Reimage a station on `node` — locally (overlay onto the local/shared image), or via the peer's API.
@@ -1439,29 +1364,16 @@ pub fn reimage_dispatch(node: &str, station: &str, image: &str) -> Result<(), St
 fn remote_reimage(url: &str, fed: Option<&str>, spec: &ReimageSpec) -> Result<(), String> {
     let body = serde_json::to_string(spec).map_err(|e| e.to_string())?;
     let (base, sec) = crate::fedtls::transport(url, fed);
-    let ep = format!("{base}/api/reimage");
-    let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
-    args.extend([
-        "--max-time",
+    post_fed(
+        &base,
+        &sec,
+        "/api/reimage",
+        &federation_token(),
+        Some(&body),
         "60",
-        "-H",
-        &auth,
-        "-H",
-        "Content-Type: application/json",
-        "-d",
-        &body,
-        "--",
-        &ep,
-    ]);
-    let out = ui::run_result("curl", &args)?;
-    let res: ProvisionResult =
-        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
-    if res.ok {
-        Ok(())
-    } else {
-        Err(res.error.unwrap_or_else(|| "remote reimage failed".into()))
-    }
+        "peer",
+        "remote reimage failed",
+    )
 }
 
 // ── distribute a golden image to every node's store (once per node; then overlays, no per-station copy) ──
@@ -1500,16 +1412,7 @@ pub async fn api_image_pull(
         tokio::task::spawn_blocking(move || crate::images::pull_from(&pull.name, &pull.from, &tok))
             .await
             .unwrap_or_else(|_| Err("image-pull task panicked".into()));
-    axum::Json(match res {
-        Ok(()) => ProvisionResult {
-            ok: true,
-            error: None,
-        },
-        Err(e) => ProvisionResult {
-            ok: false,
-            error: Some(e),
-        },
-    })
+    axum::Json(res.into())
 }
 
 /// Distribute a golden image to `node`'s store: it pulls from `source_url`. The local node is the
@@ -1532,31 +1435,16 @@ pub fn distribute_dispatch(node: &str, name: &str, source_url: &str) -> Result<(
     })
     .map_err(|e| e.to_string())?;
     let (base, sec) = crate::fedtls::transport(&peer.url, peer.fed.as_deref());
-    let ep = format!("{base}/api/image-pull");
-    let auth = format!("X-Tendril-Federation: {}", federation_token());
-    let mut args: Vec<&str> = sec.iter().map(String::as_str).collect();
-    args.extend([
-        "--max-time",
+    post_fed(
+        &base,
+        &sec,
+        "/api/image-pull",
+        &federation_token(),
+        Some(&body),
         "3600",
-        "-H",
-        &auth,
-        "-H",
-        "Content-Type: application/json",
-        "-d",
-        &body,
-        "--",
-        &ep,
-    ]);
-    let out = ui::run_result("curl", &args)?;
-    let res: ProvisionResult =
-        serde_json::from_str(&out).map_err(|e| format!("bad response from peer: {e}"))?;
-    if res.ok {
-        Ok(())
-    } else {
-        Err(res
-            .error
-            .unwrap_or_else(|| "remote image-pull failed".into()))
-    }
+        "peer",
+        "remote image-pull failed",
+    )
 }
 
 #[derive(Deserialize)]
@@ -1591,7 +1479,7 @@ pub struct FleetCreateForm {
 /// Resolve placement and dispatch the provision to the chosen node. The station spec comes from the
 /// unified Stations wizard, which switches its POST target here when a peer node is chosen.
 pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>) -> Markup {
-    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let nodes = fleet_async().await;
     if f.name.trim().is_empty() {
         return fleet_page(
             nodes,
@@ -1622,7 +1510,7 @@ pub async fn create(axum::extract::Form(f): axum::extract::Form<FleetCreateForm>
     let res = tokio::task::spawn_blocking(move || dispatch(&t, &sp))
         .await
         .unwrap_or_else(|_| Err("dispatch task panicked".into()));
-    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let nodes = fleet_async().await;
     match res {
         Ok(()) => fleet_page(
             nodes,
@@ -1743,7 +1631,7 @@ pub struct RehomeForm {
 /// Cold re-home a down node's station onto a healthy one: recreate it from its golden image, place it
 /// on a survivor with a free GPU, and move its registry record. Human-confirmed in the UI.
 pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> Markup {
-    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let nodes = fleet_async().await;
     let Some(rec) = records_for(&f.from).into_iter().find(|r| r.name == f.name) else {
         return fleet_page(
             nodes,
@@ -1799,7 +1687,7 @@ pub async fn rehome(axum::extract::Form(f): axum::extract::Form<RehomeForm>) -> 
     let res = tokio::task::spawn_blocking(move || dispatch(&t, &sp))
         .await
         .unwrap_or_else(|_| Err("dispatch task panicked".into()));
-    let nodes = tokio::task::spawn_blocking(fleet).await.unwrap_or_default();
+    let nodes = fleet_async().await;
     match res {
         Ok(()) => {
             // The target recorded the station under its own name; drop the old node's record.
@@ -2001,11 +1889,7 @@ pub fn stations_peer_panel(n: &NodeInfo) -> Markup {
 /// over the federation API). Wrapped in a stable id so an action swaps just this panel. `err` renders
 /// a banner inside the wrapper (used when re-rendering after a failed action).
 fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
-    let free = n
-        .gpus
-        .iter()
-        .filter(|g| g.used_by.is_none() && g.capability == "Passthrough")
-        .count();
+    let free = free_gpu_count(n);
     let wrap = format!("peer-{}", safe_component(&n.name));
     let body = html! {
         div.pad {
@@ -2085,16 +1969,7 @@ pub async fn peer_panel_fragment(axum::extract::Path(node): axum::extract::Path<
         .flatten();
     match fresh {
         Some(x) => peer_panel(&x, None),
-        None => peer_panel(
-            &NodeInfo {
-                name: node,
-                reachable: false,
-                stations: Vec::new(),
-                gpus: Vec::new(),
-                health: Health::default(),
-            },
-            None,
-        ),
+        None => peer_panel(&NodeInfo::down(node), None),
     }
 }
 
@@ -2137,25 +2012,12 @@ pub async fn peer_station_action(
         .flatten();
     match fresh {
         Some(x) => peer_panel(&x, res.err().as_deref()),
-        None => peer_panel(
-            &NodeInfo {
-                name: node,
-                reachable: false,
-                stations: Vec::new(),
-                gpus: Vec::new(),
-                health: Health::default(),
-            },
-            res.err().as_deref(),
-        ),
+        None => peer_panel(&NodeInfo::down(node), res.err().as_deref()),
     }
 }
 
 fn node_card(n: &NodeInfo) -> Markup {
-    let free_gpus = n
-        .gpus
-        .iter()
-        .filter(|g| g.used_by.is_none() && g.capability == "Passthrough")
-        .count();
+    let free_gpus = free_gpu_count(n);
     ui::panel(
         &n.name,
         Some(if n.reachable { "online" } else { "unreachable" }),

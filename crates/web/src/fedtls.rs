@@ -68,9 +68,7 @@ pub fn fed_advertise_url() -> String {
         }
     }
     let port = fed_addr().rsplit(':').next().unwrap_or("8444").to_string();
-    let ip = ui::run_stdout("hostname", &["-I"])
-        .and_then(|s| s.split_whitespace().next().map(str::to_string))
-        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let ip = ui::lan_ip().unwrap_or_else(|| "127.0.0.1".to_string());
     format!("https://{ip}:{port}")
 }
 
@@ -81,14 +79,6 @@ pub struct Identity {
     pub key: String,
 }
 
-#[cfg(unix)]
-fn chmod_600(path: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-#[cfg(not(unix))]
-fn chmod_600(_: &str) {}
-
 /// Ensure the fleet CA exists in this node's active CA dir (generate once, race-safe on a shared
 /// store). Returns the CA cert + key paths, or `None` if there's no CA dir.
 fn ensure_ca() -> Option<(String, String)> {
@@ -97,7 +87,7 @@ fn ensure_ca() -> Option<(String, String)> {
 
 /// Force-create (once) a CA in the local dir so this node can **found** a store-less fleet — the CA
 /// it hands out in join codes. Returns the cert + key paths.
-pub fn ensure_local_ca() -> Option<(String, String)> {
+fn ensure_local_ca() -> Option<(String, String)> {
     ensure_ca_in(&local_ca_dir())
 }
 
@@ -119,21 +109,7 @@ pub fn install_ca(cert_pem: &str, key_pem: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(format!("{dir}/ca.pem"), cert_pem).map_err(|e| e.to_string())?;
     // Create the CA private key 0600 up front (no world-readable window before the chmod).
-    {
-        use std::io::Write as _;
-        let kp = format!("{dir}/ca.key");
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        opts.open(&kp)
-            .and_then(|mut f| f.write_all(key_pem.as_bytes()))
-            .map_err(|e| e.to_string())?;
-        chmod_600(&kp);
-    }
+    ui::write_secret(format!("{dir}/ca.key"), key_pem.as_bytes()).map_err(|e| e.to_string())?;
     reset_identity();
     Ok(())
 }
@@ -181,7 +157,7 @@ fn ensure_ca_in(dir: &str) -> Option<(String, String)> {
                     &ca_cert,
                 ],
             );
-            chmod_600(&ca_key);
+            ui::chmod_600(&ca_key);
             if ok.is_err() {
                 let _ = std::fs::remove_file(&ca_key); // let another node retry
                 return None;
@@ -236,7 +212,7 @@ fn build_identity() -> Option<Identity> {
             ],
         )
         .ok()?;
-        chmod_600(&node_key);
+        ui::chmod_600(&node_key);
         // Extensions: SANs + both server/client EKU (this cert serves and calls).
         let extfile = format!(
             "{}\nextendedKeyUsage=serverAuth,clientAuth\n",

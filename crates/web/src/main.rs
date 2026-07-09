@@ -69,7 +69,6 @@ async fn main() {
     let app = Router::new()
         // Stations is the landing page (the former Dashboard folded into it as a summary strip).
         .route("/", get(stations::list_page))
-        .route("/stats", get(pages::stats))
         // federation
         .route("/fleet", get(federation::page))
         // Legacy fleet-create URL now folds into the unified Stations wizard (placement selector).

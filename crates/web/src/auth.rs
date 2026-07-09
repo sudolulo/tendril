@@ -83,81 +83,22 @@ pub fn mark_password_default() {
     );
 }
 
-/// Hash and store a new admin password (file mode 0600).
-pub fn set_password(pw: &str) -> std::io::Result<()> {
+/// Argon2-hash `pw` and store it in `file`, 0600 from the first byte (creating the parent dir).
+fn store_hash(file: &str, pw: &str) -> std::io::Result<()> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(pw.as_bytes(), &salt)
         .map_err(|e| std::io::Error::other(e.to_string()))?
         .to_string();
-    let file = auth_file();
-    if let Some(dir) = std::path::Path::new(&file).parent() {
+    if let Some(dir) = std::path::Path::new(file).parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&file, hash)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
-    }
-    // A real password is now set — it's no longer the baked default.
-    let _ = std::fs::remove_file(default_marker());
-    Ok(())
+    ui::write_secret(file, hash.as_bytes())
 }
 
-fn verify_password(pw: &str) -> bool {
-    let Some(stored) = read_hash() else {
-        return false;
-    };
-    let Ok(parsed) = PasswordHash::new(&stored) else {
-        return false;
-    };
-    Argon2::default()
-        .verify_password(pw.as_bytes(), &parsed)
-        .is_ok()
-}
-
-// ── viewer (read-only) credential ──────────────────────────────────────────────────────────────
-
-fn viewer_file() -> String {
-    format!("{}.viewer", auth_file())
-}
-
-/// Whether a read-only viewer password is set.
-pub fn viewer_configured() -> bool {
-    std::fs::read_to_string(viewer_file())
-        .ok()
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false)
-}
-
-/// Hash and store the read-only viewer password (file mode 0600).
-pub fn set_viewer_password(pw: &str) -> std::io::Result<()> {
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(pw.as_bytes(), &salt)
-        .map_err(|e| std::io::Error::other(e.to_string()))?
-        .to_string();
-    let file = viewer_file();
-    if let Some(dir) = std::path::Path::new(&file).parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&file, hash)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
-}
-
-/// Remove the viewer password (disables read-only sign-in).
-pub fn clear_viewer_password() {
-    let _ = std::fs::remove_file(viewer_file());
-}
-
-fn verify_viewer(pw: &str) -> bool {
-    let Ok(stored) = std::fs::read_to_string(viewer_file()) else {
+/// Verify `pw` against the Argon2 hash stored in `file` (false if the file is missing/empty/garbled).
+fn verify_hash_file(file: &str, pw: &str) -> bool {
+    let Ok(stored) = std::fs::read_to_string(file) else {
         return false;
     };
     let stored = stored.trim();
@@ -170,6 +111,46 @@ fn verify_viewer(pw: &str) -> bool {
     Argon2::default()
         .verify_password(pw.as_bytes(), &parsed)
         .is_ok()
+}
+
+/// Hash and store a new admin password (file mode 0600).
+pub fn set_password(pw: &str) -> std::io::Result<()> {
+    store_hash(&auth_file(), pw)?;
+    // A real password is now set — it's no longer the baked default.
+    let _ = std::fs::remove_file(default_marker());
+    Ok(())
+}
+
+fn verify_password(pw: &str) -> bool {
+    verify_hash_file(&auth_file(), pw)
+}
+
+// ── viewer (read-only) credential ──────────────────────────────────────────────────────────────
+
+fn viewer_file() -> String {
+    format!("{}.viewer", auth_file())
+}
+
+/// Whether a read-only viewer password is set.
+fn viewer_configured() -> bool {
+    std::fs::read_to_string(viewer_file())
+        .ok()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Hash and store the read-only viewer password (file mode 0600).
+pub fn set_viewer_password(pw: &str) -> std::io::Result<()> {
+    store_hash(&viewer_file(), pw)
+}
+
+/// Remove the viewer password (disables read-only sign-in).
+pub fn clear_viewer_password() {
+    let _ = std::fs::remove_file(viewer_file());
+}
+
+fn verify_viewer(pw: &str) -> bool {
+    verify_hash_file(&viewer_file(), pw)
 }
 
 // ── audit log ────────────────────────────────────────────────────────────────────────────────
@@ -283,12 +264,17 @@ fn session_cookie(token: &str, max_age: i64) -> String {
     format!("tendril_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}{secure}")
 }
 
-fn cookie_token(req: &Request) -> Option<String> {
-    let cookies = req.headers().get(COOKIE)?.to_str().ok()?;
+/// The session token carried in a request's cookies, if any.
+fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    let cookies = headers.get(COOKIE)?.to_str().ok()?;
     cookies
         .split(';')
         .map(str::trim)
         .find_map(|c| c.strip_prefix("tendril_session=").map(str::to_string))
+}
+
+fn cookie_token(req: &Request) -> Option<String> {
+    session_token(req.headers())
 }
 
 /// The role a set of request headers authenticates as, or `None`. A trusted reverse-proxy header
@@ -304,12 +290,7 @@ pub fn role_from_headers(headers: &axum::http::HeaderMap) -> Option<Role> {
             }
         }
     }
-    let cookies = headers.get(COOKIE)?.to_str().ok()?;
-    let token = cookies
-        .split(';')
-        .map(str::trim)
-        .find_map(|c| c.strip_prefix("tendril_session="))?;
-    session_role(token)
+    session_role(&session_token(headers)?)
 }
 
 fn role_of(req: &Request) -> Option<Role> {
@@ -434,17 +415,18 @@ pub struct SetupForm {
     confirm: String,
 }
 
+/// The sign-in form (shared by the login page and the failed-login re-render).
+fn login_form() -> Markup {
+    html! {
+        form method="post" action="/login" {
+            div.field { label { "Admin password" } input type="password" name="password" autofocus required; }
+            button.btn.primary type="submit" style="width:100%; margin-top:6px" { "Sign in" }
+        }
+    }
+}
+
 pub async fn login_page() -> Markup {
-    render(
-        "Sign in",
-        None,
-        html! {
-            form method="post" action="/login" {
-                div.field { label { "Admin password" } input type="password" name="password" autofocus required; }
-                button.btn.primary type="submit" style="width:100%; margin-top:6px" { "Sign in" }
-            }
-        },
-    )
+    render("Sign in", None, login_form())
 }
 
 pub async fn login(Form(f): Form<LoginForm>) -> Response {
@@ -471,17 +453,7 @@ pub async fn login(Form(f): Form<LoginForm>) -> Response {
         // second (Argon2's cost is the only other brake).
         audit("anon", "login-fail", 401);
         tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-        render(
-            "Sign in",
-            Some("Incorrect password."),
-            html! {
-                form method="post" action="/login" {
-                    div.field { label { "Admin password" } input type="password" name="password" autofocus required; }
-                    button.btn.primary type="submit" style="width:100%; margin-top:6px" { "Sign in" }
-                }
-            },
-        )
-        .into_response()
+        render("Sign in", Some("Incorrect password."), login_form()).into_response()
     }
 }
 

@@ -49,8 +49,7 @@ struct DlsConf {
 }
 
 fn default_url() -> String {
-    ui::run_stdout("hostname", &["-I"])
-        .and_then(|s| s.split_whitespace().next().map(str::to_string))
+    ui::lan_ip()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
@@ -169,11 +168,7 @@ fn ensure_cert(url: &str) -> Result<String, String> {
     )
     .map_err(|e| format!("openssl (DLS webserver cert) failed: {e}"))?;
     // openssl writes the key with the default umask (usually 0644) — lock it down to 0600.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600));
-    }
+    crate::ui::chmod_600(&key);
     Ok(cert_dir)
 }
 

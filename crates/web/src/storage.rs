@@ -142,24 +142,11 @@ fn mount_store(s: &Store, password: &str) -> Result<(), String> {
         }
         // Create the credentials file 0600 *before* writing the cleartext password (no world-readable
         // race window).
-        {
-            use std::io::Write as _;
-            let mut opts = std::fs::OpenOptions::new();
-            opts.create(true).write(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut file = opts.open(SMB_CREDS).map_err(|e| e.to_string())?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-            }
-            file.write_all(format!("username={}\npassword={}\n", s.username, password).as_bytes())
-                .map_err(|e| e.to_string())?;
-        }
+        ui::write_secret(
+            SMB_CREDS,
+            format!("username={}\npassword={}\n", s.username, password).as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
         let extra = format!("credentials={SMB_CREDS},uid=0,gid=0,file_mode=0660,dir_mode=0770");
         opts = if opts.is_empty() {
             extra

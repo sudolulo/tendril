@@ -9,7 +9,7 @@ use tendril_orchestrator::DomainState;
 use crate::ui;
 
 /// Demo stations: (name, guest OS, state, has a GPU passed through).
-pub fn stations() -> Vec<(&'static str, &'static str, DomainState, bool)> {
+fn stations() -> Vec<(&'static str, &'static str, DomainState, bool)> {
     vec![
         ("living-room", "Windows 11", DomainState::Running, true),
         ("office", "SteamOS (Bazzite)", DomainState::Running, true),
@@ -175,7 +175,7 @@ const SCREEN_OFF: &str = r##"<svg viewBox="0 0 960 600" width="100%" height="100
 </svg>"##;
 
 /// Demo install media: (filename, size, verification-state) — `verified` / `local` (no upstream).
-pub fn media_rows() -> Vec<(&'static str, &'static str, &'static str)> {
+fn media_rows() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         ("win11.iso", "5.8 GB", "local"),
         ("virtio-win.iso", "708 MB", "local"),

@@ -31,7 +31,10 @@ pub fn list() -> Vec<(String, String)> {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
             if let Some(base) = n.strip_suffix(".qcow2") {
-                let sz = e.metadata().map(|m| human(m.len())).unwrap_or_default();
+                let sz = e
+                    .metadata()
+                    .map(|m| ui::human_size(m.len()))
+                    .unwrap_or_default();
                 out.push((base.to_string(), sz));
             }
         }
@@ -90,7 +93,7 @@ pub fn image_vgpu_mismatch(name: &str) -> Option<(String, String)> {
 }
 
 /// Short label for a guest OS, for the sidecar and the UI.
-fn os_label(os: GuestOs) -> &'static str {
+pub(crate) fn os_label(os: GuestOs) -> &'static str {
     match os {
         GuestOs::Windows => "windows",
         GuestOs::SteamOs => "steamos",
@@ -127,7 +130,7 @@ pub(crate) fn vgpu_badge(name: &str) -> Markup {
 
 /// A station's guest OS, inferred from its domain XML clock (Windows uses localtime, SteamOS UTC).
 fn station_guest(name: &str) -> Option<GuestOs> {
-    let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;
+    let xml = ui::virsh(&["dumpxml", name])?;
     if xml.contains("offset='localtime'") {
         Some(GuestOs::Windows)
     } else if xml.contains("offset='utc'") {
@@ -145,28 +148,11 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
-fn human(n: u64) -> String {
-    let (n, u) = if n >= 1 << 30 {
-        (n as f64 / (1u64 << 30) as f64, "GB")
-    } else {
-        (n as f64 / (1u64 << 20) as f64, "MB")
-    };
-    format!("{n:.1} {u}")
-}
-
 /// A station's primary disk path, via virsh.
 /// The station's **boot** disk source path (target `vda`). Explicitly `vda`, not just the first disk,
 /// so a reimage/base-push replaces only the OS disk and NEVER the persistent data volume (`vdb`).
 fn station_disk(name: &str) -> Option<String> {
-    let out = ui::run_stdout(
-        "virsh",
-        &["-c", "qemu:///system", "domblklist", "--details", name],
-    )?;
-    // Columns: Type | Device | Target | Source.
-    out.lines().find_map(|l| {
-        let c: Vec<&str> = l.split_whitespace().collect();
-        (c.len() >= 4 && c[1] == "disk" && c[2] == "vda").then(|| c[3].to_string())
-    })
+    crate::stations::domblk_source(name, Some("vda"))
 }
 
 // ── integrity (SHA-256) ─────────────────────────────────────────────────────────────────────────
@@ -223,7 +209,7 @@ fn sha256_watched(path: &str, marker: &str) -> Option<String> {
 }
 
 /// The recorded SHA-256 of an image, if any.
-pub fn image_sha(name: &str) -> Option<String> {
+fn image_sha(name: &str) -> Option<String> {
     std::fs::read_to_string(sha_path(name))
         .ok()
         .map(|s| s.trim().to_string())
@@ -356,7 +342,7 @@ fn partial_path(dir: &str, name: &str) -> String {
 /// Names of captures currently in progress: a `.qcow2.partial` temp exists AND is still being
 /// written (fresh mtime — `qemu-img convert` writes continuously). A temp orphaned by a service
 /// restart is reaped instead of showing a phantom "capturing…" row forever.
-pub fn in_progress() -> Vec<String> {
+fn in_progress() -> Vec<String> {
     let dir = images_dir();
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -506,9 +492,7 @@ pub struct PushQuery {
 /// golden image.
 pub async fn push_form(Query(q): Query<PushQuery>) -> Markup {
     let image = sanitize(&q.name);
-    let nodes = tokio::task::spawn_blocking(crate::federation::fleet)
-        .await
-        .unwrap_or_default();
+    let nodes = crate::federation::fleet_async().await;
     let total: usize = nodes.iter().map(|n| n.stations.len()).sum();
     html! {
         div #images {
@@ -667,9 +651,7 @@ pub async fn distribute(Query(q): Query<PushQuery>) -> Markup {
     } else {
         crate::federation::advertise_url()
     };
-    let nodes = tokio::task::spawn_blocking(crate::federation::fleet)
-        .await
-        .unwrap_or_default();
+    let nodes = crate::federation::fleet_async().await;
     let (img, src) = (image.clone(), source.clone());
     let results = tokio::task::spawn_blocking(move || {
         nodes

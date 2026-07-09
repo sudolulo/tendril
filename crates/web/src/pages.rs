@@ -61,101 +61,19 @@ fn host_capacity() -> (usize, u64) {
     let threads = ui::run_stdout("nproc", &[])
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
-    let mem_gib = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("MemTotal:"))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|kb| kb.parse::<u64>().ok())
-        })
+    let mem_gib = ui::meminfo_kb("MemTotal:")
         .map(|kb| (kb + 512 * 1024) / (1024 * 1024))
         .unwrap_or(0);
     (threads, mem_gib)
 }
 
-/// Live host-stats fragment (memory/disk bars, load, uptime); polled every few seconds.
-pub async fn stats() -> Markup {
-    host_stats()
-}
-
-fn host_stats() -> Markup {
-    let (mu, mt) = mem_gb();
-    let (du, dt) = disk_gb();
-    let load = std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join("  "))
-        .unwrap_or_default();
-    html! {
-        div #hoststats hx-get="/stats" hx-trigger="every 5s" hx-swap="outerHTML" {
-            div.pad {
-                (bar("Memory", mu, mt, "GB"))
-                (bar("Disk (/)", du, dt, "GB"))
-                table { tbody {
-                    tr { td.sub style="width:8rem" { "Load (1/5/15m)" } td.mono { (load) } }
-                    tr { td.sub { "Uptime" } td.mono { (ui::run_stdout("uptime", &["-p"]).unwrap_or_default().trim().to_string()) } }
-                    tr { td.sub { "CPU threads" } td.mono { (ui::run_stdout("nproc", &[]).unwrap_or_default().trim().to_string()) } }
-                } }
-            }
-        }
-    }
-}
-
-fn bar(label: &str, used: f64, total: f64, unit: &str) -> Markup {
-    let pct = if total > 0.0 {
-        (used / total * 100.0).clamp(0.0, 100.0)
-    } else {
-        0.0
-    };
-    html! {
-        div style="margin-bottom:12px" {
-            div style="display:flex; justify-content:space-between; font-size:12.5px" {
-                span.sub { (label) } span.mono { (format!("{used:.1} / {total:.1} {unit} · {pct:.0}%")) }
-            }
-            div.bar { i style=(format!("width:{pct:.0}%")) {} }
-        }
-    }
-}
-
-fn mem_gb() -> (f64, f64) {
-    let read = |k: &str| {
-        std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with(k))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|kb| kb.parse::<f64>().ok())
-        })
-    };
-    match (read("MemTotal:"), read("MemAvailable:")) {
-        (Some(t), Some(a)) => ((t - a) / 1048576.0, t / 1048576.0),
-        _ => (0.0, 0.0),
-    }
-}
-
-fn disk_gb() -> (f64, f64) {
-    ui::run_stdout("df", &["-B1", "--output=used,size", "/"])
-        .and_then(|s| {
-            let l = s.lines().nth(1)?;
-            let mut it = l.split_whitespace();
-            let used: f64 = it.next()?.parse().ok()?;
-            let size: f64 = it.next()?.parse().ok()?;
-            Some((used / 1e9, size / 1e9))
-        })
-        .unwrap_or((0.0, 0.0))
-}
-
 // ── media ───────────────────────────────────────────────────────────────────────────────────
 
 pub async fn media() -> Markup {
-    media_page(None)
-}
-
-fn media_page(note: Option<Markup>) -> Markup {
     ui::page(
         "media",
         "Media",
         html! {
-            @if let Some(n) = note { (n) }
             @let iso_dir = crate::storage::iso_dir();
             (ui::panel("Storage", Some("where ISOs and station images live (local or a remote share)"), crate::storage::panel()))
             (ui::panel("Install media", Some(iso_dir.as_str()), media_isos_fragment()))
@@ -309,7 +227,9 @@ fn list_isos() -> Vec<(String, String)> {
             if name.ends_with(".iso") {
                 out.push((
                     name,
-                    e.metadata().map(|m| human(m.len())).unwrap_or_default(),
+                    e.metadata()
+                        .map(|m| ui::human_size(m.len()))
+                        .unwrap_or_default(),
                 ));
             }
         }
@@ -422,15 +342,6 @@ fn shq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn human(bytes: u64) -> String {
-    let (v, u) = if bytes >= 1 << 30 {
-        (bytes as f64 / (1u64 << 30) as f64, "GB")
-    } else {
-        (bytes as f64 / (1u64 << 20) as f64, "MB")
-    };
-    format!("{v:.1} {u}")
-}
-
 pub fn locate_script(name: &str) -> Option<String> {
     for base in ["/usr/libexec/tendril", "scripts", "./scripts"] {
         let p = format!("{base}/{name}");
@@ -522,16 +433,13 @@ pub async fn system() -> Markup {
 
 fn host_info() -> Markup {
     let line = |k: &str, v: String| html! { tr { td.sub style="white-space:nowrap" { (k) } td.mono { (v) } } };
-    let load = std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join("  "))
-        .unwrap_or_default();
+    let load = ui::loadavg("  ");
     html! {
         div.pad {
             table {
                 tbody {
                     (line("Hostname", ui::run_stdout("hostname", &[]).unwrap_or_default().trim().to_string()))
-                    (line("Uptime", ui::run_stdout("uptime", &["-p"]).unwrap_or_default().trim().to_string()))
+                    (line("Uptime", ui::uptime()))
                     (line("Load (1/5/15m)", load))
                     (line("Memory", meminfo()))
                     (line("Disk (/)", ui::run_stdout("df", &["-h", "--output=used,size,pcent", "/"]).map(|s| s.lines().nth(1).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" / ")).unwrap_or_default()))
@@ -543,21 +451,9 @@ fn host_info() -> Markup {
 }
 
 fn meminfo() -> String {
-    let read = |k: &str| {
-        std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with(k))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|kb| kb.parse::<u64>().ok())
-        })
-    };
-    match (read("MemTotal:"), read("MemAvailable:")) {
-        (Some(t), Some(a)) => format!(
-            "{:.1} / {:.1} GB used",
-            (t - a) as f64 / 1048576.0,
-            t as f64 / 1048576.0
-        ),
-        _ => String::new(),
+    match ui::mem_used_total_gb() {
+        Some((used, total)) => format!("{used:.1} / {total:.1} GB used"),
+        None => String::new(),
     }
 }
 

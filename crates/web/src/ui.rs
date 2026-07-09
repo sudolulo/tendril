@@ -23,12 +23,7 @@ pub fn page(active: &str, title: &str, body: Markup) -> Markup {
         .unwrap_or_default()
         .trim()
         .to_string();
-    let ip = run_stdout("hostname", &["-I"])
-        .unwrap_or_default()
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let ip = lan_ip().unwrap_or_default();
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -199,7 +194,7 @@ pub fn viability(v: PassthroughViability) -> &'static str {
     }
 }
 
-pub fn state_label(s: DomainState) -> &'static str {
+fn state_label(s: DomainState) -> &'static str {
     match s {
         DomainState::Running => "running",
         DomainState::Paused => "paused",
@@ -209,7 +204,7 @@ pub fn state_label(s: DomainState) -> &'static str {
     }
 }
 
-pub fn state_class(s: DomainState) -> &'static str {
+fn state_class(s: DomainState) -> &'static str {
     match s {
         DomainState::Running => "running",
         DomainState::Paused => "installing",
@@ -291,7 +286,7 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-/// Run a command and return trimmed stdout on success (read-only host queries).
+/// Run a command and return its stdout on success (read-only host queries).
 pub fn run_stdout(cmd: &str, args: &[&str]) -> Option<String> {
     Command::new(cmd)
         .args(args)
@@ -299,6 +294,105 @@ pub fn run_stdout(cmd: &str, args: &[&str]) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// Run `virsh` against the system libvirt (prefixes `-c qemu:///system`), returning stdout on success.
+pub fn virsh(args: &[&str]) -> Option<String> {
+    let mut full = vec!["-c", "qemu:///system"];
+    full.extend_from_slice(args);
+    run_stdout("virsh", &full)
+}
+
+/// This host's primary LAN IP: the first token of `hostname -I`, if any.
+pub fn lan_ip() -> Option<String> {
+    run_stdout("hostname", &["-I"]).and_then(|s| s.split_whitespace().next().map(str::to_string))
+}
+
+/// A `/proc/meminfo` field's value: the second whitespace-separated token of the line starting with
+/// `key`, parsed as a number. For sizes (`MemTotal:`, `MemAvailable:`) that's KiB; for counters
+/// (`HugePages_Total`) it's a plain count.
+pub fn meminfo_kb(key: &str) -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
+        s.lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok())
+    })
+}
+
+/// Host memory as `(used, total)` in GB — used = MemTotal − MemAvailable. `None` if either field is
+/// missing from `/proc/meminfo`.
+pub fn mem_used_total_gb() -> Option<(f64, f64)> {
+    let t = meminfo_kb("MemTotal:")? as f64;
+    let a = meminfo_kb("MemAvailable:")? as f64;
+    Some(((t - a) / 1048576.0, t / 1048576.0))
+}
+
+/// `bytes` as a human-readable size: `x.y GB` at ≥ 1 GiB, else `x.y MB`.
+pub fn human_size(bytes: u64) -> String {
+    let (v, u) = if bytes >= 1 << 30 {
+        (bytes as f64 / (1u64 << 30) as f64, "GB")
+    } else {
+        (bytes as f64 / (1u64 << 20) as f64, "MB")
+    };
+    format!("{v:.1} {u}")
+}
+
+/// Host uptime, pretty-printed (`uptime -p`, trimmed).
+pub fn uptime() -> String {
+    run_stdout("uptime", &["-p"])
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// The host's 1/5/15-minute load averages, joined with `sep`.
+pub fn loadavg(sep: &str) -> String {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join(sep))
+        .unwrap_or_default()
+}
+
+/// chmod 0600 (owner read/write only) — for private-key/secret files. Best-effort.
+#[cfg(unix)]
+pub fn chmod_600(path: impl AsRef<std::path::Path>) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+#[cfg(not(unix))]
+pub fn chmod_600(_: impl AsRef<std::path::Path>) {}
+
+/// Write a secret file 0600 **from the first byte**: opened create|truncate with mode 0600, and
+/// chmod'd after open — the creation mode doesn't apply to a pre-existing file, so that's tightened
+/// too before any bytes land.
+pub fn write_secret(path: impl AsRef<std::path::Path>, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let path = path.as_ref();
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    chmod_600(path);
+    f.write_all(bytes)
+}
+
+/// Write a secret file that must not already exist (`create_new`, mode 0600) — refuses to follow a
+/// pre-planted file/symlink at the path.
+pub fn write_secret_new(path: impl AsRef<std::path::Path>, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)?.write_all(bytes)
 }
 
 /// Run a mutating command: `Ok(stdout)` on success, `Err(stderr or error)` on failure.

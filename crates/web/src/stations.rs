@@ -79,14 +79,7 @@ fn parse_cpuset(spec: &str, out: &mut std::collections::HashSet<u32>) {
 /// Whether the host has a static hugepage pool allocated (else enabling `<hugepages/>` would stop the
 /// VM from starting).
 fn hugepages_available() -> bool {
-    std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("HugePages_Total"))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|n| n.parse::<u64>().ok())
-        })
+    ui::meminfo_kb("HugePages_Total")
         .map(|n| n > 0)
         .unwrap_or(false)
 }
@@ -213,9 +206,8 @@ pub async fn list_page() -> Markup {
     let peers: Vec<_> = if ui::is_demo() {
         fed::demo_fleet()
     } else {
-        tokio::task::spawn_blocking(fed::fleet)
+        fed::fleet_async()
             .await
-            .unwrap_or_default()
             .into_iter()
             .filter(|n| n.name != local)
             .collect()
@@ -295,7 +287,7 @@ pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
 
 /// The UUID of a station's attached mediated device (vGPU), if it has one, read from its domain XML.
 pub(crate) fn station_mdev_uuid(name: &str) -> Option<String> {
-    let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;
+    let xml = ui::virsh(&["dumpxml", name])?;
     mdev_uuid_from_xml(&xml)
 }
 
@@ -330,7 +322,7 @@ pub(crate) fn resplit(name: &str, new_gpu_sel: &str) -> Result<(), String> {
 
     // Repoint the persistent definition at the new mdev — swap only the UUID, keeping the disk and
     // every other device identical (no disk recreation ⇒ user data preserved).
-    let xml = match ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name]) {
+    let xml = match ui::virsh(&["dumpxml", name]) {
         Some(x) if x.contains(&format!("uuid='{old_uuid}'")) => x,
         _ => {
             crate::vgpu::remove_mdev(&new_uuid);
@@ -848,11 +840,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         usb_devices.extend(crate::seats::devices_of(&seat));
     }
 
-    let guest = if get("os") == "steamos" {
-        GuestOs::SteamOs
-    } else {
-        GuestOs::Windows
-    };
+    let guest = guest_os_of(&get("os"));
     let name = get("name");
     if !valid_station_name(&name) {
         return create_form(Some(
@@ -898,69 +886,20 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
 
     let base_image = get("base_image");
     if !base_image.is_empty() {
-        let Some(base_path) = crate::images::path_of(&base_image) else {
-            return create_form(Some("The selected base image no longer exists.")).into_response();
-        };
-        let guest = crate::images::image_os(&base_image).unwrap_or(guest);
-        if FsPath::new(&disk).exists() {
-            return create_form(Some(&format!("A disk already exists at {disk}."))).into_response();
-        }
-        if let Err(e) = create_overlay(FsPath::new(&disk), FsPath::new(&base_path)) {
-            return create_form(Some(&format!("Cloning the image failed: {e}"))).into_response();
-        }
-        let assign = match assign_gpu(&get("gpu")) {
-            Ok(a) => a,
-            Err(e) => {
-                // Don't strand the freshly-created overlay — it would block a retry under the
-                // same name with "a disk already exists".
-                let _ = std::fs::remove_file(&disk);
-                return create_form(Some(&e)).into_response();
-            }
-        };
-        let (dram, dvcpus, _) = resource_defaults();
-        let mut req = StationRequest {
-            name: name.clone(),
+        return create_from_image(
+            &name,
+            &base_image,
+            &disk,
             guest,
-            disk_path: disk.clone(),
-            size_gib: 0,
-            create_disk: false,
-            vcpus: get("vcpus").parse().unwrap_or(dvcpus),
-            memory_mib: get("memory_mib").parse().unwrap_or(dram),
-            native_hardware: checked("native"),
-            passthrough_addresses: assign.passthrough.clone(),
-            mdev_uuid: assign.mdev_uuid.clone(),
-            media: InstallMedia::default(), // no install media — the domain boots from the cloned disk
+            &get("gpu"),
+            &get("vcpus"),
+            &get("memory_mib"),
+            checked("native"),
+            checked("start"),
+            checked("low_latency"),
             usb_devices,
-            define: true,
-            start: checked("start"),
-            steam_library_dir: steam_lib.clone(),
-            data_disk: None,
-            cpu_pinning: None,
-            hugepages: false,
-        };
-        // Low-latency applies to clones too — the checkbox is visible (and on by default) in
-        // clone mode, so honoring it only on fresh installs would silently drop it here.
-        if checked("low_latency") {
-            let (pinning, hugepages) = plan_low_latency(req.vcpus);
-            req.cpu_pinning = pinning;
-            req.hugepages = hugepages;
-        }
-        let lv = Libvirt::system();
-        return match provision(&req, &lv) {
-            Ok(_) => {
-                record_local(&name, guest, Some(&base_image));
-                Redirect::to(&format!("/stations/{name}")).into_response()
-            }
-            Err(e) => {
-                assign.cleanup();
-                // Roll the failed clone back symmetrically: provision defines before it starts, so
-                // a start failure would otherwise leave a defined domain pointing at the overlay
-                // we're about to delete — an unbootable ghost station.
-                let _ = lv.undefine(&name);
-                let _ = std::fs::remove_file(&disk);
-                create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
-            }
-        };
+            steam_lib,
+        );
     }
 
     let seed_iso = if checked("unattend") {
@@ -1006,7 +945,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     let virtio_iso = if matches!(guest, GuestOs::Windows) {
         let v = get("virtio_iso");
         Some(if v.is_empty() {
-            format!("{}/virtio-win.iso", crate::storage::iso_dir())
+            default_virtio_iso()
         } else {
             v
         })
@@ -1053,11 +992,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     };
     // Low-latency mode (opt-in): pin this station's vCPUs to dedicated host cores and use hugepages
     // when a pool exists, so gaming frame-times don't jitter from host scheduling.
-    if checked("low_latency") {
-        let (pinning, hugepages) = plan_low_latency(req.vcpus);
-        req.cpu_pinning = pinning;
-        req.hugepages = hugepages;
-    }
+    apply_low_latency(&mut req, checked("low_latency"));
 
     // Refuse install media that failed checksum verification (a `.mismatch` marker). Media with no
     // upstream checksum — only a recorded `.sha256`, e.g. the locally-assembled Windows ISO — is fine.
@@ -1120,6 +1055,96 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
     }
 }
 
+/// When `on`, plan low-latency resources for `req` (1:1 CPU pinning + hugepages if a pool exists) —
+/// the shared half of the clone and fresh-install create paths.
+fn apply_low_latency(req: &mut StationRequest, on: bool) {
+    if on {
+        let (pinning, hugepages) = plan_low_latency(req.vcpus);
+        req.cpu_pinning = pinning;
+        req.hugepages = hugepages;
+    }
+}
+
+/// The clone-from-image branch of [`create`]: the disk becomes a copy-on-write overlay of the golden
+/// image and there's no install step — just define the VM (which boots straight from the cloned
+/// disk). The guest OS comes from the image (recorded at save time), not the wizard, so it can't be
+/// mismatched.
+#[allow(clippy::too_many_arguments)] // a flat slice of the wizard form; the fields are distinct scalars
+fn create_from_image(
+    name: &str,
+    base_image: &str,
+    disk: &str,
+    wizard_guest: GuestOs,
+    gpu_sel: &str,
+    vcpus_raw: &str,
+    memory_raw: &str,
+    native: bool,
+    start: bool,
+    low_latency: bool,
+    usb_devices: Vec<UsbPassthrough>,
+    steam_lib: Option<String>,
+) -> Response {
+    let Some(base_path) = crate::images::path_of(base_image) else {
+        return create_form(Some("The selected base image no longer exists.")).into_response();
+    };
+    let guest = crate::images::image_os(base_image).unwrap_or(wizard_guest);
+    if FsPath::new(disk).exists() {
+        return create_form(Some(&format!("A disk already exists at {disk}."))).into_response();
+    }
+    if let Err(e) = create_overlay(FsPath::new(disk), FsPath::new(&base_path)) {
+        return create_form(Some(&format!("Cloning the image failed: {e}"))).into_response();
+    }
+    let assign = match assign_gpu(gpu_sel) {
+        Ok(a) => a,
+        Err(e) => {
+            // Don't strand the freshly-created overlay — it would block a retry under the
+            // same name with "a disk already exists".
+            let _ = std::fs::remove_file(disk);
+            return create_form(Some(&e)).into_response();
+        }
+    };
+    let (dram, dvcpus, _) = resource_defaults();
+    let mut req = StationRequest {
+        name: name.to_string(),
+        guest,
+        disk_path: disk.to_string(),
+        size_gib: 0,
+        create_disk: false,
+        vcpus: vcpus_raw.parse().unwrap_or(dvcpus),
+        memory_mib: memory_raw.parse().unwrap_or(dram),
+        native_hardware: native,
+        passthrough_addresses: assign.passthrough.clone(),
+        mdev_uuid: assign.mdev_uuid.clone(),
+        media: InstallMedia::default(), // no install media — the domain boots from the cloned disk
+        usb_devices,
+        define: true,
+        start,
+        steam_library_dir: steam_lib,
+        data_disk: None,
+        cpu_pinning: None,
+        hugepages: false,
+    };
+    // Low-latency applies to clones too — the checkbox is visible (and on by default) in
+    // clone mode, so honoring it only on fresh installs would silently drop it here.
+    apply_low_latency(&mut req, low_latency);
+    let lv = Libvirt::system();
+    match provision(&req, &lv) {
+        Ok(_) => {
+            record_local(name, guest, Some(base_image));
+            Redirect::to(&format!("/stations/{name}")).into_response()
+        }
+        Err(e) => {
+            assign.cleanup();
+            // Roll the failed clone back symmetrically: provision defines before it starts, so
+            // a start failure would otherwise leave a defined domain pointing at the overlay
+            // we're about to delete — an unbootable ghost station.
+            let _ = lv.undefine(name);
+            let _ = std::fs::remove_file(disk);
+            create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
+        }
+    }
+}
+
 /// A media file whose checksum verification failed (has a `.mismatch` marker). No marker, or a
 /// `.verified` / `.sha256` marker, is acceptable — it's fine to use media with no upstream checksum.
 fn verification_failed(path: &str) -> bool {
@@ -1174,7 +1199,6 @@ fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
             return;
         }
     }
-    let _ = guest; // media set already reflects the guest; kept for signature symmetry
     let lv = Libvirt::system();
     match provision(&req, &lv) {
         Ok(report) => {
@@ -1405,28 +1429,14 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         size_gib = 0;
         media = InstallMedia::default();
     } else {
-        guest = if s.os == "steamos" {
-            GuestOs::SteamOs
-        } else {
-            GuestOs::Windows
-        };
+        guest = guest_os_of(&s.os);
         create_disk = !FsPath::new(&disk).exists();
         size_gib = s.size_gib.unwrap_or(ddisk);
         let install_iso = Some(default_iso(guest));
-        let virtio_iso = matches!(guest, GuestOs::Windows)
-            .then(|| format!("{}/virtio-win.iso", crate::storage::iso_dir()));
+        let virtio_iso = matches!(guest, GuestOs::Windows).then(default_virtio_iso);
         // Unattended install: build the answer-file/kickstart seed from the account fields.
+        // (Empty username/password default inside `build_seed`, same as the local wizard path.)
         let seed_iso = if s.unattend {
-            let user = if s.username.trim().is_empty() {
-                "player"
-            } else {
-                s.username.trim()
-            };
-            let pass = if s.password.trim().is_empty() {
-                "tendril"
-            } else {
-                s.password.trim()
-            };
             // The federation/API path leaves vGPU + app selection to the node's own wizard for now,
             // so no guest-driver injection or apps here.
             Some(
@@ -1434,8 +1444,8 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
                     guest,
                     &s.name,
                     &disk,
-                    user,
-                    pass,
+                    &s.username,
+                    &s.password,
                     s.hostname.trim(),
                     "",
                     &[],
@@ -1484,11 +1494,12 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
 /// Record a station this node just created into the shared fleet registry (so it can be re-homed if
 /// this node later goes down). No-op-safe when there's no shared store (writes locally).
 fn record_local(name: &str, guest: GuestOs, base_image: Option<&str>) {
-    let os = match guest {
-        GuestOs::Windows => "windows",
-        GuestOs::SteamOs => "steamos",
-    };
-    crate::federation::record_station(&crate::federation::node_name(), name, os, base_image);
+    crate::federation::record_station(
+        &crate::federation::node_name(),
+        name,
+        crate::images::os_label(guest),
+        base_image,
+    );
 }
 
 pub(crate) fn passthrough_for(addr: &str) -> Vec<String> {
@@ -1546,14 +1557,7 @@ fn assign_gpu(sel: &str) -> Result<GpuAssignment, String> {
 /// across the passthrough-capable GPUs (one station per GPU). Returns (memory_mib, vcpus, disk_gib).
 pub(crate) fn resource_defaults() -> (u64, u32, u32) {
     let num = detect().passthrough_capable().count().max(1) as u64;
-    let total_ram_mib = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("MemTotal:"))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|kb| kb.parse::<u64>().ok())
-        })
+    let total_ram_mib = ui::meminfo_kb("MemTotal:")
         .map(|kb| kb / 1024)
         .unwrap_or(16384);
     let threads = std::thread::available_parallelism()
@@ -1578,6 +1582,20 @@ fn default_iso(guest: GuestOs) -> String {
     match guest {
         GuestOs::Windows => format!("{}/win11.iso", crate::storage::iso_dir()),
         GuestOs::SteamOs => format!("{}/bazzite-deck-nvidia.iso", crate::storage::iso_dir()),
+    }
+}
+
+/// Default virtio-win driver ISO path (Windows guests, when the form field is left blank).
+fn default_virtio_iso() -> String {
+    format!("{}/virtio-win.iso", crate::storage::iso_dir())
+}
+
+/// Map the wizard/API OS string to a guest OS — anything but `steamos` is Windows.
+fn guest_os_of(os: &str) -> GuestOs {
+    if os == "steamos" {
+        GuestOs::SteamOs
+    } else {
+        GuestOs::Windows
     }
 }
 
@@ -1735,16 +1753,21 @@ pub async fn send_enter(Path(name): Path<String>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-/// The station's OS disk path, from libvirt (the first `device='disk'` in its block list).
-fn disk_path(name: &str) -> Option<String> {
-    let out = ui::run_stdout(
-        "virsh",
-        &["-c", "qemu:///system", "domblklist", "--details", name],
-    )?;
+/// A station's disk source path from `virsh domblklist`: the first `device='disk'` row, or — with
+/// `target` set — only the row whose target matches (e.g. `vda` to skip a data volume).
+pub(crate) fn domblk_source(name: &str, target: Option<&str>) -> Option<String> {
+    let out = ui::virsh(&["domblklist", "--details", name])?;
+    // Columns: Type | Device | Target | Source.
     out.lines().find_map(|l| {
         let c: Vec<&str> = l.split_whitespace().collect();
-        (c.len() >= 4 && c[1] == "disk").then(|| c[3].to_string())
+        (c.len() >= 4 && c[1] == "disk" && target.is_none_or(|t| c[2] == t))
+            .then(|| c[3].to_string())
     })
+}
+
+/// The station's OS disk path, from libvirt (the first `device='disk'` in its block list).
+fn disk_path(name: &str) -> Option<String> {
+    domblk_source(name, None)
 }
 
 /// Live install-progress: how much has been written to the station's disk so far. Polls itself.
@@ -1823,7 +1846,7 @@ pub async fn vnc_ws(Path(name): Path<String>, ws: WebSocketUpgrade) -> Response 
 }
 
 fn vnc_port(name: &str) -> Option<u16> {
-    let out = ui::run_stdout("virsh", &["-c", "qemu:///system", "vncdisplay", name])?;
+    let out = ui::virsh(&["vncdisplay", name])?;
     let disp = out.trim();
     // ":0", "127.0.0.1:0", "127.0.0.1:0,tls-port"... take the display number after the last ':'.
     let n: u16 = disp
@@ -1842,12 +1865,7 @@ fn vnc_port(name: &str) -> Option<u16> {
 /// (`ssh -L PORT:127.0.0.1:PORT host`); the in-browser console proxies it for you.
 fn vnc_endpoint(name: &str) -> Option<(String, String, u16)> {
     let port = vnc_port(name)?;
-    let host = ui::run_stdout("hostname", &["-I"])
-        .unwrap_or_default()
-        .split_whitespace()
-        .next()
-        .unwrap_or("127.0.0.1")
-        .to_string();
+    let host = ui::lan_ip().unwrap_or_else(|| "127.0.0.1".to_string());
     Some((host, format!(":{}", port - 5900), port))
 }
 

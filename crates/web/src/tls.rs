@@ -93,11 +93,7 @@ pub fn ensure() -> Result<(String, String), String> {
         ],
     )
     .map_err(|e| format!("openssl cert generation failed: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_p, std::fs::Permissions::from_mode(0o600));
-    }
+    ui::chmod_600(&key_p);
     Ok((cert_p, key_p))
 }
 
@@ -187,17 +183,7 @@ fn validate_pair(cert_pem: &[u8], key_pem: &[u8]) -> Result<(), String> {
     // Write the (private-key-bearing) temp files 0600 and O_EXCL — so the key isn't world-readable in
     // the shared temp dir and a pre-planted symlink at the predictable name can't be followed.
     let write = |p: &Path, b: &[u8]| -> Result<(), String> {
-        use std::io::Write as _;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        opts.open(p)
-            .and_then(|mut f| f.write_all(b))
-            .map_err(|e| e.to_string())
+        ui::write_secret_new(p, b).map_err(|e| e.to_string())
     };
     let run = |args: &[&str]| ui::run_result("openssl", args);
     let result = (|| {

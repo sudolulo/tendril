@@ -284,14 +284,8 @@ pub async fn build_status() -> Markup {
     let tail = std::fs::read_to_string(log_path())
         .ok()
         .map(|s| {
-            s.lines()
-                .rev()
-                .take(40)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("\n")
+            let lines: Vec<&str> = s.lines().collect();
+            lines[lines.len().saturating_sub(40)..].join("\n")
         })
         .unwrap_or_default();
     html! {

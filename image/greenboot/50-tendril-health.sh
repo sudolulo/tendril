@@ -16,9 +16,13 @@ systemctl is-active --quiet libvirtd || fail "libvirtd is not active"
 # The control plane service must be up …
 systemctl is-active --quiet tendril-web || fail "tendril-web is not active"
 
-# … and actually answering (HTTPS :443, self-signed). Give it a moment after boot.
+# … and actually answering on :443. Try HTTPS (the default, self-signed) and plain HTTP — the
+# documented reverse-proxy setup (TENDRIL_TLS=off) serves HTTP on the same port, and a required
+# check that only speaks HTTPS would fail every boot there, silently rolling back every OS update.
+# Give it a moment after boot.
 for _ in $(seq 1 30); do
-  if curl -ksS -o /dev/null --max-time 3 https://127.0.0.1/; then
+  if curl -ksS -o /dev/null --max-time 3 https://127.0.0.1/ \
+     || curl -sS -o /dev/null --max-time 3 http://127.0.0.1:443/; then
     echo "greenboot(tendril): healthy"
     exit 0
   fi

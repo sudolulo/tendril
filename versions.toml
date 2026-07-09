@@ -4,7 +4,8 @@
 # (see renovate.json) or a deliberate manual PR. Do not edit casually. Rationale: docs/VERSIONING.md.
 
 [toolchain]
-rust = "1.84.0"
+# Must match rust-toolchain.toml (1.85 = first stable with edition2024, needed by rustls/rcgen).
+rust = "1.85.0"
 
 [host]
 # Pin the Fedora bootc base by digest before the first tagged release for full reproducibility.

@@ -63,16 +63,32 @@ fn available_isos() -> Vec<String> {
     v
 }
 
-/// Whether a background ISO fetch is in progress: a `.part` file exists AND is still growing (fresh
-/// mtime). A `.part` orphaned by a mid-download restart would otherwise hide the fetch button forever.
+/// In-process guard: exactly one fetch thread per process. The mtime heuristic below only covers
+/// orphans from a *previous* process — without this, two quick Fetch clicks (or a stalled >10-min
+/// download plus a retry) could race two curls.
+static FETCH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a background ISO fetch is in progress: this process has a fetch thread, or a pid-suffixed
+/// `.part.<pid>` temp is still growing (fresh mtime — covers a fetch owned by a previous process).
+/// A temp orphaned by a mid-download restart would otherwise hide the fetch button forever.
 fn fetching() -> bool {
-    let p = format!("{}/{LATEST_ISO}.part", crate::storage::iso_dir());
-    std::fs::metadata(p)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .map(|age| age.as_secs() < 600)
-        .unwrap_or(false)
+    if FETCH_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    let prefix = format!("{LATEST_ISO}.part");
+    let Ok(rd) = std::fs::read_dir(crate::storage::iso_dir()) else {
+        return false;
+    };
+    rd.flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(prefix.as_str()))
+        .any(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|age| age.as_secs() < 600)
+                .unwrap_or(false)
+        })
 }
 
 /// Reject anything that isn't a plain basename (defends the shell command below from injection/paths).
@@ -173,11 +189,18 @@ pub async fn fetch() -> Markup {
             html! { div.banner.warn { "Disabled in the live demo." } },
         ));
     }
-    if !fetching() {
+    use std::sync::atomic::Ordering;
+    if !fetching()
+        && FETCH_RUNNING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
         let dir = crate::storage::iso_dir();
         std::thread::spawn(move || {
             let _ = std::fs::create_dir_all(&dir);
-            let tmp = format!("{dir}/{LATEST_ISO}.part");
+            // Pid-suffixed temp: a leftover curl from a dead previous process can't interleave
+            // writes with this one, and each cleanup only ever removes its own temp.
+            let tmp = format!("{dir}/{LATEST_ISO}.part.{}", std::process::id());
             if ui::run_result(
                 "curl",
                 &["-fL", "--max-time", "3600", "-o", &tmp, LATEST_URL],
@@ -188,6 +211,7 @@ pub async fn fetch() -> Markup {
             } else {
                 let _ = std::fs::remove_file(&tmp);
             }
+            FETCH_RUNNING.store(false, Ordering::SeqCst);
         });
     }
     panel_body(Some(html! { div.banner.ok {

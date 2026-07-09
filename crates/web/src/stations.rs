@@ -953,6 +953,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             }
             Err(e) => {
                 assign.cleanup();
+                // Roll the failed clone back symmetrically: provision defines before it starts, so
+                // a start failure would otherwise leave a defined domain pointing at the overlay
+                // we're about to delete — an unbootable ghost station.
+                let _ = lv.undefine(&name);
                 let _ = std::fs::remove_file(&disk);
                 create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
             }
@@ -1238,6 +1242,18 @@ fn build_seed(
         .unwrap_or_else(|| ".".to_string());
     let seed = format!("{dir}/{name}-seed.iso");
     let path = FsPath::new(&seed);
+    // A cleared account field would render an empty <Name>/AutoLogon user that Windows Setup
+    // rejects mid-install with no feedback here — apply the same defaults as the federation path.
+    let username = if username.trim().is_empty() {
+        "player"
+    } else {
+        username.trim()
+    };
+    let password = if password.trim().is_empty() {
+        "tendril"
+    } else {
+        password.trim()
+    };
     match guest {
         GuestOs::Windows => {
             // Inject the NVIDIA vGPU guest driver only when this station is bound to a vGPU (mdev)

@@ -8,9 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 A correctness-audit round following 0.22.0's security rounds: a full-codebase review for logic bugs
-and cleanups (not security). No feature or API changes.
+and cleanups (not security), then a second pass over the fixes themselves. No feature or API changes.
 
 ### Fixed
+- **Demo privacy.** The public demo no longer serves the real host's journal, nor the (possibly
+  co-located real instance's) audit log — the logs/audit views and downloads return placeholders.
+- **Greenboot vs reverse-proxy.** The required post-boot health check only spoke HTTPS; with the
+  documented `TENDRIL_TLS=off` proxy setup every boot failed the check, silently rolling back all
+  OS updates. It now accepts plain HTTP on :443 too.
+- **Empty wizard account fields.** A cleared Username/Password no longer renders an empty
+  `<Name>`/AutoLogon into `autounattend.xml` (Windows Setup rejects it hours into the install);
+  the local path applies the same `player`/`tendril` defaults as the federation path.
+- **Image capture/verify markers** (`.qcow2.partial` / `.qcow2.verifying`) orphaned by a service
+  restart no longer wedge the images panel or block re-capturing a name — markers are mtime-aged
+  and reaped, which stays safe for a peer's live capture on a shared store.
+- **PXE hardening of the previous round's own fixes:** backticks in a kickstart-heredoc comment
+  were command-substituted (executing a stray `oci` binary as root and corrupting the generated
+  kickstart); the full-extraction fallback now also covers a missing EFI tree; a failed clone
+  provision undefines the domain it defined (no ghost station pointing at a deleted overlay); and
+  the installer-ISO fetch uses an in-process guard plus pid-unique temp so a stalled download and a
+  retry can't corrupt each other.
+- `versions.toml` rust pin matches `rust-toolchain.toml` (1.85.0).
 - **PXE net-install payload.** The PXE kickstart pointed `ostreecontainer --transport=oci` at the
   ISO over HTTP; the `oci` transport takes a local OCI-layout path, so every net-install died at
   the payload step. It now installs the container embedded in the ISO (`/run/install/repo/container`).

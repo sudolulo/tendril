@@ -198,6 +198,11 @@ pub fn audit(actor: &str, action: &str, status: u16) {
 
 /// The most recent `n` audit lines, newest first.
 pub fn audit_tail(n: usize) -> Vec<String> {
+    // The demo must not leak a co-located real instance's audit trail (both default to the same
+    // path); its own actions are all no-ops anyway.
+    if crate::ui::is_demo() {
+        return Vec::new();
+    }
     let Ok(s) = std::fs::read_to_string(audit_path()) else {
         return Vec::new();
     };
@@ -640,7 +645,13 @@ pub async fn set_viewer(Form(f): Form<ViewerForm>) -> Markup {
 
 /// Download the full audit log as text.
 pub async fn audit_download() -> Response {
-    let body = std::fs::read_to_string(audit_path()).unwrap_or_default();
+    // Demo: never serve the real (possibly co-located) instance's audit trail to anonymous
+    // visitors — the middleware only gates POSTs and this is a GET.
+    let body = if ui::is_demo() {
+        "(demo — the audit log is hidden)\n".to_string()
+    } else {
+        std::fs::read_to_string(audit_path()).unwrap_or_default()
+    };
     (
         [
             (

@@ -66,25 +66,25 @@ extract() { # <iso-path> <dest-dir> [<iso-subtree>...]
 }
 ISODIR="$ROOT/iso"; mkdir -p "$ISODIR"
 extract "$ISO" "$ISODIR" /images/pxeboot /EFI
-# Anaconda kernel + initrd (Fedora/bootc ISOs put them under /images/pxeboot).
-KERNEL="$(find "$ISODIR" -path '*pxeboot/vmlinuz' -print -quit)"
-INITRD="$(find "$ISODIR" -path '*pxeboot/initrd.img' -print -quit)"
-if [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
-  rm -rf "$ISODIR"; mkdir -p "$ISODIR"
-  extract "$ISO" "$ISODIR"
+# Locate ALL four boot files; the targeted extraction may miss any of them (exact, case-sensitive
+# paths), and the full-extraction fallback must cover the EFI pair too, not just kernel/initrd.
+find_boot_files() {
   KERNEL="$(find "$ISODIR" -path '*pxeboot/vmlinuz' -print -quit)"
   INITRD="$(find "$ISODIR" -path '*pxeboot/initrd.img' -print -quit)"
+  SHIM="$(find "$ISODIR" -iname 'BOOTX64.EFI' -print -quit)"
+  GRUB="$(find "$ISODIR" -iname 'grubx64.efi' -print -quit)"
+  [ -n "$KERNEL" ] && [ -n "$INITRD" ] && [ -n "$SHIM" ] && [ -n "$GRUB" ]
+}
+if ! find_boot_files; then
+  rm -rf "$ISODIR"; mkdir -p "$ISODIR"
+  extract "$ISO" "$ISODIR"
+  find_boot_files || { echo "error: couldn't find pxeboot vmlinuz/initrd.img + BOOTX64.EFI/grubx64.efi in the ISO" >&2; exit 2; }
 fi
-[ -n "$KERNEL" ] && [ -n "$INITRD" ] || { echo "error: couldn't find pxeboot vmlinuz/initrd.img in the ISO" >&2; exit 2; }
 cp "$KERNEL" "$HTTP/vmlinuz"; cp "$INITRD" "$HTTP/initrd.img"
+# UEFI bootloader: shim + grub from the ISO's EFI tree.
+cp "$SHIM" "$TFTP/bootx64.efi"; cp "$GRUB" "$TFTP/grubx64.efi"
 # The install source (inst.repo), served over HTTP — link, don't copy a multi-GB file into tmpfs.
 ln -s "$(readlink -f "$ISO")" "$HTTP/tendril.iso"
-
-# UEFI bootloader: shim + grub from the ISO's EFI tree.
-SHIM="$(find "$ISODIR" -iname 'BOOTX64.EFI' -print -quit)"
-GRUB="$(find "$ISODIR" -iname 'grubx64.efi' -print -quit)"
-[ -n "$SHIM" ] && [ -n "$GRUB" ] || { echo "error: couldn't find BOOTX64.EFI/grubx64.efi in the ISO" >&2; exit 2; }
-cp "$SHIM" "$TFTP/bootx64.efi"; cp "$GRUB" "$TFTP/grubx64.efi"
 # Boot files are copied out — drop the extraction tree now instead of holding it for the server's life.
 rm -rf "$ISODIR"
 
@@ -115,8 +115,9 @@ fi
 %include /tmp/part.ks
 # The OS payload is the container image EMBEDDED in the installer ISO. Anaconda fetches the ISO via
 # inst.repo and mounts it at /run/install/repo, so the bootc-image-builder-embedded OCI layout is at
-# /run/install/repo/container. (The `oci` transport takes a local layout path — an http:// URL, let
-# alone one pointing at the ISO file itself, is not a valid payload source.)
+# /run/install/repo/container. (The oci transport takes a local layout path — an http:// URL, let
+# alone one pointing at the ISO file itself, is not a valid payload source.) NOTE: this heredoc is
+# UNQUOTED (the %pre block needs \$ escapes), so no backticks/\$ in comments — they'd execute.
 ostreecontainer --url=/run/install/repo/container --transport=oci --no-signature-verification
 rootpw --lock
 reboot --eject

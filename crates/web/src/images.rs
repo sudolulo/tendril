@@ -202,8 +202,32 @@ enum Integrity {
     Mismatch,
 }
 
+/// How long a capture temp / verifying marker may sit unmodified before it's considered orphaned
+/// (its worker thread died with a service restart). A live capture writes its temp continuously;
+/// a verify of even a large image hashes in well under this.
+const STALE_MARKER_SECS: u64 = 30 * 60;
+
+/// True when `p` exists and was modified within [`STALE_MARKER_SECS`]. A stale file is removed —
+/// self-healing, and safe on a shared store where a *peer's* live marker stays fresh.
+fn fresh_or_reap(p: &str) -> bool {
+    let Ok(md) = std::fs::metadata(p) else {
+        return false;
+    };
+    let age = md
+        .modified()
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if age > STALE_MARKER_SECS {
+        let _ = std::fs::remove_file(p);
+        return false;
+    }
+    true
+}
+
 fn integrity(name: &str) -> Integrity {
-    if FsPath::new(&verifying_path(name)).exists() {
+    if fresh_or_reap(&verifying_path(name)) {
         Integrity::Verifying
     } else if FsPath::new(&mismatch_path(name)).exists() {
         Integrity::Mismatch
@@ -294,17 +318,22 @@ fn partial_path(dir: &str, name: &str) -> String {
     format!("{dir}/.{name}.qcow2.partial")
 }
 
-/// Names of captures currently in progress (a `.qcow2.partial` temp exists).
+/// Names of captures currently in progress: a `.qcow2.partial` temp exists AND is still being
+/// written (fresh mtime — `qemu-img convert` writes continuously). A temp orphaned by a service
+/// restart is reaped instead of showing a phantom "capturing…" row forever.
 pub fn in_progress() -> Vec<String> {
+    let dir = images_dir();
     let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(images_dir()) {
+    if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
             if let Some(mid) = n
                 .strip_prefix('.')
                 .and_then(|s| s.strip_suffix(".qcow2.partial"))
             {
-                out.push(mid.to_string());
+                if fresh_or_reap(&format!("{dir}/{n}")) {
+                    out.push(mid.to_string());
+                }
             }
         }
     }
@@ -336,7 +365,9 @@ pub async fn save(Path(station): Path<String>, Form(f): Form<SaveForm>) -> Marku
     if FsPath::new(&dest).exists() {
         return note(false, "An image with that name already exists.");
     }
-    if FsPath::new(&tmp).exists() {
+    // Only a *live* temp (still being written) blocks a re-capture; an orphaned one is reaped so
+    // the name isn't refused forever after a restart killed its capture thread.
+    if fresh_or_reap(&tmp) {
         return note(false, "A capture with that name is already in progress.");
     }
     let _ = std::fs::create_dir_all(&dir);

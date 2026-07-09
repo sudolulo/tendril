@@ -598,6 +598,11 @@ pub async fn logs_download(Query(q): Query<LogQuery>) -> impl IntoResponse {
 /// Journal text. Always drops SELinux `audit`/AVC spam (never actionable here); when `stations_only`
 /// is set, further narrows to station-relevant sources (libvirt/qemu/vfio/tendril).
 fn journal_text(stations_only: bool, lines: &str) -> String {
+    // The public demo must never expose the real host's journal (IPs, sshd, co-located services) —
+    // everything else it shows is synthetic, and the middleware only gates POSTs, not this GET.
+    if ui::is_demo() {
+        return "(demo — host logs are hidden)".to_string();
+    }
     // Fetch extra lines before de-noising so the view still fills after audit spam is dropped.
     let fetch: u32 = lines.parse::<u32>().unwrap_or(300).saturating_mul(2);
     let denoise = r"grep -avE 'audit\[[0-9]+\]:|avc:  denied|audit: type=1[0-9]{3}'";

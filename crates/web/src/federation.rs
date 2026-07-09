@@ -1252,7 +1252,29 @@ fn free_gpu(n: &NodeInfo) -> Option<String> {
         .map(|g| g.address.clone())
 }
 
+/// How many free passthrough GPUs a node has.
+fn free_gpu_count(n: &NodeInfo) -> usize {
+    n.gpus
+        .iter()
+        .filter(|g| g.used_by.is_none() && g.capability == "Passthrough")
+        .count()
+}
+
+/// A node's 1-minute load average (for tie-breaking), or a large value if unknown.
+fn load1(n: &NodeInfo) -> f64 {
+    n.health
+        .load
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(f64::MAX)
+}
+
 /// GPU-aware placement: resolve `target` ("" = auto) to a (node, gpu-address) with a free GPU.
+///
+/// Auto scheduling balances the fleet: among reachable nodes that have a free passthrough GPU, pick the
+/// one with the **most** free GPUs (so stations spread onto the emptiest hardware), breaking ties by
+/// **fewest existing stations**, then **lowest load**. An explicit `target` places there or errors.
 fn place(nodes: &[NodeInfo], target: &str) -> Result<(String, String), String> {
     if !target.is_empty() {
         let n = nodes
@@ -1260,14 +1282,26 @@ fn place(nodes: &[NodeInfo], target: &str) -> Result<(String, String), String> {
             .find(|n| n.name == target && n.reachable)
             .ok_or("target node is not reachable")?;
         let g = free_gpu(n).ok_or("target node has no free passthrough GPU")?;
-        Ok((n.name.clone(), g))
-    } else {
-        nodes
-            .iter()
-            .filter(|n| n.reachable)
-            .find_map(|n| free_gpu(n).map(|g| (n.name.clone(), g)))
-            .ok_or_else(|| "no node in the fleet has a free passthrough GPU".to_string())
+        return Ok((n.name.clone(), g));
     }
+    let best = nodes
+        .iter()
+        .filter(|n| n.reachable && free_gpu_count(n) > 0)
+        .max_by(|a, b| {
+            free_gpu_count(a)
+                .cmp(&free_gpu_count(b))
+                // fewer existing stations ranks higher
+                .then(b.stations.len().cmp(&a.stations.len()))
+                // lower load ranks higher
+                .then(
+                    load1(b)
+                        .partial_cmp(&load1(a))
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+        })
+        .ok_or("no node in the fleet has a free passthrough GPU")?;
+    let g = free_gpu(best).ok_or("no free passthrough GPU")?;
+    Ok((best.name.clone(), g))
 }
 
 /// Dispatch a provision to the chosen node — locally if it's us, else over the peer's API.
@@ -2084,4 +2118,79 @@ fn node_card(n: &NodeInfo) -> Markup {
             }
         },
     )
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+
+    fn gpu(addr: &str, free: bool) -> GpuInfo {
+        GpuInfo {
+            address: addr.to_string(),
+            label: "GPU".to_string(),
+            capability: "Passthrough".to_string(),
+            used_by: if free { None } else { Some("s".to_string()) },
+        }
+    }
+    fn node(
+        name: &str,
+        reachable: bool,
+        free_gpus: usize,
+        stations: usize,
+        load: &str,
+    ) -> NodeInfo {
+        NodeInfo {
+            name: name.to_string(),
+            reachable,
+            stations: (0..stations)
+                .map(|i| StationInfo {
+                    name: format!("st{i}"),
+                    state: "running".to_string(),
+                    gpu: true,
+                })
+                .collect(),
+            gpus: (0..free_gpus)
+                .map(|i| gpu(&format!("{name}:{i}"), true))
+                .collect(),
+            health: Health {
+                uptime: String::new(),
+                load: load.to_string(),
+                mem_used_gb: 0.0,
+                mem_total_gb: 0.0,
+            },
+        }
+    }
+
+    #[test]
+    fn auto_prefers_most_free_gpus_then_fewest_stations() {
+        // A and B both have 2 free GPUs, but B has fewer stations -> B wins. C has only 1 free GPU.
+        let nodes = vec![
+            node("A", true, 2, 3, "1.0"),
+            node("B", true, 2, 1, "2.0"),
+            node("C", true, 1, 0, "0.1"),
+        ];
+        let (n, _g) = place(&nodes, "").unwrap();
+        assert_eq!(n, "B");
+    }
+
+    #[test]
+    fn auto_skips_unreachable_and_full_nodes() {
+        let nodes = vec![
+            node("down", false, 4, 0, "0.0"), // unreachable, ignored
+            node("full", true, 0, 2, "0.0"),  // no free GPU, ignored
+            node("ok", true, 1, 5, "9.0"),    // the only candidate
+        ];
+        assert_eq!(place(&nodes, "").unwrap().0, "ok");
+        // No candidate at all -> error.
+        let none = vec![node("full", true, 0, 1, "0.0")];
+        assert!(place(&none, "").is_err());
+    }
+
+    #[test]
+    fn explicit_target_must_be_reachable_and_have_a_gpu() {
+        let nodes = vec![node("A", true, 1, 0, "0.0"), node("B", false, 2, 0, "0.0")];
+        assert_eq!(place(&nodes, "A").unwrap().0, "A");
+        assert!(place(&nodes, "B").is_err()); // unreachable
+        assert!(place(&nodes, "ghost").is_err()); // unknown
+    }
 }

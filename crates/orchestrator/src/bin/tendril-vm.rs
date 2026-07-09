@@ -13,8 +13,14 @@ fn main() {
     let (matrix, groups) = detect_with_groups();
 
     let Some(cap) = matrix.passthrough_capable().next() else {
-        eprintln!("No passthrough-capable GPU to build a station for.");
-        std::process::exit(1);
+        // Informational on a dry run (inherited from the retired `tendril-domain`); an error only
+        // when asked to actually define — scripts gating on --define still see the failure.
+        if define {
+            eprintln!("No passthrough-capable GPU to build a station for.");
+            std::process::exit(1);
+        }
+        println!("No passthrough-capable GPU to build a station for.");
+        return;
     };
 
     let req = StationRequest {

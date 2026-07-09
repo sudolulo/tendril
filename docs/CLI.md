@@ -10,8 +10,7 @@ drive Tendril entirely from any of the three.
 | `tendril-detect` | Enumerates GPUs + IOMMU groups, classifies each as passthrough / host-only |
 | `tendril-plan` | Computes the exact `vfio-pci` bind set for a GPU (its whole IOMMU group) |
 | `tendril-apply` | Binds a GPU to `vfio-pci` — **dry-run by default**, `--execute` to enact |
-| `tendril-domain` | Renders a libvirt domain (Secure Boot + TPM, passthrough hostdevs) for a GPU |
-| `tendril-vm` | Renders and (with `--define`) registers a station's VM with libvirt |
+| `tendril-vm` | Renders a station's libvirt domain (Secure Boot + TPM, passthrough hostdevs) — dry-run by default; `--define` registers it with libvirt |
 | `tendril-guest` | Creates the disk, builds a seed (Windows `autounattend.xml` or SteamOS/Bazzite kickstart), and installs the OS hands-off (`--unattend --start`), then boots from disk (`--finalize`) |
 | `tendril-usb` | Lists USB controllers + devices for multi-seat assignment |
 

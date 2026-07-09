@@ -64,7 +64,15 @@ and cleanups (not security), then a second pass over the fixes themselves. No fe
   clobbering the stable/older entries; `setup-branch-protection.sh` now fails on non-2xx API
   responses instead of reporting success with unprotected branches.
 
+### Removed
+- **`tendril-domain`** — a strict subset of `tendril-vm`'s dry-run mode. `tendril-vm` (no flags)
+  renders the same domain XML; its dry run also adopts `tendril-domain`'s graceful no-GPU handling
+  (informational message, exit 0), while `--define` still fails loudly without a GPU.
+
 ### Changed
+- CI hygiene now asserts the Containerfile `FROM` lines match `versions.toml`'s
+  `fedora_bootc_base` and that the rust pins in `rust-toolchain.toml`/`versions.toml` agree —
+  "single source of truth" is enforced, not aspirational.
 - Refactor pass (zero behavior change): one shared XML escaper, sysfs reader module, and
   detect/plan helpers replace copy-pasted scaffolding across the five CLI binaries (which now build
   a `StationRequest` and call `provision()` like the web layer); the web crate gains shared

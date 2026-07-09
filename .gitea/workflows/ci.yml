@@ -49,4 +49,17 @@ jobs:
       - name: Repo hygiene (always)
         run: |
           test -f README.md && test -f NOTICE && test -f versions.toml
-          echo "ok"
+          # versions.toml is the declared single source of truth for the bootc base image, but the
+          # Containerfile FROM lines are literal — assert they haven't drifted apart.
+          base="$(sed -n 's/^fedora_bootc_base *= *"\(.*\)"/\1/p' versions.toml)"
+          test -n "$base" || { echo "fedora_bootc_base missing from versions.toml" >&2; exit 1; }
+          froms="$(grep -c "^FROM ${base}" image/Containerfile)"
+          [ "$froms" = "2" ] || {
+            echo "image/Containerfile FROM lines don't match versions.toml fedora_bootc_base=${base} (matched ${froms}/2)" >&2
+            exit 1
+          }
+          # rust-toolchain.toml and versions.toml must agree on the pinned toolchain.
+          rt="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          vt="$(sed -n 's/^rust *= *"\(.*\)"/\1/p' versions.toml)"
+          [ "$rt" = "$vt" ] || { echo "rust pin mismatch: rust-toolchain.toml=$rt versions.toml=$vt" >&2; exit 1; }
+          echo "ok (base=$base rust=$rt)"

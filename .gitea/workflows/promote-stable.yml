@@ -78,11 +78,17 @@ jobs:
             ln -sfn "$name" "$DL_DIR/$stable"
             # Refresh SHA256SUMS with the script shared with release.yml. This workflow has no
             # checkout, so fetch it via the raw API — pinned to the promoted release's tag, falling
-            # back to main for tags that predate the script (don't fail a half-done promote).
+            # back to main for tags that predate the script. A fetch failure only warns: the stable
+            # symlink is already flipped, and aborting here would leave the promote half-done with
+            # the same stale SHA256SUMS a skip leaves.
             sums_script="$(mktemp)"
-            curl -fsS -H "$auth" "$api/raw/scripts/refresh-dl-sums.sh?ref=v$V" -o "$sums_script" \
-              || curl -fsS -H "$auth" "$api/raw/scripts/refresh-dl-sums.sh?ref=main" -o "$sums_script"
-            bash "$sums_script" "$DL_DIR"
+            if curl -fsS -H "$auth" "$api/raw/scripts/refresh-dl-sums.sh?ref=v$V" -o "$sums_script" \
+              || curl -fsS -H "$auth" "$api/raw/scripts/refresh-dl-sums.sh?ref=main" -o "$sums_script"; then
+              bash "$sums_script" "$DL_DIR"
+              echo "Refreshed SHA256SUMS."
+            else
+              echo "WARNING: could not fetch refresh-dl-sums.sh — SHA256SUMS not refreshed; re-run the promote or refresh manually." >&2
+            fi
             rm -f "$sums_script"
             echo "Published $stable -> $name and refreshed SHA256SUMS."
           else

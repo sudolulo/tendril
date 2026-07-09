@@ -94,7 +94,7 @@ pub fn render(spec: &DomainSpec) -> String {
 
     let mut xml = String::new();
     let _ = writeln!(xml, "<domain type='kvm'>");
-    let _ = writeln!(xml, "  <name>{}</name>", s.name);
+    let _ = writeln!(xml, "  <name>{}</name>", xesc(&s.name));
     let _ = writeln!(xml, "  <memory unit='MiB'>{}</memory>", spec.memory_mib);
     // `placement='static'` when we pin, so libvirt honours the explicit vcpupin map below.
     if spec.cpu_pinning.is_some() {
@@ -194,7 +194,7 @@ pub fn render(spec: &DomainSpec) -> String {
     if let Some(dir) = &spec.steam_library_dir {
         xml.push_str("    <filesystem type='mount' accessmode='passthrough'>\n");
         xml.push_str("      <driver type='virtiofs'/>\n");
-        let _ = writeln!(xml, "      <source dir='{dir}'/>");
+        let _ = writeln!(xml, "      <source dir='{}'/>", xesc(dir));
         xml.push_str("      <target dir='tendril-steamlib'/>\n");
         xml.push_str("    </filesystem>\n");
     }
@@ -206,7 +206,7 @@ pub fn render(spec: &DomainSpec) -> String {
     };
     xml.push_str("    <disk type='file' device='disk'>\n");
     xml.push_str("      <driver name='qemu' type='qcow2'/>\n");
-    let _ = writeln!(xml, "      <source file='{}'/>", spec.disk_path);
+    let _ = writeln!(xml, "      <source file='{}'/>", xesc(&spec.disk_path));
     xml.push_str("      <target dev='vda' bus='virtio'/>\n");
     let _ = writeln!(xml, "      <boot order='{disk_boot}'/>");
     xml.push_str("    </disk>\n");
@@ -215,7 +215,7 @@ pub fn render(spec: &DomainSpec) -> String {
     if let Some(data) = &spec.data_disk_path {
         xml.push_str("    <disk type='file' device='disk'>\n");
         xml.push_str("      <driver name='qemu' type='qcow2'/>\n");
-        let _ = writeln!(xml, "      <source file='{data}'/>");
+        let _ = writeln!(xml, "      <source file='{}'/>", xesc(data));
         xml.push_str("      <target dev='vdb' bus='virtio'/>\n");
         xml.push_str("    </disk>\n");
     }
@@ -223,7 +223,7 @@ pub fn render(spec: &DomainSpec) -> String {
     if let Some(iso) = &spec.media.install_iso {
         xml.push_str("    <disk type='file' device='cdrom'>\n");
         xml.push_str("      <driver name='qemu' type='raw'/>\n");
-        let _ = writeln!(xml, "      <source file='{iso}'/>");
+        let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
         xml.push_str("      <target dev='sda' bus='sata'/>\n");
         xml.push_str("      <readonly/>\n");
         xml.push_str("      <boot order='1'/>\n");
@@ -233,7 +233,7 @@ pub fn render(spec: &DomainSpec) -> String {
     if let Some(iso) = &spec.media.virtio_iso {
         xml.push_str("    <disk type='file' device='cdrom'>\n");
         xml.push_str("      <driver name='qemu' type='raw'/>\n");
-        let _ = writeln!(xml, "      <source file='{iso}'/>");
+        let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
         xml.push_str("      <target dev='sdb' bus='sata'/>\n");
         xml.push_str("      <readonly/>\n");
         xml.push_str("    </disk>\n");
@@ -242,7 +242,7 @@ pub fn render(spec: &DomainSpec) -> String {
     if let Some(iso) = &spec.media.seed_iso {
         xml.push_str("    <disk type='file' device='cdrom'>\n");
         xml.push_str("      <driver name='qemu' type='raw'/>\n");
-        let _ = writeln!(xml, "      <source file='{iso}'/>");
+        let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
         xml.push_str("      <target dev='sdc' bus='sata'/>\n");
         xml.push_str("      <readonly/>\n");
         xml.push_str("    </disk>\n");
@@ -294,6 +294,16 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("  </devices>\n");
     xml.push_str("</domain>\n");
     xml
+}
+
+/// Escape a value for a single-quoted XML attribute / text node. Defense in depth: the web layer
+/// validates station names, but this renderer is a public library API and disk/ISO paths are free-form.
+fn xesc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\'', "&apos;")
+        .replace('"', "&quot;")
 }
 
 /// A deterministic pseudo-serial from a station name (FNV-1a → 12 hex digits), so native-hardware

@@ -851,19 +851,23 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         .into_response();
     }
     // The guest account fields are interpolated into the autounattend.xml / kickstart (and a root-run
-    // %post shell). Reject control characters (newlines/tabs) so a field can't break out and inject an
-    // extra directive or command. Empty username/password is allowed (handled downstream).
-    for (label, val) in [
-        ("Username", get("username")),
-        ("Password", get("password")),
-        ("Hostname", get("hostname")),
-    ] {
-        if !val.is_empty() && !ui::safe_field(&val) {
+    // %post shell). Username + hostname become bare shell/OS tokens, so restrict them to a safe charset
+    // (blocks metacharacters entirely); the password is XML-escaped downstream, so only reject control
+    // characters there. Empty is allowed (handled downstream).
+    let safe_name = |s: &str| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    for (label, val) in [("Username", get("username")), ("Hostname", get("hostname"))] {
+        if !val.is_empty() && !safe_name(&val) {
             return create_form(Some(&format!(
-                "{label} can't contain control characters (newlines/tabs)."
+                "{label} may only contain letters, numbers, - _ ."
             )))
             .into_response();
         }
+    }
+    if !get("password").is_empty() && !ui::safe_field(&get("password")) {
+        return create_form(Some("Password can't contain control characters (newlines/tabs).")).into_response();
     }
     let disk = {
         let d = get("disk");

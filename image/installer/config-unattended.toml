@@ -58,7 +58,7 @@ EOF
 # password, seeded + force-changed by the first-boot unit below. Physical console access is trusted
 # (it's the owner's machine). No separate `tendril` user — it duplicated root and, when its password
 # was force-expired, also broke SSH. Change the default with `passwd` after first boot.
-rootpw --plaintext tendril
+rootpw --lock
 
 # Reboot into the installed system when the install finishes.
 reboot --eject
@@ -89,8 +89,8 @@ cat > /etc/motd <<'MOTD'
   Web UI:   http://<this-host>/   — a default admin password is set; you'll be
             required to change it on first sign-in.
   Console:  the `tendril` menu opens automatically on this display (tty1).
-            Local sudo/SSH is root with the default password 'tendril' — run
-            `passwd` to change it.
+            Root is locked (no password) — sign in on this console (auto-login), or
+            run `passwd` here to set a root password / add an SSH key for remote access.
 
 MOTD
 %end

@@ -83,7 +83,7 @@ lang en_US.UTF-8
 ignoredisk --only-use=$target
 clearpart --drives=$target --all --initlabel
 autopart
-rootpw --plaintext tendril
+rootpw --lock
 EOF
 else
   # Guided: write nothing, so Anaconda keeps the language/disk/login spokes interactive.
@@ -117,8 +117,8 @@ UNIT
   Web UI:   http://<this-host>/   — a default admin password is set; you'll be
             required to change it on first sign-in.
   Console:  the `tendril` menu opens automatically on this display (tty1).
-            Local sudo/SSH is root with the default password 'tendril' — run
-            `passwd` to change it.
+            Root is locked (no password) — sign in on this console (auto-login), or
+            run `passwd` here to set a root password / add an SSH key for remote access.
 
 MOTD
 else

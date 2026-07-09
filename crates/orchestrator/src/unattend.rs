@@ -158,6 +158,8 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// One `<SynchronousCommand>` entry for the `oobeSystem` `FirstLogonCommands` block. Commands run in
@@ -194,8 +196,8 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
              \n        <LogonCount>2147483647</LogonCount>\
              \n        <Password><Value>{pass}</Value><PlainText>true</PlainText></Password>\
              \n      </AutoLogon>",
-            user = spec.username,
-            pass = spec.password,
+            user = xml_escape(&spec.username),
+            pass = xml_escape(&spec.password),
         )
     } else {
         String::new()
@@ -367,11 +369,11 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
 "#,
         locale = spec.locale,
         driver_paths = driver_paths,
-        edition = spec.edition_name,
-        computer = spec.computer_name,
+        edition = xml_escape(&spec.edition_name),
+        computer = xml_escape(&spec.computer_name),
         timezone = spec.timezone,
-        user = spec.username,
-        pass = spec.password,
+        user = xml_escape(&spec.username),
+        pass = xml_escape(&spec.password),
         autologon = autologon,
         first_logon = first_logon,
     )

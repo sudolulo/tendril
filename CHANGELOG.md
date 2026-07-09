@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-09
+
+A gaming-completeness pass closing the biggest gaps against the design: low-latency tuning,
+anti-cheat/VM-hiding, snapshots, can't-break-it rollback, a balancing fleet scheduler, RBAC + audit,
+an in-guest agent, one-command room provisioning, and remote play — plus slimmer, more invisible
+vGPU and fleet panels.
+
+### Added
+- **Low-latency mode** (F1): a station wizard toggle pins each vCPU 1:1 to a dedicated host core
+  (reserving cores for the host + QEMU emulator, and avoiding cores other stations already hold) and
+  uses hugepages when a pool exists — so gaming frame-times don't jitter from host scheduling.
+- **Anti-cheat / VM-fingerprint hiding** (F2): the native-hardware overlay now spoofs SMBIOS/DMI
+  (OEM strings + per-station serials) on top of hiding KVM and the hypervisor CPUID flag, so software
+  that blocks VMs sees a plausible desktop. (Kernel-level anti-cheats still won't run — stated plainly.)
+- **Station snapshots** (F10): point-in-time restore points (create / restore / delete) from the
+  station page — snapshot before a risky Windows update or anti-cheat change, roll back instantly.
+- **greenboot health-gated rollback** (F3): after any bootc OS update a required health check
+  (libvirt + control plane up and answering) must pass, or the bootloader falls back to the previous
+  deployment — the can't-break-it net the design promised.
+- **Boot-time hardware adaptation** (F7): a per-boot service snapshots the GPU capability matrix and
+  detects whether IOMMU is actually active; when it's off in firmware the Hardware page shows a banner
+  telling you to enable VT-d/AMD-Vi — the one passthrough blocker only you can fix.
+- **Read-only viewer role + audit log** (F9): an optional viewer password grants look-but-don't-touch
+  access; every admin change is recorded (timestamp, actor, action, status) in a downloadable audit
+  log. Both live in a new System "Access & audit" panel.
+- **In-guest agent** (F8): wired the QEMU guest-agent channel (the Windows unattend already installs
+  the agent), so a station's OS, hostname and IP surface in a new "Guest" panel — the basis for health
+  and graceful shutdown.
+- **Provision a room over PXE** (F6): `tendril-pxe.sh` turns a node into a proxy-DHCP + TFTP + HTTP
+  PXE server that net-boots a rack of bare-metal PCs straight into the unattended installer — a room
+  images itself hands-off. Safe on a live LAN (proxy-DHCP). The command is shown on the Fleet page.
+- **Remote play** (F4): a station "Remote play" panel gives the exact Moonlight *Add PC* address (from
+  the guest agent's IP) + pairing steps, plus WAN guidance (mesh-VPN first, else the Sunshine ports).
+
+### Changed
+- **Balancing GPU-aware scheduler** (F5): auto-placement across the fleet now picks the node with the
+  most free passthrough GPUs (spreading onto the emptiest hardware), tie-broken by fewest existing
+  stations then lowest load — instead of first-fit.
+- **Slimmer, more invisible panels**: the vGPU section collapses all driver/guest/licensing machinery
+  behind a "Set up GPU splitting" disclosure (whole-GPU passthrough needs none of it); fleet setup's
+  four overlapping onboarding paths reduce to two clear actions ("Add a machine" / "Join a fleet") with
+  the rest under Advanced.
+
 ## [0.20.0] - 2026-07-08
 
 Invisible-by-default NVIDIA vGPU: one **vGPU** panel (driver → guest driver → licensing, all automatic),
@@ -556,7 +599,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.20.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.21.0...HEAD
+[0.21.0]: https://git.onetick.ninja/flan/tendril/compare/v0.20.0...v0.21.0
 [0.20.0]: https://git.onetick.ninja/flan/tendril/compare/v0.18.0...v0.20.0
 [0.18.0]: https://git.onetick.ninja/flan/tendril/compare/v0.17.0...v0.18.0
 [0.17.0]: https://git.onetick.ninja/flan/tendril/compare/v0.16.0...v0.17.0

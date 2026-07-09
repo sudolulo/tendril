@@ -159,14 +159,6 @@ pub fn prefetch(branch: &str) {
     });
 }
 
-fn human(n: u64) -> String {
-    if n >= 1 << 30 {
-        format!("{:.1} GB", n as f64 / (1u64 << 30) as f64)
-    } else {
-        format!("{:.0} MB", n as f64 / (1u64 << 20) as f64)
-    }
-}
-
 /// Stream `url` to `dest` via curl (multi-hundred-MB), atomically renaming into place. Returns the size.
 fn fetch_to(url: &str, dest: &str) -> Result<u64, String> {
     let tmp = format!("{dest}.part");
@@ -195,37 +187,24 @@ pub fn section() -> Markup {
         .ok()
         .map(|m| m.len())
         .filter(|n| *n > 0);
+    let cached = exe_cached.is_some() || run_cached.is_some();
     html! {
         div #vgpu-guest {
-            div.sub style="font-weight:600; margin:0 0 4px" { "Guest driver — automatic" }
             @match (&host_branch, matched) {
-                (Some(hb), Some(r)) => {
+                (Some(_), Some(r)) => {
                     p.sub style="margin:0" {
-                        "Every NVIDIA-vGPU station installs the guest driver for " b { (r.label) }
-                        " automatically to match your host driver (" code { (hb) } ") — Windows and SteamOS both, "
-                        "fetched from NVIDIA's public bucket on first use. Nothing to choose or upload."
-                    }
-                    @if exe_cached.is_some() || run_cached.is_some() {
-                        p.sub style="margin:6px 0 0; opacity:.8" {
-                            "Cached: "
-                            @if let Some(n) = exe_cached { "Windows " b { (human(n)) } " ✓  " }
-                            @if let Some(n) = run_cached { "SteamOS " b { (human(n)) } " ✓" }
-                        }
+                        "Guest driver: automatic — " b { (r.label) } " installed per station"
+                        @if cached { ", cached ✓" } @else { "" } "."
                     }
                 }
                 (Some(hb), None) => {
                     p.sub style="margin:0" {
-                        "Your host driver branch (" code { (hb) } ") isn't in the curated release list, so the "
-                        "matching guest driver can't be auto-fetched. Stage a host driver from a listed vGPU "
-                        "release, or set " code { "TENDRIL_VGPU_GUEST_EXE_URL" } " / " code { "TENDRIL_VGPU_GUEST_RUN_URL" }
-                        " to a reachable copy."
+                        "Guest driver: no curated release for host " code { (hb) }
+                        " — set " code { "TENDRIL_VGPU_GUEST_EXE_URL" } " / " code { "_RUN_URL" } " to a reachable copy."
                     }
                 }
                 _ => {
-                    p.sub style="margin:0" {
-                        "Once you stage the vGPU host driver above, the matching guest driver (Windows + SteamOS) "
-                        "is selected and installed automatically — you won't choose or upload anything."
-                    }
+                    p.sub style="margin:0" { "Guest driver: automatic once the host driver is staged." }
                 }
             }
         }

@@ -329,7 +329,6 @@ fn fragment_with(banner: Option<Markup>) -> Markup {
     html! {
         div #dls-panel {
             @if let Some(b) = banner { (b) }
-            div.sub style="font-weight:600; margin:0 0 4px" { "Licensing — automatic" }
             @match c.mode {
                 Mode::External => (external_body(&c)),
                 Mode::Builtin => (builtin_body(&c, active, on)),
@@ -343,19 +342,11 @@ fn builtin_body(c: &DlsConf, active: bool, on: bool) -> Markup {
     let token_url = format!("https://{}:{}/-/client-token", c.url, c.port);
     html! {
         @if on {
-            p.sub style="margin:0" {
-                "NVIDIA vGPU guests throttle without a license, so Tendril runs a built-in license server "
-                "(" code { (token_url) } ") and licenses every vGPU station automatically — nothing to paste "
-                "into guests. Emulating NVIDIA's licensing is a gray area; use it only with your own vGPU entitlement."
-            }
+            p.sub style="margin:0" { "Licensing: automatic — built-in server running ✓, guests licensed on first boot." }
         } @else if active {
-            p.sub style="margin:0" { "Built-in license server selected but not running yet — it should come up automatically; reload, or re-apply under Advanced." }
+            p.sub style="margin:0" { "Licensing: automatic — built-in server starting (reload, or re-apply under Advanced)." }
         } @else {
-            p.sub style="margin:0" {
-                "vGPU guests throttle without a license. Tendril's built-in license server starts automatically "
-                "the moment the vGPU host driver above is active, and licenses guests with no extra steps — or "
-                "point Tendril at your own license server under Advanced."
-            }
+            p.sub style="margin:0" { "Licensing: automatic — the built-in server starts once vGPU is active." }
         }
         details style="margin-top:10px" {
             summary.sub style="cursor:pointer" { "Advanced" }

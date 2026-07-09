@@ -172,19 +172,15 @@ fn vgpu_driver_panel() -> Markup {
     };
     ui::panel(
         "vGPU",
-        Some("split one GPU across stations — driver, guest driver + licensing, all automatic"),
+        Some("optional — split one GPU across several stations"),
         html! {
             div.pad {
                 p.sub style="margin-top:0" {
-                    "Splitting a GPU into several stations needs a vGPU host driver. Tendril's host is an "
-                    "immutable image, so the driver is "
-                    b { "baked into a derived image variant" }
-                    " and booted into — not installed live. Build a variant on a machine with "
-                    code { "podman" } " (the appliance or a workstation with this repo), then "
-                    code { "bootc switch" } " the appliance into it and reboot."
+                    "Only needed to run " b { "more stations than you have GPUs" }
+                    " — whole-GPU passthrough (one GPU per station) needs none of this."
                 }
                 @if present.is_empty() {
-                    p.sub { "No AMD or NVIDIA GPUs detected here. vGPU applies to SR-IOV-capable AMD pro/datacenter cards and NVIDIA cards (consumer via " code { "vgpu_unlock" } ", datacenter officially)." }
+                    p.sub { "No AMD or NVIDIA GPUs detected here." }
                 }
                 @for vendor in &present {
                     @let active = active_for(*vendor);
@@ -240,27 +236,31 @@ fn amd_guide(active: bool) -> Markup {
 }
 
 fn nvidia_guide(active: bool) -> Markup {
+    // Everything past the one-line status is collapsed: for the common path (whole-GPU passthrough)
+    // none of the driver/guest/licensing machinery is relevant, so it stays out of the way.
     html! {
         @if active {
-            p.sub style="margin:0" { "vGPU profiles are advertised — the NVIDIA vGPU host driver is loaded. Create split stations from the station wizard." }
-        } @else {
-            p.sub style="margin:0 0 4px" {
-                "Supply the licensed " code { ".run" }
-                " — the build installs it, applies " code { "vgpu_unlock" }
-                " for consumer cards, and enables the vGPU services."
+            p.sub style="margin:0" { "Ready — create split stations from the wizard. Guest driver and licensing are automatic." }
+            details style="margin-top:8px" {
+                summary.sub style="cursor:pointer" { "Advanced" }
+                div style="margin-top:10px" {
+                    (crate::vgpuguest::section())
+                    div style="margin-top:12px; padding-top:10px; border-top:1px solid var(--line)" { (crate::licensing::fragment()) }
+                }
             }
-            (crate::vgpudrv::section(None))
-        }
-        // The guest driver is fully automatic — matched to the host branch and fetched from NVIDIA's
-        // public bucket at station-create time. This is a read-only status, not a staging step.
-        div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
-            (crate::vgpuguest::section())
-        }
-        // Licensing is folded in here (not a separate panel): the built-in license server auto-starts
-        // when the driver is active, or point Tendril at your own. One vGPU panel, driver → guest →
-        // license, all automatic.
-        div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)" {
-            (crate::licensing::fragment())
+        } @else {
+            details {
+                summary.sub style="cursor:pointer; font-weight:600" { "Set up GPU splitting" }
+                div style="margin-top:10px" {
+                    p.sub style="margin:0 0 8px" {
+                        "Stage the licensed NVIDIA " code { ".run" } " — Tendril builds a driver image variant to "
+                        code { "bootc switch" } " into. Guest driver and licensing are then automatic."
+                    }
+                    (crate::vgpudrv::section(None))
+                    div style="margin-top:12px; padding-top:10px; border-top:1px solid var(--line)" { (crate::vgpuguest::section()) }
+                    div style="margin-top:12px; padding-top:10px; border-top:1px solid var(--line)" { (crate::licensing::fragment()) }
+                }
+            }
         }
     }
 }

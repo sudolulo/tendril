@@ -976,9 +976,11 @@ fn setup_body(banner: Option<Markup>) -> Markup {
         div.pad #fleet-setup {
             @if let Some(b) = banner { (b) }
             p.sub style="margin-top:0" {
-                "A fleet forms when nodes see each other — easiest by pointing them at the "
-                b { "same shared store" } " (auto-discovery + shared token + mTLS), or by listing peers by hand."
+                "A fleet lets you see and control every machine from any one of them. To add a machine, "
+                "generate a " b { "join code" } " here and paste it on that machine — that's the whole flow."
             }
+
+            // Identity + fleet size — the only always-visible facts.
             table { tbody {
                 (row("This node", html! {
                     @if env_name {
@@ -991,23 +993,56 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                         }
                     }
                 }))
-                (row("Shared store", match &store {
-                    Some(p) => html! { span.mono { (p) } " " span.badge title="Nodes on this store auto-join" { "auto-membership" } },
-                    None => html! { "none — " a href="/storage" { "add an NFS/SMB store" } " to auto-federate, or list peers manually below" },
+                (row("Machines", html! {
+                    b { (peers.len() + 1) } (if peers.is_empty() { " (just this one)" } else { "" })
                 }))
-                (row("Secure transport", if mtls {
-                    html! { span.badge { "mTLS" } " — CA auto-managed on the shared store" }
-                } else {
-                    html! { "token + TLS (no shared CA) — add a shared store or " code { "TENDRIL_FED_CA_DIR" } " for mTLS" }
-                }))
-                (row("Reachable at", html! { span.mono { (reach) } }))
             } }
 
-            div style="margin-top:12px" {
-                details {
-                    summary.sub style="cursor:pointer" { "Join token" }
-                    div style="margin-top:8px" {
-                        p.sub style="margin:0 0 6px" { "Any node with this token (or mounting the shared store) joins the fleet — treat it as a secret." }
+            @if !peers.is_empty() {
+                ul style="margin:8px 0 0; padding-left:18px" {
+                    li.sub { b { (name) } " (this node)" }
+                    @for p in &peers {
+                        li.sub { (p.name) " — " span.mono { (p.url) }
+                            @if p.fed.is_some() { " " span.badge title="secured with mTLS" { "mTLS" } }
+                        }
+                    }
+                }
+            }
+
+            // Primary action 1 — add a machine (one path: a join code).
+            div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)" {
+                div.sub style="font-weight:600; margin-bottom:4px" { "Add a machine" }
+                p.sub style="margin:0 0 8px" { "Generate a code, then paste it into " b { "Join a fleet" } " on the machine you want to add. The code carries this node's address, trust, and security — treat it as a secret." }
+                div #join-code-box { button.btn hx-get="/fleet/join-code" hx-target="#join-code-box" hx-swap="innerHTML" { "Generate join code" } }
+            }
+
+            // Primary action 2 — join someone else's fleet.
+            div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)" {
+                div.sub style="font-weight:600; margin-bottom:4px" { "Join a fleet" }
+                p.sub style="margin:0 0 8px" { "Paste a join code from another machine to join its fleet." }
+                div #join-box { (join_form()) }
+            }
+
+            // Everything else — shared-store auto-membership, raw token, manual peering, discovery.
+            details style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)" {
+                summary.sub style="cursor:pointer" { "Advanced" }
+                div style="margin-top:10px" {
+                    table { tbody {
+                        (row("Reachable at", html! { span.mono { (reach) } }))
+                        (row("Shared store", match &store {
+                            Some(p) => html! { span.mono { (p) } " " span.badge title="Nodes on this store auto-join" { "auto-membership" } },
+                            None => html! { "none — " a href="/storage" { "add an NFS/SMB store" } " to auto-federate instead of using join codes" },
+                        }))
+                        (row("Secure transport", if mtls {
+                            html! { span.badge { "mTLS" } " — CA auto-managed on the shared store" }
+                        } else {
+                            html! { "token + TLS — a join code still sets up mTLS; a shared store or " code { "TENDRIL_FED_CA_DIR" } " does too" }
+                        }))
+                    } }
+
+                    div style="margin-top:12px" {
+                        div.sub style="font-weight:600; margin-bottom:4px" { "Raw join token" }
+                        p.sub style="margin:0 0 6px" { "The shared secret a join code wraps. Only needed for manual peering (below) or a shared store — treat it as a secret." }
                         pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px; word-break:break-all" { (token) }
                         @if token_is_store_managed() {
                             button.btn.sm style="margin-top:8px"
@@ -1015,75 +1050,30 @@ fn setup_body(banner: Option<Markup>) -> Markup {
                                 hx-confirm="Rotate the join token? Nodes on the shared store update automatically; any manually-configured node must be given the new token." { "Rotate token" }
                         }
                     }
-                }
-            }
 
-            div style="margin-top:12px" {
-                details {
-                    summary.sub style="cursor:pointer" { "Join code — add a node with no shared store" }
-                    div #join-code-box style="margin-top:8px" {
-                        p.sub style="margin:0 0 6px" {
-                            "One copy-paste code that lets a new node join this fleet without mounting a shared store — "
-                            "it carries this node's address, the token, and the fleet CA (so mTLS just works). Treat it as a secret."
+                    div style="margin-top:12px" {
+                        div.sub style="font-weight:600; margin-bottom:4px" { "Manual peering (no join code)" }
+                        p.sub style="margin:0 0 6px" { "Set these on the other node and restart it (then point this node back the same way):" }
+                        pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px" {
+                            "TENDRIL_PEERS=" (name) "=" (reach) "\nTENDRIL_FEDERATION_TOKEN=" (token)
                         }
-                        button.btn.sm hx-get="/fleet/join-code" hx-target="#join-code-box" hx-swap="innerHTML" { "Generate join code" }
                     }
-                }
-            }
 
-            div style="margin-top:12px" {
-                details {
-                    summary.sub style="cursor:pointer" { "Join an existing fleet (paste a join code)" }
-                    div #join-box style="margin-top:8px" {
-                        (join_form())
-                    }
-                }
-            }
-
-            @let discovered = crate::mdns::nearby();
-            @if !discovered.is_empty() {
-                div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line)" {
-                    div.sub style="font-weight:600; margin-bottom:6px" { "Nearby on the LAN (mDNS)" }
-                    p.sub style="margin:0 0 6px" {
-                        "Other Tendril machines discovered on this network. To add one, generate a join "
-                        "code on it and paste it above — discovery finds them, the code grants trust."
-                    }
-                    ul style="margin:0; padding-left:18px" {
-                        @for d in &discovered {
-                            li.sub {
-                                b { (d.name) } " — " a href=(d.url) target="_blank" rel="noreferrer" { span.mono { (d.url) } }
-                                @if d.fed.is_some() { " " span.badge title="Advertises an mTLS federation endpoint" { "mTLS" } }
+                    @let discovered = crate::mdns::nearby();
+                    @if !discovered.is_empty() {
+                        div style="margin-top:12px" {
+                            div.sub style="font-weight:600; margin-bottom:4px" { "Nearby on the LAN" }
+                            p.sub style="margin:0 0 6px" { "Discovered Tendril machines. To add one, generate a join code on it and paste it into " b { "Join a fleet" } " above." }
+                            ul style="margin:0; padding-left:18px" {
+                                @for d in &discovered {
+                                    li.sub {
+                                        b { (d.name) } " — " a href=(d.url) target="_blank" rel="noreferrer" { span.mono { (d.url) } }
+                                        @if d.fed.is_some() { " " span.badge title="Advertises an mTLS federation endpoint" { "mTLS" } }
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
-
-            div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line)" {
-                div.sub style="font-weight:600; margin-bottom:6px" { "Nodes in the fleet" }
-                @if peers.is_empty() {
-                    p.sub style="margin:0" { "Just this node so far. Add another below." }
-                } @else {
-                    ul style="margin:0; padding-left:18px" {
-                        li.sub { b { (name) } " (this node)" }
-                        @for p in &peers {
-                            li.sub { (p.name) " — " span.mono { (p.url) }
-                                @if p.fed.is_some() { " " span.badge { "mTLS" } }
-                            }
-                        }
-                    }
-                }
-            }
-
-            details style="margin-top:12px" {
-                summary.sub style="cursor:pointer" { "Add another node" }
-                div style="margin-top:8px" {
-                    p.sub style="margin:0 0 6px" { b { "Easiest:" } " on the other box, mount the " b { "same" } " shared store under " a href="/storage" { "Storage" } ". It heartbeats in, reads the shared token + CA, and appears here automatically." }
-                    p.sub style="margin:0 0 6px" { b { "Manual (no shared store):" } " set these on the other node, then restart it:" }
-                    pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12px" {
-                        "TENDRIL_PEERS=" (name) "=" (reach) "\nTENDRIL_FEDERATION_TOKEN=" (token)
-                    }
-                    p.sub style="margin:6px 0 0" { "…and point this node back at it the same way (peers are listed per node)." }
                 }
             }
         }

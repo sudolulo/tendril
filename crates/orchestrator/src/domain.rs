@@ -44,6 +44,43 @@ pub struct DomainSpec<'a> {
     /// disk (`vda`). It survives OS/base-image swaps and re-splits, so user data (games, saves) is
     /// preserved when the boot disk is replaced. `None` = no data volume.
     pub data_disk_path: Option<String>,
+    /// Optional low-latency CPU pinning: pin each vCPU 1:1 to a dedicated host physical CPU and keep
+    /// the QEMU emulator/IO threads on separate host CPUs, so a gaming guest isn't rescheduled across
+    /// the host's cores mid-frame. `None` = the host scheduler places vCPUs freely (default).
+    pub cpu_pinning: Option<CpuPinning>,
+    /// Back the guest's RAM with hugepages (fewer TLB misses → lower frame-time jitter). Requires a
+    /// host hugepage pool; the caller only sets this when one exists, so the VM still starts.
+    pub hugepages: bool,
+}
+
+/// A low-latency CPU pinning plan: which host physical CPU each vCPU pins to, plus the host CPUs the
+/// QEMU emulator/IO threads run on (kept off the vCPU set so housekeeping never steals a game core).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuPinning {
+    /// `(vcpu, host_cpu)` pairs — one per vCPU, 1:1.
+    pub vcpupins: Vec<(u32, u32)>,
+    /// Host CPUs (libvirt cpuset syntax, e.g. `0-1`) the emulator threads are pinned to.
+    pub emulator_cpuset: String,
+}
+
+impl CpuPinning {
+    /// Pin `vcpus` vCPUs 1:1 to the first `vcpus` entries of `host_cpus`, with emulator threads on
+    /// `emulator_cpus`. `None` if there aren't enough host CPUs or no emulator CPU was given.
+    pub fn new(vcpus: u32, host_cpus: &[u32], emulator_cpus: &[u32]) -> Option<Self> {
+        if (host_cpus.len() as u32) < vcpus || vcpus == 0 || emulator_cpus.is_empty() {
+            return None;
+        }
+        let vcpupins = (0..vcpus).map(|v| (v, host_cpus[v as usize])).collect();
+        let emulator_cpuset = emulator_cpus
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        Some(Self {
+            vcpupins,
+            emulator_cpuset,
+        })
+    }
 }
 
 /// Render `spec` into a libvirt domain XML document.
@@ -59,10 +96,32 @@ pub fn render(spec: &DomainSpec) -> String {
     let _ = writeln!(xml, "<domain type='kvm'>");
     let _ = writeln!(xml, "  <name>{}</name>", s.name);
     let _ = writeln!(xml, "  <memory unit='MiB'>{}</memory>", spec.memory_mib);
-    let _ = writeln!(xml, "  <vcpu>{}</vcpu>", spec.vcpus);
-    // virtio-fs needs the guest memory shared with the vhost-user device.
-    if spec.steam_library_dir.is_some() {
-        xml.push_str("  <memoryBacking>\n    <source type='memfd'/>\n    <access mode='shared'/>\n  </memoryBacking>\n");
+    // `placement='static'` when we pin, so libvirt honours the explicit vcpupin map below.
+    if spec.cpu_pinning.is_some() {
+        let _ = writeln!(xml, "  <vcpu placement='static'>{}</vcpu>", spec.vcpus);
+    } else {
+        let _ = writeln!(xml, "  <vcpu>{}</vcpu>", spec.vcpus);
+    }
+    // memoryBacking: hugepages (lower frame-time jitter) and/or shared memfd (virtio-fs needs the
+    // guest memory shared with the vhost-user device). Emit one block covering whichever apply.
+    if spec.hugepages || spec.steam_library_dir.is_some() {
+        xml.push_str("  <memoryBacking>\n");
+        if spec.hugepages {
+            xml.push_str("    <hugepages/>\n");
+        }
+        if spec.steam_library_dir.is_some() {
+            xml.push_str("    <source type='memfd'/>\n    <access mode='shared'/>\n");
+        }
+        xml.push_str("  </memoryBacking>\n");
+    }
+    // CPU pinning: pin each vCPU to its dedicated host core, emulator threads to the reserved set.
+    if let Some(p) = &spec.cpu_pinning {
+        xml.push_str("  <cputune>\n");
+        for (vcpu, hostcpu) in &p.vcpupins {
+            let _ = writeln!(xml, "    <vcpupin vcpu='{vcpu}' cpuset='{hostcpu}'/>");
+        }
+        let _ = writeln!(xml, "    <emulatorpin cpuset='{}'/>", p.emulator_cpuset);
+        xml.push_str("  </cputune>\n");
     }
 
     // Firmware: OVMF with Secure Boot (Windows 11 requires it).
@@ -241,6 +300,8 @@ mod tests {
             usb_devices: vec![],
             steam_library_dir: None,
             data_disk_path: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let xml = render(&spec);
         assert!(xml.contains("<name>s1</name>"));
@@ -270,6 +331,8 @@ mod tests {
             usb_devices: vec![],
             steam_library_dir: None,
             data_disk_path: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let xml = render(&spec);
         assert!(xml.contains("<hidden state='on'/>"));
@@ -295,6 +358,8 @@ mod tests {
             usb_devices: vec![],
             steam_library_dir: None,
             data_disk_path: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let xml = render(&spec);
         assert_eq!(xml.matches("device='cdrom'").count(), 3);
@@ -323,6 +388,8 @@ mod tests {
             }],
             steam_library_dir: None,
             data_disk_path: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let xml = render(&spec);
         assert!(xml.contains("type='usb'"));
@@ -344,6 +411,8 @@ mod tests {
             usb_devices: vec![],
             steam_library_dir: Some("/var/lib/tendril/store/steam-library".to_string()),
             data_disk_path: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let on = render(&spec);
         assert!(
@@ -374,11 +443,63 @@ mod tests {
             usb_devices: vec![],
             steam_library_dir: None,
             data_disk_path: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let xml = render(&spec);
         assert!(xml.contains("type='mdev' model='vfio-pci'"));
         assert!(xml.contains("<address uuid='f2c0d6a4-1111-2222-3333-444455556666'/>"));
         assert_eq!(xml.matches("<hostdev").count(), 1); // just the mdev, no PCI group
+    }
+
+    #[test]
+    fn cpu_pinning_and_hugepages_render() {
+        let st = station(false, GuestOs::Windows);
+        let spec = DomainSpec {
+            station: &st,
+            vcpus: 4,
+            memory_mib: 8192,
+            disk_path: "/d.qcow2".to_string(),
+            passthrough_addresses: vec![],
+            mdev_uuid: None,
+            media: InstallMedia::none(),
+            usb_devices: vec![],
+            steam_library_dir: None,
+            data_disk_path: None,
+            cpu_pinning: CpuPinning::new(4, &[4, 5, 6, 7], &[0, 1]),
+            hugepages: true,
+        };
+        let xml = render(&spec);
+        assert!(xml.contains("<vcpu placement='static'>4</vcpu>"));
+        assert!(xml.contains("<hugepages/>"));
+        assert!(xml.contains("<cputune>"));
+        assert!(xml.contains("<vcpupin vcpu='0' cpuset='4'/>"));
+        assert!(xml.contains("<vcpupin vcpu='3' cpuset='7'/>"));
+        assert!(xml.contains("<emulatorpin cpuset='0,1'/>"));
+        // Off by default: no cputune / static placement / hugepages.
+        let plain = station(false, GuestOs::Windows);
+        let spec2 = DomainSpec {
+            station: &plain,
+            cpu_pinning: None,
+            hugepages: false,
+            ..spec
+        };
+        let xml2 = render(&spec2);
+        assert!(!xml2.contains("cputune"));
+        assert!(!xml2.contains("placement='static'"));
+        assert!(!xml2.contains("hugepages"));
+    }
+
+    #[test]
+    fn cpu_pinning_new_rejects_too_few_cores() {
+        assert!(CpuPinning::new(4, &[4, 5], &[0]).is_none());
+        assert!(CpuPinning::new(2, &[4, 5], &[]).is_none());
+        assert_eq!(
+            CpuPinning::new(2, &[6, 7], &[0, 1])
+                .unwrap()
+                .emulator_cpuset,
+            "0,1"
+        );
     }
 
     #[test]

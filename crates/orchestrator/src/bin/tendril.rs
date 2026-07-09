@@ -353,6 +353,8 @@ fn menu_create_station() {
         usb_devices: Vec::new(),
         steam_library_dir: None,
         data_disk: None,
+        cpu_pinning: None,
+        hugepages: false,
         define: true,
         start,
     };

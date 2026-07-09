@@ -47,6 +47,11 @@ pub struct StationRequest {
     /// (games/saves) that survives OS/base-image swaps and re-splits. Created when `create_disk` is
     /// also set. `None` = no data volume.
     pub data_disk: Option<(String, u32)>,
+    /// Optional low-latency CPU pinning plan (computed by the caller from host topology + free cores).
+    /// `None` = unpinned (default). See [`crate::domain::CpuPinning`].
+    pub cpu_pinning: Option<crate::domain::CpuPinning>,
+    /// Back guest RAM with hugepages. The caller sets this only when a host hugepage pool exists.
+    pub hugepages: bool,
 }
 
 impl StationRequest {
@@ -117,6 +122,8 @@ pub fn provision(req: &StationRequest, lv: &Libvirt) -> io::Result<ProvisionRepo
         usb_devices: req.usb_devices.clone(),
         steam_library_dir: req.steam_library_dir.clone(),
         data_disk_path: req.data_disk.as_ref().map(|(p, _)| p.clone()),
+        cpu_pinning: req.cpu_pinning.clone(),
+        hugepages: req.hugepages,
     };
     report.xml = render(&spec);
 
@@ -153,6 +160,8 @@ mod tests {
             start: false,
             steam_library_dir: None,
             data_disk: None,
+            cpu_pinning: None,
+            hugepages: false,
         }
     }
 

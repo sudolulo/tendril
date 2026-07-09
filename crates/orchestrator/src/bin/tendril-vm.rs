@@ -41,6 +41,8 @@ fn main() {
         usb_devices: Vec::new(),
         steam_library_dir: None,
         data_disk_path: None,
+        cpu_pinning: None,
+        hugepages: false,
     };
     let xml = render(&spec);
 

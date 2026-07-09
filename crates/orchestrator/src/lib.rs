@@ -13,7 +13,7 @@ pub mod role;
 pub mod station;
 pub mod unattend;
 
-pub use domain::{DomainSpec, UsbPassthrough};
+pub use domain::{CpuPinning, DomainSpec, UsbPassthrough};
 pub use guest::{build_kickstart_seed_with, build_seed_iso_with, InstallMedia};
 pub use kickstart::{render_kickstart, KickstartSpec};
 pub use lifecycle::{DomainState, Libvirt};

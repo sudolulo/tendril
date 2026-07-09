@@ -15,9 +15,89 @@ use tokio::net::TcpStream;
 use tendril_capability_engine::{detect, iommu, pci, usb};
 use tendril_orchestrator::guest::{build_kickstart_seed_with, build_seed_iso_with, create_overlay};
 use tendril_orchestrator::{
-    provision, DomainState, GuestApp, GuestOs, InstallMedia, KickstartSpec, Libvirt,
+    provision, CpuPinning, DomainState, GuestApp, GuestOs, InstallMedia, KickstartSpec, Libvirt,
     StationRequest, UnattendSpec, UsbPassthrough,
 };
+
+// ── low-latency CPU pinning + hugepages (opt-in) ────────────────────────────────────────────────
+
+/// Number of online host CPUs.
+fn host_cpu_count() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(0)
+}
+
+/// Host CPUs already pinned by other defined domains (parsed from their `<vcpupin>`/`<emulatorpin>`
+/// cpusets), so a new low-latency station doesn't share cores with an existing one.
+fn cpus_taken_by_other_domains() -> std::collections::HashSet<u32> {
+    let mut taken = std::collections::HashSet::new();
+    let Some(list) = ui::run_stdout("virsh", &["list", "--all", "--name"]) else {
+        return taken;
+    };
+    for dom in list.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        let Some(xml) = ui::run_stdout("virsh", &["dumpxml", dom]) else {
+            continue;
+        };
+        for cs in xml.split("cpuset='").skip(1) {
+            if let Some(end) = cs.find('\'') {
+                parse_cpuset(&cs[..end], &mut taken);
+            }
+        }
+    }
+    taken
+}
+
+/// Parse a libvirt cpuset (`"4"`, `"4-7"`, `"0,2,4-6"`) into individual CPU numbers.
+fn parse_cpuset(spec: &str, out: &mut std::collections::HashSet<u32>) {
+    for tok in spec.split(',') {
+        let tok = tok.trim();
+        if let Some((a, b)) = tok.split_once('-') {
+            if let (Ok(a), Ok(b)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>()) {
+                for c in a..=b {
+                    out.insert(c);
+                }
+            }
+        } else if let Ok(c) = tok.parse::<u32>() {
+            out.insert(c);
+        }
+    }
+}
+
+/// Whether the host has a static hugepage pool allocated (else enabling `<hugepages/>` would stop the
+/// VM from starting).
+fn hugepages_available() -> bool {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("HugePages_Total"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|n| n.parse::<u64>().ok())
+        })
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
+/// Plan low-latency resources for a `vcpus`-wide station: pin its vCPUs 1:1 to free host cores
+/// (reserving cores 0–1 for the host + QEMU emulator threads) and enable hugepages if a pool exists.
+/// Returns `(None, hp)` when the host is too small or already fully pinned — the station then runs
+/// unpinned rather than oversubscribing a core.
+fn plan_low_latency(vcpus: u32) -> (Option<CpuPinning>, bool) {
+    let hugepages = hugepages_available();
+    let total = host_cpu_count();
+    // Need the 2 reserved host cores plus one dedicated core per vCPU.
+    if total < vcpus + 2 {
+        return (None, hugepages);
+    }
+    let taken = cpus_taken_by_other_domains();
+    let free: Vec<u32> = (2..total).filter(|c| !taken.contains(c)).collect();
+    if (free.len() as u32) < vcpus {
+        return (None, hugepages);
+    }
+    let cores = &free[..vcpus as usize];
+    (CpuPinning::new(vcpus, cores, &[0, 1]), hugepages)
+}
 use tendril_provisioning::{PassthroughStrategy, ProvisioningStrategy};
 
 use crate::ui;
@@ -467,6 +547,7 @@ fn create_form(error: Option<&str>) -> Markup {
                         div style="margin-top:14px; display:flex; flex-direction:column; gap:10px" {
                             div.field.check.install-only { input type="checkbox" name="unattend" id="unattend" checked; label for="unattend" { "Install unattended (hands-off)" } span.hint { "On by default — installs the guest OS without prompts using the account above. Uncheck for a manual install." } }
                             div.field.check { input type="checkbox" name="native" id="native"; label for="native" { "Native-hardware overlay (anti-cheat; may violate ToS)" } }
+                            div.field.check { input type="checkbox" name="low_latency" id="low_latency" checked; label for="low_latency" { "Low-latency (pin CPU cores + hugepages)" } span.hint { "Pins this station's vCPUs to dedicated host cores so gaming frame-times don't jitter. Skips pinning automatically if the host is too small." } }
                             div.field.check { input type="checkbox" name="start" id="start" checked; label for="start" { "Start now (begins the install immediately)" } }
                             div.field.check.install-only { input type="checkbox" name="app_steam" id="app_steam" checked; label for="app_steam" { "Install Steam" } }
                             div.field.check.install-only { input type="checkbox" name="app_sunshine" id="app_sunshine" checked; label for="app_sunshine" { "Sunshine — stream to Moonlight" } span.hint { "Recommended for a seatless station — otherwise there's no low-latency way to see it. Installs on Windows, enables Bazzite's on Linux." } }
@@ -619,6 +700,8 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             start: checked("start"),
             steam_library_dir: steam_lib.clone(),
             data_disk: None,
+            cpu_pinning: None,
+            hugepages: false,
         };
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
@@ -714,7 +797,18 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
                 .flatten()
                 .map(|base| (format!("{base}-data.qcow2"), gib))
         },
+        // Low-latency pinning/hugepages resolved just below (needs vcpus, and to see cores other
+        // stations already hold).
+        cpu_pinning: None,
+        hugepages: false,
     };
+    // Low-latency mode (opt-in): pin this station's vCPUs to dedicated host cores and use hugepages
+    // when a pool exists, so gaming frame-times don't jitter from host scheduling.
+    if checked("low_latency") {
+        let (pinning, hugepages) = plan_low_latency(req.vcpus);
+        req.cpu_pinning = pinning;
+        req.hugepages = hugepages;
+    }
 
     // Refuse install media that failed checksum verification (a `.mismatch` marker). Media with no
     // upstream checksum — only a recorded `.sha256`, e.g. the locally-assembled Windows ISO — is fine.
@@ -1084,6 +1178,8 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
         start: s.start,
         steam_library_dir: None, // fleet-placed stations: shared library is a follow-up
         data_disk: None,         // fleet-placed stations: data volume is a follow-up
+        cpu_pinning: None,
+        hugepages: false,
     };
     provision(&req, &Libvirt::system()).map_err(|e| e.to_string())?;
     record_local(

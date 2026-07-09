@@ -1,5 +1,28 @@
 # Hardware validation checklist
 
+## The 5-step quick version
+
+1. **Install:** grab <https://dl.onetick.ninja/tendril-latest-installer-x86_64.iso>, write it to a
+   USB stick, boot the test box from it, follow the installer. ⚠️ It ERASES the disk you pick.
+2. **Log in:** from your laptop, open `https://<box-ip>` (address is shown on the box's monitor),
+   accept the cert warning, set a password.
+3. **Make a station:** Stations → **+ New station** → pick the second GPU → **Create**. Walk away —
+   it downloads and installs Windows by itself (~45 min). PASS = Windows desktop on the monitor,
+   nobody touched anything.
+4. **Split a GPU (needs the NVIDIA vGPU driver file):** System → vGPU → upload the `.run` → **Build**
+   → run the `bootc switch` command it shows → reboot → create **two** stations on the same GPU.
+   PASS = both render at once.
+5. **Netboot a spare machine (the most valuable test):** Fleet → **Provision a room (PXE)** →
+   **Start PXE server** → netboot any spare machine on the LAN. ⚠️ It ERASES that machine, zero
+   prompts. PASS = it installs itself and boots into Tendril.
+
+For each step, report **worked / didn't**. If something didn't: **System → Logs → Download**, send
+the file plus the step number. Done.
+
+---
+
+## The full checklist
+
 Tendril's code is heavily reviewed, but several paths can only be proven on real hardware — this is
 the checklist for doing that. It's written so a friendly tester can run it top-to-bottom on one
 machine in an afternoon, no repo checkout needed. Each test says what to do, what PASS looks like,

@@ -14,7 +14,7 @@ contributions you submit to Tendril, past and future:
 - **"You"** — the individual (or the entity you're authorized to bind) submitting the Contribution.
 - **"Contribution"** — any original work of authorship you intentionally submit for inclusion in
   Tendril (code, documentation, designs, configuration).
-- **"Maintainer"** — the current copyright steward of Tendril: Holden (`holden@arch.fyi`), or any
+- **"Maintainer"** — the current copyright steward of Tendril: Holden Salomon (`holden@arch.fyi`), or any
   successor entity to which the project's copyright is assigned.
 
 ## 2. Copyright license

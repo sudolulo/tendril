@@ -211,7 +211,7 @@ pub async fn fetch() -> Markup {
                         .ok()
                         .and_then(|t| t.elapsed().ok())
                         .map(|age| age.as_secs() >= 600)
-                        .unwrap_or(true);
+                        .unwrap_or(false);
                     if n.starts_with(prefix.as_str()) && stale {
                         let _ = std::fs::remove_file(e.path());
                     }

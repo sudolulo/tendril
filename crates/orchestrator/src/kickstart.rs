@@ -123,9 +123,11 @@ pub fn render_kickstart(spec: &KickstartSpec) -> String {
 
     // Accounts: locked root, a sudo-capable local user.
     let _ = writeln!(ks, "rootpw --lock");
+    // Quote the values so a space / extra token in the password can't inject additional options into
+    // Anaconda's `user` command (the web layer already restricts the username charset).
     let _ = writeln!(
         ks,
-        "user --name={} --password={} --plaintext --groups=wheel",
+        "user --name=\"{}\" --password=\"{}\" --plaintext --groups=wheel",
         spec.username, spec.password
     );
     if spec.enable_ssh {
@@ -399,7 +401,9 @@ mod tests {
             password: "pw123".to_string(),
             ..Default::default()
         });
-        assert!(ks.contains("user --name=gamer --password=pw123 --plaintext --groups=wheel"));
+        assert!(
+            ks.contains("user --name=\"gamer\" --password=\"pw123\" --plaintext --groups=wheel")
+        );
         assert!(ks.contains("rootpw --lock"));
         assert!(ks.contains("services --enabled=sshd"));
     }

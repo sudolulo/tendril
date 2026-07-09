@@ -266,6 +266,12 @@ pub async fn delete(Path(n): Path<String>) -> Markup {
 /// UI handlers and the federation API (so a peer can drive it from its Stations page). `delete` runs
 /// the full teardown (force off, undefine, release any vGPU mdev, forget it in the shared registry).
 pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
+    // The name becomes a bare `virsh <sub> <name>` argv token; reject a leading-dash / out-of-charset
+    // name so it can't be parsed as an option (this path is reachable from a token-authed peer via
+    // api_station_action, where the name isn't otherwise validated).
+    if !valid_station_name(name) {
+        return Err("invalid station name".into());
+    }
     let lv = Libvirt::system();
     let e = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
     match action {
@@ -851,26 +857,9 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         .into_response();
     }
     // The guest account fields are interpolated into the autounattend.xml / kickstart (and a root-run
-    // %post shell). Username + hostname become bare shell/OS tokens, so restrict them to a safe charset
-    // (blocks metacharacters entirely); the password is XML-escaped downstream, so only reject control
-    // characters there. Empty is allowed (handled downstream).
-    let safe_name = |s: &str| {
-        s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
-    for (label, val) in [("Username", get("username")), ("Hostname", get("hostname"))] {
-        if !val.is_empty() && !safe_name(&val) {
-            return create_form(Some(&format!(
-                "{label} may only contain letters, numbers, - _ ."
-            )))
-            .into_response();
-        }
-    }
-    if !get("password").is_empty() && !ui::safe_field(&get("password")) {
-        return create_form(Some(
-            "Password can't contain control characters (newlines/tabs).",
-        ))
-        .into_response();
+    // %post shell) — validate them (same rules as the federation provision path).
+    if let Err(e) = valid_guest_fields(&get("username"), &get("hostname"), &get("password")) {
+        return create_form(Some(&e)).into_response();
     }
     let disk = {
         let d = get("disk");
@@ -1305,6 +1294,29 @@ fn build_seed(
 
 /// Reject station names that could escape the disk directory — a name becomes both a qcow2 file name
 /// (`{DISK_DIR}/{name}.qcow2`) and the libvirt domain name.
+/// Validate a station's guest-account fields (used by both the local create handler and the federation
+/// `provision_spec`): username + hostname to a safe charset (they become bare shell/OS tokens in the
+/// kickstart `%post` / autounattend), password just free of control chars (it's XML-escaped downstream).
+pub(crate) fn valid_guest_fields(
+    username: &str,
+    hostname: &str,
+    password: &str,
+) -> Result<(), String> {
+    let safe_name = |s: &str| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    for (label, v) in [("Username", username), ("Hostname", hostname)] {
+        if !v.is_empty() && !safe_name(v) {
+            return Err(format!("{label} may only contain letters, numbers, - _ ."));
+        }
+    }
+    if !password.is_empty() && !crate::ui::safe_field(password) {
+        return Err("Password can't contain control characters (newlines/tabs).".into());
+    }
+    Ok(())
+}
+
 fn valid_station_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains("..")
@@ -1334,6 +1346,10 @@ pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(),
     if !valid_station_name(&s.name) {
         return Err("invalid station name (letters, numbers, - _ . only)".into());
     }
+    // Same guest-field validation as the local create handler — this path is reachable from the local
+    // fleet UI and from token-authed peers (api_provision), and these fields are interpolated into the
+    // autounattend.xml / kickstart / a root-run %post.
+    valid_guest_fields(&s.username, &s.hostname, &s.password)?;
     let disk = format!("{DISK_DIR}/{}.qcow2", s.name);
     if !disk_target_ok(&disk) {
         return Err("disk path resolves into the images directory".into());

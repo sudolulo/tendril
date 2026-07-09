@@ -350,6 +350,10 @@ fn cell_id(iso: &str) -> String {
 /// One ISO's verification cell — badge plus a Verify button, or (while a check runs) a self-polling
 /// "verifying…" that swaps itself for the result when done. No page refresh needed.
 fn verify_cell(iso: &str) -> Markup {
+    // `iso` builds a state-file path — reject `/`/`..` (path traversal) before any read.
+    if guard_iso(iso).is_none() {
+        return html! {};
+    }
     let st = verify_state(iso);
     let id = cell_id(iso);
     html! {

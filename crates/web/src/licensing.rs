@@ -302,9 +302,11 @@ pub async fn use_external(Form(f): Form<ExternalForm>) -> Markup {
         return fragment_with(Some(html! { div.banner.warn { "Disabled in the demo." } }));
     }
     let url = f.url.trim().to_string();
-    if url.is_empty() {
+    // Written line-by-line into dls.conf and later fetched by guests — require a clean http(s) URL so a
+    // newline can't inject config lines and the scheme is a real one.
+    if !crate::ui::is_http_url(&url) {
         return fragment_with(Some(
-            html! { div.banner.error { "Enter your license server's client-token URL (the endpoint guests fetch their token from)." } },
+            html! { div.banner.error { "Enter your license server's client-token URL as an http(s):// address." } },
         ));
     }
     let mut c = read_conf();

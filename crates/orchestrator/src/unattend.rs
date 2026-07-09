@@ -367,11 +367,11 @@ pub fn render_autounattend(spec: &UnattendSpec) -> String {
 
 </unattend>
 "#,
-        locale = spec.locale,
+        locale = xml_escape(&spec.locale),
         driver_paths = driver_paths,
         edition = xml_escape(&spec.edition_name),
         computer = xml_escape(&spec.computer_name),
-        timezone = spec.timezone,
+        timezone = xml_escape(&spec.timezone),
         user = xml_escape(&spec.username),
         pass = xml_escape(&spec.password),
         autologon = autologon,

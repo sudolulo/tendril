@@ -246,7 +246,7 @@ pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
     }
     // These fields are written line-by-line into storage.conf and /etc/fstab; a newline/control char
     // would inject an arbitrary fstab entry (mount anything at boot). Reject them.
-    for v in [&f.remote, &f.mount, &f.options, &f.username] {
+    for v in [&f.remote, &f.mount, &f.options, &f.username, &f.password] {
         if v.chars().any(|c| c.is_control()) {
             return panel_with(Some(
                 html! { div.banner.error { "Fields can't contain control characters (newlines/tabs)." } },

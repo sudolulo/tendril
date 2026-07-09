@@ -202,7 +202,8 @@ pub fn safe_field(s: &str) -> bool {
 /// argument injection).
 pub fn is_http_url(s: &str) -> bool {
     let s = s.trim();
-    (s.starts_with("http://") || s.starts_with("https://")) && !s.contains(char::is_whitespace)
+    (s.starts_with("http://") || s.starts_with("https://"))
+        && !s.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// Constant-time equality for secrets (tokens), so a comparison doesn't leak length/prefix via timing.

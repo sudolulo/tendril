@@ -261,7 +261,8 @@ pub fn render(spec: &DomainSpec) -> String {
         xml.push_str("    <hostdev mode='subsystem' type='mdev' model='vfio-pci'>\n");
         let _ = writeln!(
             xml,
-            "      <source>\n        <address uuid='{uuid}'/>\n      </source>"
+            "      <source>\n        <address uuid='{}'/>\n      </source>",
+            xesc(uuid)
         );
         xml.push_str("    </hostdev>\n");
     }
@@ -321,6 +322,13 @@ fn pci_address_xml(address: &str) -> Option<String> {
     let [domain, bus, slot] = bdf.split(':').collect::<Vec<_>>()[..] else {
         return None;
     };
+    // Every component must be pure hex — this is both correct (PCI addresses are hex) and prevents XML
+    // injection from an unvalidated GPU selection: a crafted value containing `'`/`<` fails here and
+    // the hostdev is simply not emitted.
+    let hex = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit());
+    if !(hex(domain) && hex(bus) && hex(slot) && hex(function)) {
+        return None;
+    }
     Some(format!(
         "<address domain='0x{domain}' bus='0x{bus}' slot='0x{slot}' function='0x{function}'/>"
     ))

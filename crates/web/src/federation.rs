@@ -396,10 +396,12 @@ pub async fn api_fleet_register(
         });
     }
     let name = safe_component(r.name.trim());
-    if name.is_empty() || r.ui.trim().is_empty() {
+    // The advertised UI URL is stored and later curl'd; require a real http(s) URL so a `-`-leading
+    // value can't become a curl option and a rogue registration can't point us at a `file:`/other URL.
+    if name.is_empty() || !ui::is_http_url(r.ui.trim()) {
         return axum::Json(ProvisionResult {
             ok: false,
-            error: Some("register requires a node name and UI url".into()),
+            error: Some("register requires a node name and an http(s) UI url".into()),
         });
     }
     let entry = format!("{}={}|{}", name, r.ui.trim(), r.fed.trim());
@@ -896,7 +898,19 @@ pub async fn rotate_token() -> Markup {
         );
     };
     let p = format!("{root}/fleet-token");
-    if let Err(e) = std::fs::write(&p, &tok) {
+    // Write the rotated token 0600 from the start (no world-readable window on the shared store).
+    let write_secret = || -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&p)?.write_all(tok.as_bytes())
+    };
+    if let Err(e) = write_secret() {
         return setup_body(
             true,
             Some(html! { div.banner.error { "Couldn't write the token: " (e) } }),

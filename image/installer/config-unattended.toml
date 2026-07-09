@@ -26,6 +26,7 @@ network --bootproto=dhcp --activate --hostname=tendril
 disks=""
 for d in $(lsblk -dnro NAME,TYPE | awk '$2=="disk"{print $1}'); do
   case "$d" in zram*|loop*|ram*|sr*|fd*|nbd*|dm-*) continue ;; esac
+    [ "$(cat /sys/block/$d/removable 2>/dev/null)" = 1 ] && continue  # skip USB/removable media
   disks="$disks $d"
 done
 set -- $disks
@@ -52,12 +53,12 @@ EOF
 %end
 %include /tmp/tendril-part.ks
 
-# Console login. The image auto-logs-in root on tty1 (agetty --autologin root) to open the console
-# menu, so root must NOT be locked — a locked account dead-ends the autologin at a password prompt.
-# Give root a default password (unlocked) for local sudo; the REAL security gate is the web admin
-# password, seeded + force-changed by the first-boot unit below. Physical console access is trusted
-# (it's the owner's machine). No separate `tendril` user — it duplicated root and, when its password
-# was force-expired, also broke SSH. Change the default with `passwd` after first boot.
+# Console login. Root is LOCKED (no password) — a touchless/PXE-provisioned box must never ship with a
+# known credential. The image auto-logs-in root on tty1 (agetty --autologin root), which uses
+# `login -f` and bypasses the locked password, so the console menu still opens. The REAL security gate
+# is the web admin password (seeded + force-changed by the first-boot unit below). For remote shell
+# access, set a root password with `passwd` on the console or add an SSH key. No separate `tendril`
+# user (it duplicated root and its force-expired password broke SSH).
 rootpw --lock
 
 # Reboot into the installed system when the install finishes.

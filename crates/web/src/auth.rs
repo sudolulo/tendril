@@ -385,9 +385,10 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
         };
     }
     let is_post = req.method() == axum::http::Method::POST;
-    // A few GETs return fleet trust material (the join code embeds the shared token + the fleet CA
-    // *private key*), so they're admin-only even though they're reads.
-    let sensitive_get = matches!(path, "/fleet/join-code");
+    // Admin-only GETs even though they're reads: `/fleet/join-code` returns the shared token + the
+    // fleet CA *private key*; the VNC console WebSockets (paths ending `/vnc`) relay live keyboard/mouse
+    // to the guest, so a read-only viewer must not open one.
+    let sensitive_get = path == "/fleet/join-code" || path.ends_with("/vnc");
     // Viewer is read-only: refuse mutations (and secret-returning GETs) with a friendly banner.
     if !open && role == Some(Role::Viewer) && (is_post || sensitive_get) {
         let banner = r#"<div class="banner warn" style="margin:0">👁 Read-only access — sign in as an admin to make changes.</div>"#;

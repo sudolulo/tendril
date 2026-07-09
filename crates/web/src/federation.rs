@@ -776,30 +776,7 @@ fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>) -> Markup {
                 }
             }
             @for n in &nodes { (node_card(n)) }
-            @if !ui::is_demo() { (setup_panel()) (pxe_panel()) }
-        },
-    )
-}
-
-/// "Provision a room" — PXE net-boot a rack of bare-metal machines into the unattended installer.
-/// Running it affects the LAN, so this shows the command rather than firing it from a button.
-fn pxe_panel() -> Markup {
-    ui::panel(
-        "Provision a room (PXE)",
-        Some("net-boot many machines into the unattended installer"),
-        html! {
-            div.pad {
-                p.sub style="margin-top:0" {
-                    "Turn this node into a PXE server so a rack of bare-metal PCs images itself hands-off: "
-                    "each net-boots, ERASES its disk, and installs Tendril unattended. Uses proxy-DHCP, so "
-                    "it's safe on a live network (your router keeps handing out IPs). UEFI targets; set them "
-                    "to network-boot first."
-                }
-                pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12.5px" {
-                    "sudo /usr/libexec/tendril/tendril-pxe.sh --iso /path/to/tendril-installer-x86_64.iso"
-                }
-                p.sub style="margin:8px 0 0" { "Grab the ISO from " a href="https://dl.onetick.ninja/" { "dl.onetick.ninja" } ". Ctrl-C to stop serving." }
-            }
+            @if !ui::is_demo() { (setup_panel()) (crate::pxe::panel()) }
         },
     )
 }

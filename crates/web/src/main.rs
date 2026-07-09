@@ -15,6 +15,7 @@ mod licensing;
 mod mdns;
 mod network;
 mod pages;
+mod pxe;
 mod seats;
 mod stations;
 mod storage;
@@ -78,6 +79,9 @@ async fn main() {
         .route("/fleet/setup/rotate-token", post(federation::rotate_token))
         .route("/fleet/join-code", get(federation::join_code))
         .route("/fleet/join", post(federation::join))
+        .route("/fleet/pxe/start", post(pxe::start))
+        .route("/fleet/pxe/stop", post(pxe::stop))
+        .route("/fleet/pxe/fetch", post(pxe::fetch))
         .route("/api/fleet/register", post(federation::api_fleet_register))
         // Control a peer's station from the Stations page (UI proxy → dispatches to the owning node).
         .route(

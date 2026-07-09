@@ -352,12 +352,7 @@ pub async fn resplit_action(
 
 /// The "Guest" panel: what the in-VM QEMU agent reports (OS, hostname, IPs) — health/telemetry for a
 /// running station. Empty/hint when the agent isn't connected yet.
-fn guest_panel(lv: &Libvirt, name: &str, running: bool) -> Markup {
-    let info: GuestAgentInfo = if running {
-        lv.guest_agent(name)
-    } else {
-        GuestAgentInfo::default()
-    };
+fn guest_panel(info: &GuestAgentInfo, running: bool) -> Markup {
     ui::panel(
         "Guest",
         Some("in-VM agent — OS, hostname, IP"),
@@ -378,6 +373,48 @@ fn guest_panel(lv: &Libvirt, name: &str, running: bool) -> Markup {
                     p.sub style="margin:0" {
                         "No guest agent response yet. New stations install it automatically (QEMU guest agent); "
                         "once it's up the guest reports its OS, hostname and IP here and can be shut down gracefully."
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// The "Remote play" panel: how to stream this station to another device with Moonlight. Seatless
+/// stations run Sunshine by default; this surfaces the station's IP (from the guest agent) + the
+/// pairing steps, and WAN guidance. This is the "play any station from anywhere" entry point.
+fn remote_play_panel(info: &GuestAgentInfo, running: bool) -> Markup {
+    ui::panel(
+        "Remote play",
+        Some("stream this station to another device (Moonlight)"),
+        html! {
+            div.pad {
+                @if !running {
+                    p.sub style="margin:0" { "Start the station to stream it." }
+                } @else {
+                    p.sub style="margin-top:0" {
+                        "This station streams over " b { "Sunshine" } " (installed by default on seatless stations). "
+                        "On the device you want to play from, install " b { "Moonlight" } " and add this PC:"
+                    }
+                    @if let Some(ip) = info.ips.first() {
+                        pre.mono style="margin:0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; font-size:13px" { (ip) }
+                        p.sub style="margin:8px 0 0" {
+                            "Moonlight → " b { "Add PC" } " → " code { (ip) } ". Sunshine shows a PIN — enter it to pair, then "
+                            "launch Desktop or a game."
+                        }
+                    } @else {
+                        p.sub style="margin:0" { "Waiting for the station's IP (the guest agent reports it once the VM is up)." }
+                    }
+                    details style="margin-top:12px" {
+                        summary.sub style="cursor:pointer" { "Play over the internet (WAN)" }
+                        div style="margin-top:8px" {
+                            p.sub style="margin:0" {
+                                "Easiest + safest: put the playing device and this station on the same "
+                                b { "mesh VPN" } " (Tailscale / WireGuard) and use the station's VPN IP above — no ports opened. "
+                                "Otherwise forward Sunshine's ports on your router to " code { (info.ips.first().map(String::as_str).unwrap_or("the station IP")) }
+                                ": TCP 47984/47989/48010 and UDP 47998–48000, then add your public IP in Moonlight."
+                            }
+                        }
                     }
                 }
             }
@@ -1484,6 +1521,12 @@ pub async fn detail(Path(name): Path<String>) -> Response {
         .into_response();
     }
     let running = matches!(state, DomainState::Running);
+    // Query the in-guest agent once (used by both the Guest and Remote-play panels).
+    let agent = if running {
+        lv.guest_agent(&name)
+    } else {
+        GuestAgentInfo::default()
+    };
     ui::page("stations", &name, html! {
         div style="display:flex; align-items:center; gap:12px; margin-bottom:16px" {
             a.btn.sm href="/stations" { "←" }
@@ -1523,7 +1566,8 @@ pub async fn detail(Path(name): Path<String>) -> Response {
                 div.emptybox { "The station is not running. Start it to open the console." }
             }
         }))
-        (guest_panel(&lv, &name, running))
+        (guest_panel(&agent, running))
+        (remote_play_panel(&agent, running))
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
         (snapshots_panel(&lv, &name))
         @if let Some(p) = resplit_panel(&name, running) { (p) }

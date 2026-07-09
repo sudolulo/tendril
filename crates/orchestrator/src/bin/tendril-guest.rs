@@ -142,7 +142,10 @@ fn main() {
             }
         );
         if req.needs_boot_prompt_clear() {
-            eprintln!("clearing the boot-from-CD prompt (~18s)...");
+            eprintln!(
+                "clearing the boot-from-CD prompt (~{}s)...",
+                tendril_orchestrator::lifecycle::BOOT_PROMPT_TAPS
+            );
             lv.clear_boot_prompt(&name);
         }
     }
@@ -245,8 +248,6 @@ fn resolve_passthrough_group() -> Vec<String> {
     let Some(cap) = matrix.passthrough_capable().next() else {
         die("No passthrough-capable GPU found. Pass --no-gpu to install headless via VNC first.");
     };
-    let group = groups
-        .iter()
-        .find(|g| g.device_addresses.iter().any(|a| a == &cap.gpu.address));
+    let group = iommu::group_of(&cap.gpu.address, &groups);
     PassthroughStrategy.plan(&cap.gpu, group).bind_addresses
 }

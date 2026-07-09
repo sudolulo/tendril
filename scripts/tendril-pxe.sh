@@ -44,30 +44,49 @@ cleanup() { echo; echo "shutting down PXE…"; kill "${DNSMASQ_PID:-}" "${HTTP_P
 trap cleanup EXIT INT TERM
 
 echo "==> extracting boot files from the ISO"
-extract() { # <iso-path> <dest-dir>
+# Only the boot bits are needed (~tens of MB): /images/pxeboot (kernel+initrd) and /EFI (shim+grub).
+# $ROOT lives in /tmp, which is usually tmpfs (RAM) — a full multi-GB extraction there can exhaust
+# memory, so extract just those trees and fall back to a full extraction only if they aren't found.
+extract() { # <iso-path> <dest-dir> [<iso-subtree>...]
+  local iso="$1" dest="$2"; shift 2
   if command -v xorriso >/dev/null; then
-    xorriso -osirrox on -indev "$ISO" -extract / "$2" >/dev/null 2>&1
+    if [ "$#" -gt 0 ]; then
+      local t
+      for t in "$@"; do
+        xorriso -osirrox on -indev "$iso" -extract "$t" "$dest$t" >/dev/null 2>&1 || true
+      done
+    else
+      xorriso -osirrox on -indev "$iso" -extract / "$dest" >/dev/null 2>&1
+    fi
   elif command -v bsdtar >/dev/null; then
-    bsdtar -C "$2" -xf "$ISO"
+    bsdtar -C "$dest" -xf "$iso"
   else
     echo "error: need xorriso or bsdtar to read the ISO" >&2; exit 2
   fi
 }
 ISODIR="$ROOT/iso"; mkdir -p "$ISODIR"
-extract "$ISO" "$ISODIR"
-
+extract "$ISO" "$ISODIR" /images/pxeboot /EFI
 # Anaconda kernel + initrd (Fedora/bootc ISOs put them under /images/pxeboot).
 KERNEL="$(find "$ISODIR" -path '*pxeboot/vmlinuz' -print -quit)"
 INITRD="$(find "$ISODIR" -path '*pxeboot/initrd.img' -print -quit)"
+if [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
+  rm -rf "$ISODIR"; mkdir -p "$ISODIR"
+  extract "$ISO" "$ISODIR"
+  KERNEL="$(find "$ISODIR" -path '*pxeboot/vmlinuz' -print -quit)"
+  INITRD="$(find "$ISODIR" -path '*pxeboot/initrd.img' -print -quit)"
+fi
 [ -n "$KERNEL" ] && [ -n "$INITRD" ] || { echo "error: couldn't find pxeboot vmlinuz/initrd.img in the ISO" >&2; exit 2; }
 cp "$KERNEL" "$HTTP/vmlinuz"; cp "$INITRD" "$HTTP/initrd.img"
-cp "$ISO" "$HTTP/tendril.iso"   # the install source (inst.repo), served over HTTP
+# The install source (inst.repo), served over HTTP — link, don't copy a multi-GB file into tmpfs.
+ln -s "$(readlink -f "$ISO")" "$HTTP/tendril.iso"
 
 # UEFI bootloader: shim + grub from the ISO's EFI tree.
 SHIM="$(find "$ISODIR" -iname 'BOOTX64.EFI' -print -quit)"
 GRUB="$(find "$ISODIR" -iname 'grubx64.efi' -print -quit)"
 [ -n "$SHIM" ] && [ -n "$GRUB" ] || { echo "error: couldn't find BOOTX64.EFI/grubx64.efi in the ISO" >&2; exit 2; }
 cp "$SHIM" "$TFTP/bootx64.efi"; cp "$GRUB" "$TFTP/grubx64.efi"
+# Boot files are copied out — drop the extraction tree now instead of holding it for the server's life.
+rm -rf "$ISODIR"
 
 echo "==> writing the unattended kickstart"
 cat >"$HTTP/unattended.ks" <<KS
@@ -94,7 +113,11 @@ else
 fi
 %end
 %include /tmp/part.ks
-ostreecontainer --url=http://$SERVER_IP:$HTTP_PORT/tendril.iso --no-signature-verification --transport=oci
+# The OS payload is the container image EMBEDDED in the installer ISO. Anaconda fetches the ISO via
+# inst.repo and mounts it at /run/install/repo, so the bootc-image-builder-embedded OCI layout is at
+# /run/install/repo/container. (The `oci` transport takes a local layout path — an http:// URL, let
+# alone one pointing at the ISO file itself, is not a valid payload source.)
+ostreecontainer --url=/run/install/repo/container --transport=oci --no-signature-verification
 rootpw --lock
 reboot --eject
 KS

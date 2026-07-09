@@ -36,12 +36,19 @@ apply_rule() {
     -H "Content-Type: application/json" -d "${body}")
   if [ "${code}" = "409" ] || [ "${code}" = "422" ]; then
     echo "  rule exists — updating (PATCH)"
-    curl -s -o /tmp/bp.out -w '  PATCH %{http_code}\n' -X PATCH "${API}/${branch}" \
+    code=$(curl -s -o /tmp/bp.out -w '%{http_code}' -X PATCH "${API}/${branch}" \
       -H "Authorization: token ${GITEA_TOKEN}" \
-      -H "Content-Type: application/json" -d "${body}"
+      -H "Content-Type: application/json" -d "${body}")
+    echo "  PATCH ${code}"
   else
     echo "  POST ${code}"
   fi
+  # Anything but success means the protection is NOT in place (bad token, permissions, server error)
+  # — fail loudly rather than exiting 0 with an unprotected branch.
+  case "${code}" in
+    2*) ;;
+    *) echo "  error: API returned ${code}:" >&2; cat /tmp/bp.out >&2; exit 1 ;;
+  esac
 }
 
 # main — strict: no direct push, PR-only, up-to-date required.

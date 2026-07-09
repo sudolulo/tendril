@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use tendril_capability_engine::{iommu, matrix, pci, Capability, GpuVendor, PassthroughViability};
+use tendril_capability_engine::{
+    iommu, matrix, pci, Capability, GpuVendor, PassthroughViability, VgpuSupport,
+};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -37,7 +39,7 @@ fn nvidia_in_own_group_is_isolated_passthrough() {
         PassthroughViability::Isolated
     );
 
-    let m = matrix::build(gpus, &groups);
+    let m = matrix::build_with(gpus, &groups, |_| VgpuSupport::default());
     let nv = m
         .gpus
         .iter()
@@ -70,7 +72,7 @@ fn no_iommu_means_host_only() {
         PassthroughViability::NoIommu
     );
 
-    let m = matrix::build(gpus, &groups);
+    let m = matrix::build_with(gpus, &groups, |_| VgpuSupport::default());
     let nv = m
         .gpus
         .iter()

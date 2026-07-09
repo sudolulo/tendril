@@ -49,14 +49,25 @@ impl CapabilityMatrix {
     }
 }
 
-/// Build a capability matrix from enumerated GPUs and IOMMU groups.
+/// Build a capability matrix from enumerated GPUs and IOMMU groups, probing the **live** host's
+/// sysfs for each GPU's vGPU support.
 pub fn build(gpus: Vec<GpuDevice>, groups: &[IommuGroup]) -> CapabilityMatrix {
+    build_with(gpus, groups, vgpu::probe)
+}
+
+/// [`build`] with an explicit vGPU prober, so fixture-driven tests don't read the live host's
+/// `/sys` (the rest of the inputs are already injectable via the `*_from` enumerators).
+pub fn build_with(
+    gpus: Vec<GpuDevice>,
+    groups: &[IommuGroup],
+    probe: impl Fn(&str) -> VgpuSupport,
+) -> CapabilityMatrix {
     let gpus = gpus
         .into_iter()
         .map(|gpu| {
             let viability = iommu::assess(&gpu, groups);
             let capability = classify(&gpu, viability);
-            let vgpu = vgpu::probe(&gpu.address);
+            let vgpu = probe(&gpu.address);
             GpuCapability {
                 gpu,
                 capability,

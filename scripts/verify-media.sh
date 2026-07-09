@@ -19,7 +19,14 @@ url=""
 case "$name" in
   bazzite-*.iso)
     variant="${name#bazzite-}"; variant="${variant%.iso}"
-    url="https://download.bazzite.gg/bazzite-${variant}-stable-amd64.iso-CHECKSUM"
+    # fetch-steamos-media.sh saves the no-variant image as bazzite-base.iso; upstream publishes it
+    # with no variant segment (bazzite-stable-amd64.iso) — a literal "base" would 404 and silently
+    # downgrade verification to "no upstream checksum".
+    if [ "$variant" = "base" ]; then
+      url="https://download.bazzite.gg/bazzite-stable-amd64.iso-CHECKSUM"
+    else
+      url="https://download.bazzite.gg/bazzite-${variant}-stable-amd64.iso-CHECKSUM"
+    fi
     ;;
 esac
 

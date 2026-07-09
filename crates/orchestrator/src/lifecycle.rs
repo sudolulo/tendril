@@ -44,10 +44,12 @@ impl DomainState {
 
 /// Linux input keycode for Enter.
 const KEY_ENTER: u32 = 28;
-/// Enter taps (1/sec) after start. Generous, because firmware POST can be slow on a loaded host and
-/// the "press any key to boot from CD" prompt has only a ~5-second window — miss it and the install
-/// never starts. Extra taps land harmlessly in WinPE once Setup has taken over.
-const KEY_ENTER_TAPS: u32 = 45;
+/// Enter taps (1/sec) after start — so [`Libvirt::clear_boot_prompt`] blocks this many seconds.
+/// Public so user-facing "clearing the prompt (~Ns)" messages track the real duration. Generous,
+/// because firmware POST can be slow on a loaded host and the "press any key to boot from CD" prompt
+/// has only a ~5-second window — miss it and the install never starts. Extra taps land harmlessly in
+/// WinPE once Setup has taken over.
+pub const BOOT_PROMPT_TAPS: u32 = 45;
 
 /// A path in a root-only scratch dir for the transient XML we hand to `virsh`. Uses `/run/tendril`
 /// (tmpfs, created 0700) so another local user can't pre-plant a symlink at a predictable name in
@@ -128,7 +130,7 @@ impl Libvirt {
     /// if no key is pressed the firmware skips the CD and the unattended install never begins. With no
     /// human at the keyboard, we press it ourselves — harmless keystrokes once WinPE has taken over.
     pub fn clear_boot_prompt(&self, name: &str) {
-        for _ in 0..KEY_ENTER_TAPS {
+        for _ in 0..BOOT_PROMPT_TAPS {
             let _ = self.send_key(name, KEY_ENTER);
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
@@ -271,7 +273,9 @@ impl Libvirt {
             if let Ok(out) = self.run(&["domifaddr", name, "--source", "agent"]) {
                 if out.status.success() {
                     for line in String::from_utf8_lossy(&out.stdout).lines() {
-                        if let Some(ip) = line.split_whitespace().nth(3) {
+                        // The interface-name column can contain spaces on Windows guests
+                        // ("Ethernet 2"), so take the LAST column, not a fixed index.
+                        if let Some(ip) = line.split_whitespace().last() {
                             let ip = ip.split('/').next().unwrap_or(ip);
                             if ip.contains('.') && !ip.starts_with("127.") {
                                 info.ips.push(ip.to_string());

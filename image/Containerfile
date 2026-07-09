@@ -75,14 +75,17 @@ COPY --from=build \
      /src/target/release/tendril-usb \
      /usr/bin/
 
-# The web control plane, served on :80.
+# The web control plane, HTTPS on :443 with a plain-HTTP :80 redirect.
 COPY image/web/tendril-web.service /usr/lib/systemd/system/tendril-web.service
 RUN systemctl enable tendril-web.service
 
 # Helper scripts the console can invoke (media fetch, installer build).
 COPY scripts/ /usr/libexec/tendril/
-# Drop CI/host-only helpers — they're not runtime tools and don't belong in the appliance image.
-RUN rm -f /usr/libexec/tendril/deploy-dev.sh /usr/libexec/tendril/deploy-demo.sh \
+# Drop dev/CI/admin-host-only helpers — they're not runtime tools and don't belong in the appliance
+# image (deploy-dev/demo-setup target the dev box, setup-branch-protection is Gitea admin, and
+# build-vgpu-variant needs a repo checkout — the appliance path is appliance-vgpu-build.sh).
+RUN rm -f /usr/libexec/tendril/deploy-dev.sh /usr/libexec/tendril/demo-setup.sh \
+      /usr/libexec/tendril/setup-branch-protection.sh /usr/libexec/tendril/build-vgpu-variant.sh \
     && chmod +x /usr/libexec/tendril/*.sh
 
 # vGPU build assets (Containerfiles) so the appliance can build a vGPU host-driver variant from its own

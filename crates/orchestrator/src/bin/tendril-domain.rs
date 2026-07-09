@@ -18,9 +18,7 @@ fn main() {
         return;
     };
 
-    let group = groups
-        .iter()
-        .find(|g| g.device_addresses.iter().any(|a| a == &cap.gpu.address));
+    let group = iommu::group_of(&cap.gpu.address, &groups);
     let plan = PassthroughStrategy.plan(&cap.gpu, group);
 
     let station = StationSpec {

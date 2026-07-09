@@ -370,7 +370,10 @@ fn menu_create_station() {
             if report.started {
                 println!("  started — watch the console with: virsh domdisplay {name}");
                 if req.needs_boot_prompt_clear() {
-                    println!("  clearing the boot-from-CD prompt (~18s)...");
+                    println!(
+                        "  clearing the boot-from-CD prompt (~{}s)...",
+                        tendril_orchestrator::lifecycle::BOOT_PROMPT_TAPS
+                    );
                     lv.clear_boot_prompt(&name);
                 }
                 println!(

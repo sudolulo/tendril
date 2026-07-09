@@ -106,7 +106,7 @@ Before=tendril-web.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'echo tendril | /usr/local/bin/tendril-web --seed-default-password'
+ExecStart=/bin/sh -c 'echo tendril | /usr/bin/tendril-web --seed-default-password'
 [Install]
 WantedBy=multi-user.target
 UNIT

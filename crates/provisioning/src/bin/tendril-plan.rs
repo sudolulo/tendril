@@ -12,9 +12,7 @@ fn main() {
     let mut any = false;
     for cap in matrix.passthrough_capable() {
         any = true;
-        let group = groups
-            .iter()
-            .find(|g| g.device_addresses.iter().any(|a| a == &cap.gpu.address));
+        let group = iommu::group_of(&cap.gpu.address, &groups);
         let plan = strategy.plan(&cap.gpu, group);
 
         println!(

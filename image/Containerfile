@@ -35,8 +35,16 @@ RUN dnf -y install \
         genisoimage \
         NetworkManager-tui \
         hwdata \
+        greenboot greenboot-default-health-checks \
     && dnf clean all \
-    && systemctl enable libvirtd.service
+    && systemctl enable libvirtd.service \
+    && { systemctl enable greenboot-healthcheck.service || true; }
+
+# greenboot health-gated auto-rollback (the "can't-break-it" net): after any bootc update this check
+# must pass or the bootloader falls back to the previous deployment. Ours asserts libvirt + the
+# control plane are up (see the script header).
+COPY image/greenboot/50-tendril-health.sh /usr/lib/greenboot/check/required.d/50-tendril-health.sh
+RUN chmod +x /usr/lib/greenboot/check/required.d/50-tendril-health.sh
 
 # Brand the OS as Tendril (keeps ID=fedora for package/tooling compatibility, à la other bootc
 # spins). Surfaces in the installer summary, `bootc status`, and the login banner.

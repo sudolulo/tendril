@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A correctness-audit round following 0.22.0's security rounds: a full-codebase review for logic bugs
+and cleanups (not security). No feature or API changes.
+
+### Fixed
+- **PXE net-install payload.** The PXE kickstart pointed `ostreecontainer --transport=oci` at the
+  ISO over HTTP; the `oci` transport takes a local OCI-layout path, so every net-install died at
+  the payload step. It now installs the container embedded in the ISO (`/run/install/repo/container`).
+- **Seeded default password.** Both installer configs ran `/usr/local/bin/tendril-web` to seed the
+  default admin password, but the appliance ships binaries in `/usr/bin` — the seed unit failed on
+  every unattended install and the documented first-login flow never worked.
+- **Shared-store mount detection** used `findmnt --target`, which matches the filesystem
+  *containing* the path — a configured-but-unmounted store still resolved as live, silently writing
+  ISOs/images/registry/CA material to the local disk under the mountpoint. Now an exact-mountpoint
+  check; disconnecting a store also now surfaces a failed `umount` instead of forgetting a
+  still-mounted share, and store fields that land in `/etc/fstab` reject embedded spaces.
+- **vGPU guest-driver cache** (version-less filenames) is invalidated when the staged host-driver
+  branch changes — a host upgrade no longer hands new stations the previous release's guest
+  drivers — and removing the staged driver also drops the recorded branch + cached guest drivers.
+- **Stale-marker recovery.** A `tendril-web` restart mid-vGPU-build or mid-PXE-ISO-download no
+  longer wedges those panels forever; the PXE pidfile is verified against the process cmdline so a
+  reboot-recycled PID can't be killed as root or shown as "serving".
+- **Clone wizard.** Cloning a golden image now honors the low-latency (CPU pinning + hugepages)
+  checkbox; a failed clone provision removes its orphaned overlay so retrying the name works; a
+  custom disk path without `.qcow2` no longer silently drops the requested data volume.
+- **Guest IPs on Windows.** `virsh domifaddr` parsing took a fixed column, so interface names with
+  spaces ("Ethernet 2") hid the station's IP from the Guest/Remote-play panels.
+- **Media verification.** The base-variant Bazzite ISO checksum URL was derived wrongly (404), so
+  its verification silently degraded to "no upstream checksum".
+- **Release pipeline.** `SHA256SUMS` is regenerated for every served ISO on release instead of
+  clobbering the stable/older entries; `setup-branch-protection.sh` now fails on non-2xx API
+  responses instead of reporting success with unprotected branches.
+
+### Changed
+- The PXE server no longer extracts the whole ISO into `/tmp` (tmpfs) nor copies the multi-GB ISO
+  there — only the boot trees are extracted and the ISO is symlinked into the HTTP root.
+- One-pass libvirt usage sweep for the Hardware page and station wizard (one `dumpxml` per domain
+  instead of one per usage map); peer panels/actions on the Stations page refetch just that node
+  instead of the whole fleet.
+- Boot-prompt console messages derive from the real key-tap duration (was hardcoded "~18s", actual
+  45s); shared helpers replace duplicated cert-SAN, URL-encoding, IOMMU-group-lookup, and
+  shell-block-markup code; the appliance image drops dev/admin-host-only scripts.
+
 ## [0.22.0] - 2026-07-09
 
 A security-hardening release. Four iterative multi-agent audit rounds swept the web app,

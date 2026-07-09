@@ -906,10 +906,15 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         }
         let assign = match assign_gpu(&get("gpu")) {
             Ok(a) => a,
-            Err(e) => return create_form(Some(&e)).into_response(),
+            Err(e) => {
+                // Don't strand the freshly-created overlay — it would block a retry under the
+                // same name with "a disk already exists".
+                let _ = std::fs::remove_file(&disk);
+                return create_form(Some(&e)).into_response();
+            }
         };
         let (dram, dvcpus, _) = resource_defaults();
-        let req = StationRequest {
+        let mut req = StationRequest {
             name: name.clone(),
             guest,
             disk_path: disk.clone(),
@@ -929,6 +934,13 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             cpu_pinning: None,
             hugepages: false,
         };
+        // Low-latency applies to clones too — the checkbox is visible (and on by default) in
+        // clone mode, so honoring it only on fresh installs would silently drop it here.
+        if checked("low_latency") {
+            let (pinning, hugepages) = plan_low_latency(req.vcpus);
+            req.cpu_pinning = pinning;
+            req.hugepages = hugepages;
+        }
         let lv = Libvirt::system();
         return match provision(&req, &lv) {
             Ok(_) => {
@@ -937,6 +949,7 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
             }
             Err(e) => {
                 assign.cleanup();
+                let _ = std::fs::remove_file(&disk);
                 create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
             }
         };
@@ -1018,10 +1031,12 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         // survives OS/base-image swaps and re-splits, so games/saves aren't lost when the OS is replaced.
         data_disk: {
             let gib: u32 = get("data_gib").parse().unwrap_or(0);
-            (gib > 0)
-                .then(|| disk.strip_suffix(".qcow2"))
-                .flatten()
-                .map(|base| (format!("{base}-data.qcow2"), gib))
+            // A custom disk path may not end in .qcow2 — still honor the requested volume rather
+            // than silently dropping it.
+            (gib > 0).then(|| {
+                let base = disk.strip_suffix(".qcow2").unwrap_or(&disk);
+                (format!("{base}-data.qcow2"), gib)
+            })
         },
         // Low-latency pinning/hugepages resolved just below (needs vcpus, and to see cores other
         // stations already hold).

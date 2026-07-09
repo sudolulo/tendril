@@ -1934,10 +1934,7 @@ pub async fn peer_station_detail(
 ) -> Markup {
     let (nd, st) = (node.clone(), name.clone());
     let info = tokio::task::spawn_blocking(move || {
-        fleet()
-            .into_iter()
-            .find(|x| x.name == nd)
-            .and_then(|x| x.stations.into_iter().find(|s| s.name == st))
+        fresh_node(&nd).and_then(|x| x.stations.into_iter().find(|s| s.name == st))
     })
     .await
     .ok()
@@ -2061,6 +2058,18 @@ fn peer_panel(n: &NodeInfo, err: Option<&str>) -> Markup {
     }
 }
 
+/// Fresh state for a single fleet node by name — this node locally, a peer over its API — without
+/// fetching the whole fleet. `None` for an unknown name. Blocking (shells out); call off the worker.
+fn fresh_node(node: &str) -> Option<NodeInfo> {
+    if node == node_name() {
+        return Some(local_node_info());
+    }
+    peers()
+        .into_iter()
+        .find(|p| p.name == node)
+        .map(|p| fetch_peer(&p))
+}
+
 /// UI poll: re-fetch a single peer's fresh state and re-render just its panel (self-refresh).
 pub async fn peer_panel_fragment(axum::extract::Path(node): axum::extract::Path<String>) -> Markup {
     if ui::is_demo() {
@@ -2070,15 +2079,10 @@ pub async fn peer_panel_fragment(axum::extract::Path(node): axum::extract::Path<
         };
     }
     let nd = node.clone();
-    let fresh = tokio::task::spawn_blocking(move || {
-        peers()
-            .into_iter()
-            .find(|p| p.name == nd)
-            .map(|p| fetch_peer(&p))
-    })
-    .await
-    .ok()
-    .flatten();
+    let fresh = tokio::task::spawn_blocking(move || fresh_node(&nd))
+        .await
+        .ok()
+        .flatten();
     match fresh {
         Some(x) => peer_panel(&x, None),
         None => peer_panel(
@@ -2127,7 +2131,7 @@ pub async fn peer_station_action(
         .unwrap_or_else(|_| Err("dispatch task panicked".into()));
     // Re-fetch this peer's fresh state so the panel reflects the action.
     let nd2 = node.clone();
-    let fresh = tokio::task::spawn_blocking(move || fleet().into_iter().find(|x| x.name == nd2))
+    let fresh = tokio::task::spawn_blocking(move || fresh_node(&nd2))
         .await
         .ok()
         .flatten();

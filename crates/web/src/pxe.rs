@@ -198,6 +198,25 @@ pub async fn fetch() -> Markup {
         let dir = crate::storage::iso_dir();
         std::thread::spawn(move || {
             let _ = std::fs::create_dir_all(&dir);
+            // Reap stale temps from previous processes first (we won the CAS, so exactly one
+            // sweeper): their names are pid-unique, so nothing else ever deletes these multi-GB
+            // orphans. `fetching()` returned false, so anything matching is already stale.
+            let prefix = format!("{LATEST_ISO}.part");
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    let stale = e
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .map(|age| age.as_secs() >= 600)
+                        .unwrap_or(true);
+                    if n.starts_with(prefix.as_str()) && stale {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
             // Pid-suffixed temp: a leftover curl from a dead previous process can't interleave
             // writes with this one, and each cleanup only ever removes its own temp.
             let tmp = format!("{dir}/{LATEST_ISO}.part.{}", std::process::id());

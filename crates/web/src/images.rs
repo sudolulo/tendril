@@ -187,6 +187,41 @@ fn sha256_of(path: &str) -> Option<String> {
     out.split_whitespace().next().map(str::to_string)
 }
 
+/// [`sha256_of`], re-touching `marker` while the hash runs. The verifying marker is mtime-aged
+/// ([`fresh_or_reap`]), so a hash legitimately outlasting the staleness window (a huge image on a
+/// slow shared store) must keep its marker fresh or a panel poll — ours or a peer's — reaps it
+/// mid-run and offers a redundant concurrent verify.
+fn sha256_watched(path: &str, marker: &str) -> Option<String> {
+    let mut child = std::process::Command::new("sha256sum")
+        .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut ticks = 0u32;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                ticks += 1;
+                if ticks % 30 == 0 {
+                    let _ = std::fs::write(marker, "");
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let out = child
+        .wait_with_output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+}
+
 /// The recorded SHA-256 of an image, if any.
 pub fn image_sha(name: &str) -> Option<String> {
     std::fs::read_to_string(sha_path(name))
@@ -256,7 +291,7 @@ pub async fn verify(Query(q): Query<NameQuery>) -> Markup {
         let nm = name.clone();
         std::thread::spawn(move || {
             let dest = format!("{}/{}.qcow2", images_dir(), nm);
-            match (image_sha(&nm), sha256_of(&dest)) {
+            match (image_sha(&nm), sha256_watched(&dest, &verifying_path(&nm))) {
                 (Some(e), Some(a)) if e == a => {
                     let _ = std::fs::remove_file(mismatch_path(&nm));
                 }

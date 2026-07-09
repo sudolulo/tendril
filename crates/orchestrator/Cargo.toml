@@ -1,6 +1,6 @@
 [package]
 name = "tendril-orchestrator"
-description = "Controller/agent that manages gaming-station VMs via libvirt."
+description = "Per-node station provisioning and lifecycle over libvirt."
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

@@ -57,7 +57,7 @@ guaranteed anti-cheat bypass, and enterprise HA.
 │   passthrough.rs (v1) | vgpu_nvidia.rs (v2) | vgpu_unlock.rs (v3)      │
 │   → drives image layering + reversible host state                     │
 ├──────────────────────────────────────────────────────────────────────┤
-│  ORCHESTRATOR   controller  ⇄  per-node agent(s)   (libvirt)           │
+│  ORCHESTRATOR   per-node station lifecycle (libvirt); federation joins │
 │   station lifecycle · GPU-aware scheduling · domain-XML templating     │
 │   overlays: cpu-pinning · secure-boot+TPM · native-hardware (opt-in)   │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -152,7 +152,8 @@ Single binary, two roles. Ship single-node now; the same design scales to a clus
 - **Windows:** unattended `autounattend.xml`, virtio driver injection, GPU driver auto-install,
   Sunshine pre-staged for future streaming. Secure Boot + TPM enabled by default (Win11).
 - **SteamOS:** VM-friendly image (HoloISO / Bazzite-style), boots to Gaming Mode.
-- Golden images published to the controller's registry; nodes pull them.
+- Golden images published to the fleet's shared store (or distributed node-to-node over the
+  federation API); nodes pull them.
 
 ### 5.6 Control plane (Web UI + wizard)
 - Proxmox-like but **gaming-first**. Core flow = **"Create Gaming Station" wizard**:
@@ -172,8 +173,9 @@ Single binary, two roles. Ship single-node now; the same design scales to a clus
    user's box never bricks. This is how we get runtime hardware adaptation *and* immutability.
 
 ### 6.2 Create a gaming station
-Wizard → controller schedules onto a node with a free compatible GPU → agent renders domain XML
-(base + overlays) → clones golden image → binds GPU + USB seat → starts VM → monitor lights up.
+Wizard → GPU-aware placement picks a fleet node with a free compatible GPU (federation) → that
+node renders domain XML (base + overlays) → clones golden image → binds GPU + USB seat → starts
+VM → monitor lights up.
 
 ### 6.3 Update & rollback
 CI builds a new versioned host image → nodes pull + stage → A/B reboot → greenboot verifies →
@@ -203,9 +205,9 @@ auto-rollback on failure. VM data plane untouched throughout.
 | Host OS | Fedora bootc (Containerfile-defined, CI-built images) |
 | Hypervisor | KVM + QEMU + libvirt + VFIO (mainline) |
 | Capability engine / provisioning / orchestrator | Rust (per-node binaries; multi-node via web-layer federation) |
-| State store | SQLite (single-node) → raft/embedded consensus (cluster) |
+| State store | Per-node files + the shared store (no consensus — federation) |
 | API | REST/gRPC over mTLS |
-| Web UI | (TBD framework) served by controller |
+| Web UI | Axum + HTMX (Maud), served by every node |
 | Guest streaming (future) | Sunshine (host) + Moonlight (client) |
 | Firmware | OVMF (Secure Boot) + swtpm (TPM 2.0) |
 
@@ -219,7 +221,7 @@ auto-rollback on failure. VM data plane untouched throughout.
 | **1 — Base image + single station** | Fedora bootc image (IOMMU pre-flagged, libvirt/VFIO baked) + capability engine v1 + passthrough provisioning + orchestrator single-node + physical output + Windows & SteamOS golden images | From a fresh install: auto-detect GPUs, create 1 station via wizard, play a game. Greenboot rollback works. |
 | **2 — Multi-GPU multi-seat** | N GPUs → N stations; USB-controller seat routing; CPU pinning/hugepages; per-seat audio | 2+ simultaneous independent gaming stations on one box, each with own monitor/peripherals. |
 | **3 — vGPU (>1 VM/GPU)** | `vgpu_nvidia` (official datacenter) then `vgpu_unlock` (consumer, experimental gate) | More stations than physical GPUs on supported hardware. |
-| **4 — Clustering** | Controller/agent multi-node; GPU-aware scheduling; golden-image distribution; cold migration | Manage stations across ≥2 machines from one UI; place a new station on any node with a free GPU. |
+| **4 — Fleet (federation)** | Independent self-managing nodes over the token/mTLS API; GPU-aware placement; golden-image distribution; cold re-home | Manage stations across ≥2 machines from any node's UI; place a new station on any node with a free GPU. (Shipped as federation — see D5; no controller/agent split.) |
 | **5 — Streaming** | Sunshine/Moonlight `streaming` output backend | Play a station headless from another device; cluster + streaming = play any station from anywhere. |
 
 **MVP = end of Phase 2:** multiple real gaming stations on one multi-GPU box, plug-and-play,
@@ -245,7 +247,7 @@ un-brickable. Everything after is expansion.
 
 1. **Project name** (GameHost is a placeholder).
 2. **Web UI framework** (and whether a local TUI ships alongside).
-3. **Golden-image distribution mechanism** for clustering (OCI registry? built-in?).
+3. **Golden-image distribution mechanism** for fleets (shared store + built-in node-to-node pull shipped; OCI registry still open for WAN).
 4. **Peripheral routing default:** whole USB-controller passthrough vs. evdev — per-hardware policy.
 5. **Which GPUs to officially "bless"** at launch (a supported-hardware list reduces support load).
 6. ~~**Licensing** (GPL/Apache/etc.) and governance for the open-source project.~~ **Decided

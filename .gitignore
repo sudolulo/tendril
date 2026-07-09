@@ -17,6 +17,5 @@
 out/
 
 # installer build output
-out/
 out-unattended/
 out-test/

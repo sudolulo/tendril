@@ -71,13 +71,14 @@ pub fn build(gpus: Vec<GpuDevice>, groups: &[IommuGroup]) -> CapabilityMatrix {
 /// Classify a single GPU into a [`Capability`].
 ///
 /// Non-GPU-vendor display devices (e.g. a Matrox/ASPEED BMC console, or an unrecognized adapter) are
-/// treated as [`Capability::HostOnly`]. Recognized GPUs are passthrough-capable when the IOMMU
-/// permits it; without IOMMU they fall back to host-only.
+/// treated as [`Capability::HostOnly`]. The host's **boot/console GPU** (`boot_vga`) is also reserved
+/// HostOnly so the passthrough/apply path can never bind the host's only display out from under it —
+/// on a single-GPU box that means it isn't offered for passthrough. Recognized non-boot GPUs are
+/// passthrough-capable when the IOMMU permits it; without IOMMU they fall back to host-only.
 ///
-/// TODO(phase-1+): vGPU classification (official vs `vgpu_unlock`) and host-GPU reservation policy
-/// (which display device the host keeps) belong here / one layer up.
+/// TODO(phase-1+): vGPU classification (official vs `vgpu_unlock`) belongs here / one layer up.
 fn classify(gpu: &GpuDevice, viability: PassthroughViability) -> Capability {
-    if gpu.vendor == GpuVendor::Unknown {
+    if gpu.vendor == GpuVendor::Unknown || gpu.boot_vga {
         return Capability::HostOnly;
     }
     match viability {

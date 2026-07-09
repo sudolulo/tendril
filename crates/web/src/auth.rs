@@ -454,6 +454,10 @@ pub async fn login(Form(f): Form<LoginForm>) -> Response {
         )
             .into_response()
     } else {
+        // Throttle brute force: a fixed delay on every failed attempt caps guesses to a couple per
+        // second (Argon2's cost is the only other brake).
+        audit("anon", "login-fail", 401);
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
         render(
             "Sign in",
             Some("Incorrect password."),

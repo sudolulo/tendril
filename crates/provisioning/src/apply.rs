@@ -61,6 +61,7 @@ pub fn render(plan: &ProvisioningPlan) -> Vec<Action> {
 
 /// Execute (or, in [`Mode::DryRun`], report) the actions in order.
 pub fn execute(actions: &[Action], mode: Mode) -> std::io::Result<()> {
+    let mut applied = 0usize;
     for action in actions {
         match mode {
             Mode::DryRun => println!(
@@ -70,11 +71,26 @@ pub fn execute(actions: &[Action], mode: Mode) -> std::io::Result<()> {
                 action.description
             ),
             Mode::Execute => match fs::write(&action.path, &action.value) {
-                Ok(()) => println!("  wrote '{}' -> {}", action.value, action.path.display()),
+                Ok(()) => {
+                    applied += 1;
+                    println!("  wrote '{}' -> {}", action.value, action.path.display());
+                }
                 Err(e) if action.optional => {
                     println!("  skipped {} ({e})", action.path.display());
                 }
-                Err(e) => return Err(e),
+                // A required action failed mid-sequence: earlier binds/overrides are already applied,
+                // so the host can be in a partial state. Surface that explicitly (there's no clean
+                // rollback for a half-detached GPU) so the caller can re-run or reboot to recover.
+                Err(e) => {
+                    return Err(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "failed to write {} ({e}); {applied} earlier action(s) already applied — \
+                             the host may be in a partial state (re-run apply or reboot)",
+                            action.path.display()
+                        ),
+                    ));
+                }
             },
         }
     }

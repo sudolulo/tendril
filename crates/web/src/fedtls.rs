@@ -151,8 +151,22 @@ pub fn install_ca(cert_pem: &str, key_pem: &str) -> Result<(), String> {
     let dir = local_ca_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(format!("{dir}/ca.pem"), cert_pem).map_err(|e| e.to_string())?;
-    std::fs::write(format!("{dir}/ca.key"), key_pem).map_err(|e| e.to_string())?;
-    chmod_600(&format!("{dir}/ca.key"));
+    // Create the CA private key 0600 up front (no world-readable window before the chmod).
+    {
+        use std::io::Write as _;
+        let kp = format!("{dir}/ca.key");
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&kp)
+            .and_then(|mut f| f.write_all(key_pem.as_bytes()))
+            .map_err(|e| e.to_string())?;
+        chmod_600(&kp);
+    }
     reset_identity();
     Ok(())
 }

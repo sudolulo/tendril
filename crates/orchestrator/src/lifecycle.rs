@@ -49,6 +49,23 @@ const KEY_ENTER: u32 = 28;
 /// never starts. Extra taps land harmlessly in WinPE once Setup has taken over.
 const KEY_ENTER_TAPS: u32 = 45;
 
+/// A path in a root-only scratch dir for the transient XML we hand to `virsh`. Uses `/run/tendril`
+/// (tmpfs, created 0700) so another local user can't pre-plant a symlink at a predictable name in
+/// world-shared `/tmp` and have root's write follow it (a TOCTOU overwrite). Falls back to the temp
+/// dir only if `/run` isn't writable.
+fn scratch_path(name: &str) -> std::path::PathBuf {
+    let dir = std::path::Path::new("/run/tendril");
+    if std::fs::create_dir_all(dir).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+        return dir.join(name);
+    }
+    std::env::temp_dir().join(name)
+}
+
 impl Libvirt {
     /// The system libvirt instance (`qemu:///system`).
     pub fn system() -> Self {
@@ -87,7 +104,7 @@ impl Libvirt {
 
     /// Define a persistent domain from its XML. Validates, but does not start it.
     pub fn define(&self, name: &str, xml: &str) -> io::Result<()> {
-        let path = std::env::temp_dir().join(format!("tendril-{name}.xml"));
+        let path = scratch_path(&format!("tendril-{name}.xml"));
         std::fs::write(&path, xml)?;
         let result = self.run(&["define", "--validate", &path.to_string_lossy()]);
         let _ = std::fs::remove_file(&path);
@@ -149,8 +166,9 @@ impl Libvirt {
              <source><vendor id='0x{vendor:04x}'/><product id='0x{product:04x}'/></source>\
              </hostdev>"
         );
-        let path =
-            std::env::temp_dir().join(format!("tendril-usb-{name}-{vendor:04x}-{product:04x}.xml"));
+        let path = scratch_path(&format!(
+            "tendril-usb-{name}-{vendor:04x}-{product:04x}.xml"
+        ));
         std::fs::write(&path, xml)?;
         let path_str = path.to_string_lossy().into_owned();
         // --config persists it; --live also hot-(un)plugs when the domain is running.

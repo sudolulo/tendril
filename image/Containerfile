@@ -81,7 +81,9 @@ RUN systemctl enable tendril-web.service
 
 # Helper scripts the console can invoke (media fetch, installer build).
 COPY scripts/ /usr/libexec/tendril/
-RUN chmod +x /usr/libexec/tendril/*.sh
+# Drop CI/host-only helpers — they're not runtime tools and don't belong in the appliance image.
+RUN rm -f /usr/libexec/tendril/deploy-dev.sh /usr/libexec/tendril/deploy-demo.sh \
+    && chmod +x /usr/libexec/tendril/*.sh
 
 # vGPU build assets (Containerfiles) so the appliance can build a vGPU host-driver variant from its own
 # running image + a driver staged in the web UI — no repo checkout needed.

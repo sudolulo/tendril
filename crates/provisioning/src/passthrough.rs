@@ -52,6 +52,7 @@ mod tests {
             device_id: 0x1e84,
             vendor: GpuVendor::Nvidia,
             model: None,
+            boot_vga: false,
         }
     }
 

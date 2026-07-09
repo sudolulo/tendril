@@ -219,33 +219,16 @@ pub fn render(spec: &DomainSpec) -> String {
         xml.push_str("      <target dev='vdb' bus='virtio'/>\n");
         xml.push_str("    </disk>\n");
     }
-    // OS install ISO (cdrom) — boots first while present.
+    // Install media, each on its own read-only cdrom: the OS ISO (boots first), the virtio-win drivers
+    // (so Windows Setup sees the virtio disk), and the unattended seed (autounattend.xml / kickstart).
     if let Some(iso) = &spec.media.install_iso {
-        xml.push_str("    <disk type='file' device='cdrom'>\n");
-        xml.push_str("      <driver name='qemu' type='raw'/>\n");
-        let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
-        xml.push_str("      <target dev='sda' bus='sata'/>\n");
-        xml.push_str("      <readonly/>\n");
-        xml.push_str("      <boot order='1'/>\n");
-        xml.push_str("    </disk>\n");
+        cdrom(&mut xml, iso, "sda", Some(1));
     }
-    // virtio-win drivers (second cdrom) so Windows can see the virtio disk during setup.
     if let Some(iso) = &spec.media.virtio_iso {
-        xml.push_str("    <disk type='file' device='cdrom'>\n");
-        xml.push_str("      <driver name='qemu' type='raw'/>\n");
-        let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
-        xml.push_str("      <target dev='sdb' bus='sata'/>\n");
-        xml.push_str("      <readonly/>\n");
-        xml.push_str("    </disk>\n");
+        cdrom(&mut xml, iso, "sdb", None);
     }
-    // Unattended-setup seed (third cdrom): autounattend.xml (Windows) or a kickstart (Bazzite).
     if let Some(iso) = &spec.media.seed_iso {
-        xml.push_str("    <disk type='file' device='cdrom'>\n");
-        xml.push_str("      <driver name='qemu' type='raw'/>\n");
-        let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
-        xml.push_str("      <target dev='sdc' bus='sata'/>\n");
-        xml.push_str("      <readonly/>\n");
-        xml.push_str("    </disk>\n");
+        cdrom(&mut xml, iso, "sdc", None);
     }
     // Network.
     xml.push_str("    <interface type='network'>\n");
@@ -295,6 +278,20 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("  </devices>\n");
     xml.push_str("</domain>\n");
     xml
+}
+
+/// Append a read-only cdrom `<disk>` for an install-media ISO, at target `dev` (`sda`/`sdb`/…), with an
+/// optional `<boot order>`.
+fn cdrom(xml: &mut String, iso: &str, dev: &str, boot: Option<u32>) {
+    xml.push_str("    <disk type='file' device='cdrom'>\n");
+    xml.push_str("      <driver name='qemu' type='raw'/>\n");
+    let _ = writeln!(xml, "      <source file='{}'/>", xesc(iso));
+    let _ = writeln!(xml, "      <target dev='{dev}' bus='sata'/>");
+    xml.push_str("      <readonly/>\n");
+    if let Some(o) = boot {
+        let _ = writeln!(xml, "      <boot order='{o}'/>");
+    }
+    xml.push_str("    </disk>\n");
 }
 
 /// Escape a value for a single-quoted XML attribute / text node. Defense in depth: the web layer

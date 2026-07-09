@@ -43,6 +43,9 @@ pub struct GpuDevice {
     pub vendor: GpuVendor,
     /// Human-readable model string, if resolvable.
     pub model: Option<String>,
+    /// True if this is the host's boot/console GPU (sysfs `boot_vga=1`). Reserved for the host so
+    /// passthrough can't accidentally take the only display.
+    pub boot_vga: bool,
 }
 
 /// Enumerate all display-controller PCI devices on the live host, with friendly model names
@@ -116,12 +119,16 @@ pub fn enumerate_from(devices_dir: &Path) -> Vec<GpuDevice> {
             }
             let vendor_id = read_hex(&path.join("vendor"))? as u16;
             let device_id = read_hex(&path.join("device"))? as u16;
+            let boot_vga = fs::read_to_string(path.join("boot_vga"))
+                .map(|s| s.trim() == "1")
+                .unwrap_or(false);
             Some(GpuDevice {
                 address: entry.file_name().to_string_lossy().into_owned(),
                 vendor_id,
                 device_id,
                 vendor: GpuVendor::from_vendor_id(vendor_id),
                 model: None,
+                boot_vga,
             })
         })
         .collect();

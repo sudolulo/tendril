@@ -109,8 +109,10 @@ pub async fn start(axum::Form(f): axum::Form<StartForm>) -> Markup {
     let _ = std::fs::create_dir_all(state_dir());
     // Launch in its own session, backgrounded, PID recorded — sh exits immediately, the server keeps
     // running (reparented to init). `iso` is validated as a safe basename above.
+    // Single-quote every interpolation so a state-dir/media-dir path with spaces doesn't split the
+    // command. `iso` is a validated basename; the dirs come from config, not the request.
     let cmd = format!(
-        "setsid {SCRIPT} --iso {iso_path} >{log} 2>&1 & echo $! > {pid}",
+        "setsid '{SCRIPT}' --iso '{iso_path}' >'{log}' 2>&1 & echo $! > '{pid}'",
         log = logfile(),
         pid = pidfile()
     );

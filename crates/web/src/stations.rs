@@ -867,7 +867,10 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         }
     }
     if !get("password").is_empty() && !ui::safe_field(&get("password")) {
-        return create_form(Some("Password can't contain control characters (newlines/tabs).")).into_response();
+        return create_form(Some(
+            "Password can't contain control characters (newlines/tabs).",
+        ))
+        .into_response();
     }
     let disk = {
         let d = get("disk");

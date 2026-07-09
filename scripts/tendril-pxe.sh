@@ -20,9 +20,9 @@ set -euo pipefail
 ISO="" IFACE="" HTTP_PORT=8080
 while [ $# -gt 0 ]; do
   case "$1" in
-    --iso) ISO="$2"; shift 2 ;;
-    --interface) IFACE="$2"; shift 2 ;;
-    --http-port) HTTP_PORT="$2"; shift 2 ;;
+    --iso) [ $# -ge 2 ] || { echo "--iso needs a value" >&2; exit 2; }; ISO="$2"; shift 2 ;;
+    --interface) [ $# -ge 2 ] || { echo "--interface needs a value" >&2; exit 2; }; IFACE="$2"; shift 2 ;;
+    --http-port) [ $# -ge 2 ] || { echo "--http-port needs a value" >&2; exit 2; }; HTTP_PORT="$2"; shift 2 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -76,12 +76,20 @@ text
 network --bootproto=dhcp --activate
 # Single-disk safety: only proceed when there's exactly one disk; else Anaconda halts for a human.
 %pre --interpreter=/bin/bash
-disks=(\$(lsblk -dno NAME,TYPE | awk '\$2=="disk"{print \$1}'))
-if [ "\${#disks[@]}" -eq 1 ]; then
-  echo "clearpart --all --initlabel --drives=\${disks[0]}" > /tmp/part.ks
-  echo "part / --fstype=xfs --grow --asprimary --ondisk=\${disks[0]}" >> /tmp/part.ks
+# Only REAL disks: skip zram (Fedora's installer env has a zram swap reporting TYPE=disk) plus
+# loop/ram/sr/fd/nbd/dm — same vetted filter as the ISO installer. A single real disk -> touchless;
+# 0 or >1 -> leave partitioning unset so Anaconda halts for a human rather than wiping the wrong disk.
+disks=""
+for d in \$(lsblk -dnro NAME,TYPE | awk '\$2=="disk"{print \$1}'); do
+  case "\$d" in zram*|loop*|ram*|sr*|fd*|nbd*|dm-*) continue ;; esac
+  disks="\$disks \$d"
+done
+set -- \$disks
+if [ "\$#" -eq 1 ]; then
+  echo "clearpart --all --initlabel --drives=\$1" > /tmp/part.ks
+  echo "part / --fstype=xfs --grow --asprimary --ondisk=\$1" >> /tmp/part.ks
 else
-  echo "%addon com_redhat_kdump --disable" > /tmp/part.ks   # noop; leaves partitioning unset -> Anaconda prompts
+  : > /tmp/part.ks
 fi
 %end
 %include /tmp/part.ks

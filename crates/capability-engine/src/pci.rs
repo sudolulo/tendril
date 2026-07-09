@@ -78,11 +78,16 @@ pub(crate) fn lookup_model(ids: &str, vendor_id: u16, device_id: u16) -> Option<
             if in_vendor {
                 break;
             }
-            in_vendor = line.len() >= 4 && line[..4].eq_ignore_ascii_case(&vhex);
+            // `get(..4)` (not `[..4]`) so a line whose 4th byte is inside a multi-byte UTF-8 char
+            // doesn't panic on a malformed pci.ids.
+            in_vendor = line.get(..4).is_some_and(|p| p.eq_ignore_ascii_case(&vhex));
         } else if in_vendor && !line.starts_with("\t\t") {
             // A device line under the target vendor (skip the two-tab subsystem lines).
             let entry = line.trim_start();
-            if entry.len() >= 4 && entry[..4].eq_ignore_ascii_case(&dhex) {
+            if entry
+                .get(..4)
+                .is_some_and(|p| p.eq_ignore_ascii_case(&dhex))
+            {
                 return Some(entry[4..].trim().to_string());
             }
         }

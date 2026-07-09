@@ -405,7 +405,12 @@ pub async fn verify(axum::extract::Path(iso): axum::extract::Path<String>) -> Ma
 
 /// Poll target: re-render the verification cell.
 pub async fn verify_status(axum::extract::Path(iso): axum::extract::Path<String>) -> Markup {
-    verify_cell(&iso)
+    // Same path-traversal guard as `verify` — `iso` is used to build a state-file path, so reject
+    // `/` and `..` before reading.
+    match guard_iso(&iso) {
+        Some(_) => verify_cell(&iso),
+        None => html! {},
+    }
 }
 
 /// Minimal single-quote shell escaping for a trusted-but-punctuated path.

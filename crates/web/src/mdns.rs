@@ -68,7 +68,9 @@ pub fn start() {
                             .get_property_val_str("fed")
                             .filter(|s| !s.is_empty())
                             .map(str::to_string);
-                        if !n.is_empty() && !u.is_empty() {
+                        // Only keep an advert with a real http(s) URL — a LAN attacker can advertise
+                        // anything, and the URL is later rendered as a link (block `javascript:` etc.).
+                        if !n.is_empty() && crate::ui::is_http_url(&u) {
                             seen().lock().unwrap().insert(
                                 info.get_fullname().to_string(),
                                 Nearby {

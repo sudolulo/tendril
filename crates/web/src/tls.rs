@@ -218,8 +218,20 @@ fn validate_pair(cert_pem: &[u8], key_pem: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&cert_t);
         let _ = std::fs::remove_file(&key_t);
     };
+    // Write the (private-key-bearing) temp files 0600 and O_EXCL — so the key isn't world-readable in
+    // the shared temp dir and a pre-planted symlink at the predictable name can't be followed.
     let write = |p: &Path, b: &[u8]| -> Result<(), String> {
-        std::fs::write(p, b).map_err(|e| e.to_string())
+        use std::io::Write as _;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(p)
+            .and_then(|mut f| f.write_all(b))
+            .map_err(|e| e.to_string())
     };
     let run = |args: &[&str]| ui::run_result("openssl", args);
     let result = (|| {

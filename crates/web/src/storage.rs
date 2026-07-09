@@ -81,10 +81,11 @@ fn save(s: &Store) -> std::io::Result<()> {
     )
 }
 
-/// True if `mount` is a current mount point.
+/// True if `mount` is a current mount point. `-M`/`--mountpoint` matches the exact mountpoint only —
+/// `-T`/`--target` would report the filesystem *containing* the path, i.e. true for any existing dir.
 fn is_mounted(mount: &str) -> bool {
     !mount.is_empty()
-        && ui::run_stdout("findmnt", &["-nT", mount])
+        && ui::run_stdout("findmnt", &["-nM", mount])
             .map(|o| !o.trim().is_empty())
             .unwrap_or(false)
 }
@@ -253,6 +254,15 @@ pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
             ));
         }
     }
+    // The remote/mount/options land in the whitespace-delimited fstab line — a space would mount fine
+    // live (argv-passed) but corrupt the entry, so the share silently never comes back after a reboot.
+    for v in [&f.remote, &f.mount, &f.options] {
+        if v.trim().chars().any(char::is_whitespace) {
+            return panel_with(Some(
+                html! { div.banner.error { "The share, mount point, and options can't contain spaces (they're written to /etc/fstab)." } },
+            ));
+        }
+    }
     let kind = if f.kind == "smb" { "smb" } else { "nfs" }.to_string();
     let mount = {
         let m = f.mount.trim();
@@ -291,7 +301,16 @@ pub async fn configure(Form(f): Form<StoreForm>) -> Markup {
 
 pub async fn unmount() -> Markup {
     if let Some(s) = load() {
-        let _ = ui::run_result("umount", &[&s.mount]);
+        // Don't forget the store if the unmount didn't happen (e.g. share busy) — the mount would
+        // linger while Tendril already claims local storage, and the user would see a false success.
+        if is_mounted(&s.mount) {
+            if let Err(e) = ui::run_result("umount", &[&s.mount]) {
+                return panel_with(Some(html! { div.banner.error {
+                    "Couldn't unmount " (s.mount) ": " (e)
+                    " — is something still using it? The store stays connected."
+                } }));
+            }
+        }
         unpersist_fstab();
         let _ = std::fs::remove_file(conf_path());
         let _ = std::fs::remove_file(SMB_CREDS);

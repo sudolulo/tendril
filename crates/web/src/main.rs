@@ -56,6 +56,10 @@ async fn main() {
     // listener and the browser HTTPS server build rustls configs that require it.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // A vGPU-build `.building` marker surviving into a fresh process is stale (the build thread died
+    // with the old process) and would otherwise block builds forever.
+    vgpudrv::clear_stale_build_marker();
+
     // vGPU guest licensing is automatic: if the admin chose the built-in license server and this host's
     // vGPU is active, make sure it's running. No-op in demo, when the admin runs their own license
     // server, or when vGPU isn't active yet (then it starts once the host driver loads). Off-thread

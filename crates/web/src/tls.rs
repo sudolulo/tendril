@@ -6,7 +6,6 @@
 //! unaffected). Cert/key default to `/etc/tendril/tls/{cert,key}.pem`; override with `TENDRIL_TLS_CERT`
 //! / `TENDRIL_TLS_KEY` to use a real certificate.
 
-use std::net::IpAddr;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -59,40 +58,6 @@ fn paths() -> (String, String) {
     )
 }
 
-/// Hostnames/IPs to put in the self-signed cert's SANs so it validates however the box is reached.
-fn sans() -> Vec<String> {
-    let mut v = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    if let Some(h) = crate::ui::run_stdout("hostname", &[]) {
-        let h = h.trim();
-        if !h.is_empty() {
-            v.push(h.to_string());
-        }
-    }
-    if let Some(ips) = crate::ui::run_stdout("hostname", &["-I"]) {
-        for ip in ips.split_whitespace() {
-            v.push(ip.to_string());
-        }
-    }
-    v.sort();
-    v.dedup();
-    v
-}
-
-/// The `subjectAltName` extension value from our SANs, e.g. `DNS:localhost,IP:127.0.0.1,DNS:box`.
-fn san_ext(sans: &[String]) -> String {
-    let parts: Vec<String> = sans
-        .iter()
-        .map(|s| {
-            if s.parse::<IpAddr>().is_ok() {
-                format!("IP:{s}")
-            } else {
-                format!("DNS:{s}")
-            }
-        })
-        .collect();
-    format!("subjectAltName={}", parts.join(","))
-}
-
 /// Ensure a cert+key exist — a user-provided one, or an auto-generated self-signed one (via the
 /// `openssl` CLI) — and return their paths.
 pub fn ensure() -> Result<(String, String), String> {
@@ -120,7 +85,7 @@ pub fn ensure() -> Result<(String, String), String> {
             "-subj",
             "/CN=Tendril",
             "-addext",
-            &san_ext(&sans()),
+            &ui::san_ext(&ui::cert_sans()),
             "-keyout",
             &key_p,
             "-out",

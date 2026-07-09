@@ -217,7 +217,18 @@ pub async fn clear() -> Markup {
         return section(Some(html! { div.banner.warn { "Disabled in the demo." } }));
     }
     let _ = std::fs::remove_file(run_path());
+    // The recorded branch and the guest-driver cache describe the driver that was just removed —
+    // drop them too, or the UI keeps reporting a phantom version and stations get its guest driver.
+    let _ = std::fs::remove_file(branch_path());
+    crate::vgpuguest::clear_cache();
     section(Some(html! { div.banner.ok { "Staged driver removed." } }))
+}
+
+/// Remove a `.building` marker left behind by a restart mid-build. The build thread belongs to this
+/// process, so any marker present at startup is stale — left in place it would wedge the build UI
+/// ("a build is already running") forever. Called once from `main`.
+pub fn clear_stale_build_marker() {
+    let _ = std::fs::remove_file(building_marker());
 }
 
 // ── build ─────────────────────────────────────────────────────────────────────────────────────

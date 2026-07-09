@@ -33,8 +33,10 @@ fn running_pid() -> Option<i32> {
         .trim()
         .parse()
         .ok()?;
-    // Alive? `kill -0` via /proc (no signal sent).
-    if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+    // Alive AND actually our script — a pidfile surviving a reboot can point at a recycled PID, and
+    // Stop would then `kill -TERM` an unrelated process group as root.
+    let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    if cmdline.replace('\0', " ").contains("tendril-pxe.sh") {
         Some(pid)
     } else {
         let _ = std::fs::remove_file(pidfile());
@@ -61,9 +63,16 @@ fn available_isos() -> Vec<String> {
     v
 }
 
-/// Whether a background ISO fetch is in progress (a `.part` file exists).
+/// Whether a background ISO fetch is in progress: a `.part` file exists AND is still growing (fresh
+/// mtime). A `.part` orphaned by a mid-download restart would otherwise hide the fetch button forever.
 fn fetching() -> bool {
-    std::path::Path::new(&format!("{}/{LATEST_ISO}.part", crate::storage::iso_dir())).exists()
+    let p = format!("{}/{LATEST_ISO}.part", crate::storage::iso_dir());
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|age| age.as_secs() < 600)
+        .unwrap_or(false)
 }
 
 /// Reject anything that isn't a plain basename (defends the shell command below from injection/paths).

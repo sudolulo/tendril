@@ -108,6 +108,32 @@ fn non_empty(p: &str) -> Option<String> {
         .map(|_| p.to_string())
 }
 
+/// Sidecar recording which host branch the cached guest installers were fetched for.
+fn cache_branch_path() -> String {
+    format!("{}/branch", dir())
+}
+
+/// Drop cached installers fetched for a different host branch and record `branch` — so a host-driver
+/// upgrade can't hand new stations the previous release's guest drivers (the cache filenames are
+/// version-less, so without this the stale files would be served forever).
+fn sync_cache_branch(branch: &str) {
+    let recorded = std::fs::read_to_string(cache_branch_path()).unwrap_or_default();
+    if recorded.trim() != branch {
+        let _ = std::fs::remove_file(exe_path());
+        let _ = std::fs::remove_file(run_path());
+        let _ = std::fs::create_dir_all(dir());
+        let _ = std::fs::write(cache_branch_path(), branch);
+    }
+}
+
+/// Remove the cached guest installers (and the branch record) — used when the staged host driver is
+/// removed, so the cache can't outlive the branch it was fetched for.
+pub fn clear_cache() {
+    let _ = std::fs::remove_file(exe_path());
+    let _ = std::fs::remove_file(run_path());
+    let _ = std::fs::remove_file(cache_branch_path());
+}
+
 // ── automatic selection: the host branch implies the vGPU release, which implies the guest driver ──
 
 /// Auto-provide the Windows guest `.exe` matching the host driver branch: a cached copy if present, an
@@ -124,21 +150,27 @@ pub fn auto_linux_run() -> Option<String> {
     auto_fetch(&run_path(), "TENDRIL_VGPU_GUEST_RUN_URL", |r| r.run_url)
 }
 
-/// Shared resolution: cached file → env-override URL → curated public-bucket URL for the host branch.
+/// Shared resolution: env-override URL (admin-managed, cached as-is) → branch-matched cache → curated
+/// public-bucket URL for the host branch. The cache is invalidated when the host branch changes.
 fn auto_fetch(dest: &str, env_key: &str, pick: fn(&Release) -> &'static str) -> Option<String> {
-    if let Some(p) = non_empty(dest) {
-        return Some(p);
-    }
-    let _ = std::fs::create_dir_all(dir());
     if let Ok(url) = std::env::var(env_key) {
         let url = url.trim().to_string();
         if !url.is_empty() {
+            if let Some(p) = non_empty(dest) {
+                return Some(p);
+            }
+            let _ = std::fs::create_dir_all(dir());
             return fetch_to(&url, dest).ok().map(|_| dest.to_string());
         }
     }
     let branch = crate::vgpudrv::host_vgpu_branch()?;
-    let url = pick(release_for_branch(&branch)?);
-    fetch_to(url, dest).ok().map(|_| dest.to_string())
+    let release = release_for_branch(&branch)?;
+    sync_cache_branch(&branch);
+    if let Some(p) = non_empty(dest) {
+        return Some(p);
+    }
+    let _ = std::fs::create_dir_all(dir());
+    fetch_to(pick(release), dest).ok().map(|_| dest.to_string())
 }
 
 /// Best-effort background prefetch of BOTH guest drivers matching `branch`, so they're already cached by
@@ -148,9 +180,11 @@ pub fn prefetch(branch: &str) {
     let Some(r) = release_for_branch(branch) else {
         return;
     };
+    let branch = branch.to_string();
     let jobs = [(run_path(), r.run_url), (exe_path(), r.exe_url)];
     std::thread::spawn(move || {
         let _ = std::fs::create_dir_all(dir());
+        sync_cache_branch(&branch);
         for (dest, url) in jobs {
             if non_empty(&dest).is_none() {
                 let _ = fetch_to(url, &dest);

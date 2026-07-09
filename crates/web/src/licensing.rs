@@ -391,11 +391,11 @@ fn builtin_body(c: &DlsConf, active: bool, on: bool) -> Markup {
                         div.sub style="font-weight:600; margin-bottom:6px" { "Manual token (troubleshooting)" }
                         p.sub style="margin:0 0 8px" { "Only if a guest didn't auto-license. Run inside the station after its guest driver is installed." }
                         div.sub { b { "Windows" } " (PowerShell, as admin):" }
-                        (cmd(&format!(
+                        (ui::cmd(&format!(
                             "$d = \"C:\\Program Files\\NVIDIA Corporation\\vGPU Licensing\\ClientConfigToken\"\ncurl.exe --insecure -L \"{token_url}\" -o \"$d\\client_config_token_$(Get-Date -f dd-MM-yy-HH-mm-ss).tok\"\nRestart-Service NVDisplay.ContainerLocalSystem"
                         )))
                         div.sub { b { "Linux" } " (SteamOS / Ubuntu guest):" }
-                        (cmd(&format!(
+                        (ui::cmd(&format!(
                             "sudo curl --insecure -L \"{token_url}\" \\\n  -o /etc/nvidia/ClientConfigToken/client_configuration_token_$(date '+%d-%m-%Y-%H-%M-%S').tok\nsudo sed -i 's/^#*FeatureType=.*/FeatureType=1/' /etc/nvidia/gridd.conf\nsudo systemctl restart nvidia-gridd"
                         )))
                     }
@@ -431,9 +431,4 @@ fn external_body(c: &DlsConf) -> Markup {
             }
         }
     }
-}
-
-/// A shell-command block (matches the vGPU driver guide styling).
-fn cmd(text: &str) -> Markup {
-    html! { pre.mono style="margin:6px 0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12.5px" { (text) } }
 }

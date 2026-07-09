@@ -11,43 +11,47 @@ use tendril_provisioning::{apply, Mode, PassthroughStrategy, ProvisioningStrateg
 
 use crate::ui;
 
-/// Which station (if any) passes through each GPU PCI address.
-pub fn gpu_users() -> HashMap<String, String> {
-    let lv = Libvirt::system();
-    let mut m = HashMap::new();
-    for name in lv.list() {
-        for addr in lv.pci_hostdevs(&name) {
-            m.insert(addr, name.clone());
-        }
-    }
-    m
+/// Every domain's passthrough usage, from **one** libvirt sweep — one `dumpxml` per domain instead of
+/// one per map (the Hardware page needs all three maps; three separate sweeps cost 3·N spawns).
+pub(crate) struct Usage {
+    /// Station passing through each GPU PCI address.
+    pub gpu: HashMap<String, String>,
+    /// Stations holding a vGPU slice on each parent GPU (a GPU can host several). mdev-backed
+    /// stations carry no PCI hostdev, so this is tracked via the mdev UUID.
+    pub mdev: HashMap<String, Vec<String>>,
+    /// Station passing through each USB `(vendor, product)`.
+    pub usb: HashMap<(u16, u16), String>,
 }
 
-/// Which stations hold a vGPU slice on each parent GPU (a GPU can host several). Keyed by parent PCI
-/// address; mdev-backed stations carry no PCI hostdev, so this is tracked via the mdev UUID.
-pub(crate) fn mdev_users() -> HashMap<String, Vec<String>> {
+pub(crate) fn usage() -> Usage {
     let lv = Libvirt::system();
-    let mut m: HashMap<String, Vec<String>> = HashMap::new();
+    let mut u = Usage {
+        gpu: HashMap::new(),
+        mdev: HashMap::new(),
+        usb: HashMap::new(),
+    };
     for name in lv.list() {
-        if let Some(uuid) = crate::stations::station_mdev_uuid(&name) {
+        let Some(xml) = lv.domain_xml(&name) else {
+            continue;
+        };
+        for addr in tendril_orchestrator::parse_pci_hostdevs(&xml) {
+            u.gpu.insert(addr, name.clone());
+        }
+        if let Some(uuid) = crate::stations::mdev_uuid_from_xml(&xml) {
             if let Some(parent) = crate::vgpu::mdev_parent(&uuid) {
-                m.entry(parent).or_default().push(name);
+                u.mdev.entry(parent).or_default().push(name.clone());
             }
         }
-    }
-    m
-}
-
-/// Which station (if any) passes through each USB `(vendor, product)`.
-fn usb_users() -> HashMap<(u16, u16), String> {
-    let lv = Libvirt::system();
-    let mut m = HashMap::new();
-    for name in lv.list() {
-        for id in lv.usb_devices(&name) {
-            m.insert(id, name.clone());
+        for id in tendril_orchestrator::parse_usb_hostdevs(&xml) {
+            u.usb.insert(id, name.clone());
         }
     }
-    m
+    u
+}
+
+/// Which station (if any) passes through each GPU PCI address.
+pub fn gpu_users() -> HashMap<String, String> {
+    usage().gpu
 }
 
 /// A small "in use by <station>" / "free" cell.
@@ -87,8 +91,8 @@ pub async fn page() -> Markup {
 /// The GPU table (swapped in place after a bind). `note` shows the result of the last action.
 fn gpu_fragment(note: Option<Markup>) -> Markup {
     let matrix = detect();
-    let users = gpu_users();
-    let vusers = mdev_users();
+    let u = usage();
+    let (users, vusers) = (u.gpu, u.mdev);
     html! {
         div #gpus {
             @if let Some(n) = note { div.pad style="padding-bottom:0" { (n) } }
@@ -224,11 +228,6 @@ fn vgpu_driver_panel() -> Markup {
     )
 }
 
-/// A shell-command block for the guides.
-fn cmd(text: &str) -> Markup {
-    html! { pre.mono style="margin:6px 0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12.5px" { (text) } }
-}
-
 fn amd_guide(active: bool) -> Markup {
     html! {
         @if active {
@@ -240,9 +239,9 @@ fn amd_guide(active: bool) -> Markup {
                 "Instinct MI-series) — " b { "not" } " consumer Radeon, which has no vGPU."
             }
             div.sub { b { "Recommended — prebuilt, auto-updating:" } " switch to the published image (kernel module always matches, updates + rolls back like the base):" }
-            (cmd("sudo bootc switch git.onetick.ninja/flan/tendril:vgpu-amd && sudo reboot"))
+            (ui::cmd("sudo bootc switch git.onetick.ninja/flan/tendril:vgpu-amd && sudo reboot"))
             div.sub { "Or build it yourself (produces a local-only tag that won't auto-update):" }
-            (cmd("scripts/build-vgpu-variant.sh amd\nsudo bootc switch localhost/tendril:vgpu-amd && sudo reboot"))
+            (ui::cmd("scripts/build-vgpu-variant.sh amd\nsudo bootc switch localhost/tendril:vgpu-amd && sudo reboot"))
         }
     }
 }
@@ -399,7 +398,7 @@ fn usb_panel() -> Markup {
         }
         div.pad {
             p.sub style="margin:0 0 8px" { (devices.len()) " connected device(s):" }
-            @let users = usb_users();
+            @let users = usage().usb;
             @for d in &devices {
                 div style="display:flex; gap:8px; align-items:center; justify-content:space-between" {
                     div.sub.mono { (format!("{:04x}:{:04x}", d.vendor_id, d.product_id)) " — " (d.product.as_deref().unwrap_or("device")) }

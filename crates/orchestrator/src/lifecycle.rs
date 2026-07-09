@@ -181,28 +181,32 @@ impl Libvirt {
         Self::ok(result?).map(|_| ())
     }
 
+    /// A domain's persistent XML (`dumpxml --inactive`), or `None` if it doesn't exist. Callers that
+    /// want several facts about one domain should fetch this once and use the `parse_*` helpers,
+    /// rather than paying one `virsh` spawn per fact.
+    pub fn domain_xml(&self, name: &str) -> Option<String> {
+        match self.run(&["dumpxml", "--inactive", name]) {
+            Ok(out) if out.status.success() => {
+                Some(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
+            _ => None,
+        }
+    }
+
     /// The USB devices currently passed through to a domain, as `(vendor_id, product_id)` — parsed
     /// from its persistent XML.
     pub fn usb_devices(&self, name: &str) -> Vec<(u16, u16)> {
-        let Ok(out) = self.run(&["dumpxml", "--inactive", name]) else {
-            return Vec::new();
-        };
-        if !out.status.success() {
-            return Vec::new();
-        }
-        parse_usb_hostdevs(&String::from_utf8_lossy(&out.stdout))
+        self.domain_xml(name)
+            .map(|xml| parse_usb_hostdevs(&xml))
+            .unwrap_or_default()
     }
 
     /// The PCI addresses (e.g. `0000:03:00.0`) passed through to a domain, from its persistent XML.
     /// A station with none has no GPU/PCI passthrough.
     pub fn pci_hostdevs(&self, name: &str) -> Vec<String> {
-        let Ok(out) = self.run(&["dumpxml", "--inactive", name]) else {
-            return Vec::new();
-        };
-        if !out.status.success() {
-            return Vec::new();
-        }
-        parse_pci_hostdevs(&String::from_utf8_lossy(&out.stdout))
+        self.domain_xml(name)
+            .map(|xml| parse_pci_hostdevs(&xml))
+            .unwrap_or_default()
     }
 
     /// Names of all defined domains (running or not); empty if virsh is unreachable.
@@ -373,7 +377,7 @@ fn parse_snapshot_list(out: &str) -> Vec<Snapshot> {
 
 /// Extract the `(vendor_id, product_id)` of every `type='usb'` `<hostdev>` in a domain's XML.
 /// A tiny scan rather than a full XML parse — libvirt's output is stable and single-quoted.
-fn parse_usb_hostdevs(xml: &str) -> Vec<(u16, u16)> {
+pub fn parse_usb_hostdevs(xml: &str) -> Vec<(u16, u16)> {
     let mut out = Vec::new();
     for block in xml.split("<hostdev").skip(1) {
         let block = block.split("</hostdev>").next().unwrap_or(block);
@@ -389,7 +393,7 @@ fn parse_usb_hostdevs(xml: &str) -> Vec<(u16, u16)> {
 
 /// Extract the PCI address (`domain:bus:slot.function`) of every `type='pci'` `<hostdev>`, reading
 /// the `<source>` address (not the guest-side one). Same lightweight scan as the USB parser.
-fn parse_pci_hostdevs(xml: &str) -> Vec<String> {
+pub fn parse_pci_hostdevs(xml: &str) -> Vec<String> {
     let mut out = Vec::new();
     for block in xml.split("<hostdev").skip(1) {
         let block = block.split("</hostdev>").next().unwrap_or(block);

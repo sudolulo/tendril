@@ -124,7 +124,7 @@ pub fn panel() -> Markup {
                                 td.sub { (s.devices.iter().map(|(v,p)| friendly(*v,*p)).collect::<Vec<_>>().join(", ")) }
                                 td.right {
                                     button.btn.sm.danger
-                                        hx-post=(format!("/seats/delete?name={}", urlencode(&s.name)))
+                                        hx-post=(format!("/seats/delete?name={}", crate::ui::urlencode(&s.name)))
                                         hx-target="#seats" hx-swap="outerHTML"
                                         hx-confirm=(format!("Delete seat '{}'?", s.name)) { "Delete" }
                                 }
@@ -187,14 +187,4 @@ pub async fn delete(Query(q): Query<NameQuery>) -> Markup {
     seats.retain(|s| s.name != q.name);
     let _ = save(&seats);
     panel()
-}
-
-/// Minimal percent-encoding for a seat name placed in a query string.
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }

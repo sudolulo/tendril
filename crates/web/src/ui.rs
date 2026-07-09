@@ -109,6 +109,55 @@ pub fn panel(title: &str, meta: Option<&str>, body: Markup) -> Markup {
     }
 }
 
+/// A shell-command block for the setup guides.
+pub fn cmd(text: &str) -> Markup {
+    html! { pre.mono style="margin:6px 0; padding:8px 10px; background:var(--bg2,#0002); border-radius:6px; overflow-x:auto; font-size:12.5px" { (text) } }
+}
+
+/// Minimal percent-encoding for a name placed in a query string.
+pub fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Hostnames/IPs to put in a locally-generated cert's SANs so it validates however the box is reached.
+pub fn cert_sans() -> Vec<String> {
+    let mut v = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    if let Some(h) = run_stdout("hostname", &[]) {
+        let h = h.trim();
+        if !h.is_empty() {
+            v.push(h.to_string());
+        }
+    }
+    if let Some(ips) = run_stdout("hostname", &["-I"]) {
+        for ip in ips.split_whitespace() {
+            v.push(ip.to_string());
+        }
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// The `subjectAltName` extension value for [`cert_sans`], e.g. `DNS:localhost,IP:127.0.0.1,DNS:box`.
+pub fn san_ext(sans: &[String]) -> String {
+    let parts: Vec<String> = sans
+        .iter()
+        .map(|s| {
+            if s.parse::<std::net::IpAddr>().is_ok() {
+                format!("IP:{s}")
+            } else {
+                format!("DNS:{s}")
+            }
+        })
+        .collect();
+    format!("subjectAltName={}", parts.join(","))
+}
+
 /// A colored run-state pill.
 pub fn state_pill(s: DomainState) -> Markup {
     html! { span class=(format!("pill {}", state_class(s))) { span.led {} (state_label(s)) } }

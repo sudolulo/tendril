@@ -447,7 +447,7 @@ fn restore(name: &str, b: &Ipv4Cfg) -> Result<(), String> {
 /// The "on trial" fragment: a countdown and Keep / Revert-now buttons. The countdown is cosmetic;
 /// the authoritative revert is the server-side timer armed in `apply`.
 fn testing_fragment(name: &str) -> Markup {
-    let enc = urlencode(name);
+    let enc = crate::ui::urlencode(name);
     html! {
         div #netconfig {
             div.banner.warn {
@@ -501,14 +501,4 @@ pub async fn revert(Query(q): Query<NameQuery>) -> Markup {
         None => html! { div.banner.warn { "Nothing to revert for " (q.name) "." } },
     };
     config_panel_note(Some(note))
-}
-
-/// Minimal percent-encoding for a connection name placed in a query string.
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }

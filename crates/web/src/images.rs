@@ -263,7 +263,7 @@ fn integrity_cell(name: &str) -> Markup {
     let poll = matches!(st, Integrity::Verifying);
     html! {
         span id=(id)
-            hx-get=[poll.then(|| format!("/images/verifystatus?name={}", urlencode(name)))]
+            hx-get=[poll.then(|| format!("/images/verifystatus?name={}", crate::ui::urlencode(name)))]
             hx-trigger=[poll.then_some("every 2s")] hx-swap="outerHTML" {
             @match &st {
                 Integrity::Verifying => span.sub { "verifying…" },
@@ -273,7 +273,7 @@ fn integrity_cell(name: &str) -> Markup {
             }
             @if !poll {
                 " "
-                button.btn.sm hx-post=(format!("/images/verify?name={}", urlencode(name)))
+                button.btn.sm hx-post=(format!("/images/verify?name={}", crate::ui::urlencode(name)))
                     hx-target=(format!("#{id}")) hx-swap="outerHTML" { "verify" }
             }
         }
@@ -456,7 +456,7 @@ pub async fn push_form(Query(q): Query<PushQuery>) -> Markup {
                 } @else {
                     p { "Push " strong { (image) } " to stations — each selected station is reset to a fresh copy-on-write overlay of it (instant, no image transfer)." }
                     p.sub style="color:var(--crit)" { "This wipes each selected station's current disk (forced off, re-cloned, restarted). Push images matching the station's OS; remote nodes must have the image (e.g. on the shared store)." }
-                    form hx-post=(format!("/images/push?name={}", urlencode(&image))) hx-target="#images" hx-swap="outerHTML"
+                    form hx-post=(format!("/images/push?name={}", crate::ui::urlencode(&image))) hx-target="#images" hx-swap="outerHTML"
                         hx-confirm="Reset the selected stations to this golden image? Their current disks are wiped." {
                         div.check { input type="checkbox" id="push-all" onclick="var c=this.checked;document.querySelectorAll('.push-st:not(:disabled)').forEach(function(e){e.checked=c});"; label for="push-all" { strong { "Select all" } } }
                         @for n in &nodes {
@@ -554,7 +554,7 @@ pub(crate) fn pull_from(name: &str, from_url: &str, token: &str) -> Result<(), S
     let src = format!(
         "{}/api/image/{}",
         from_url.trim_end_matches('/'),
-        urlencode(&clean)
+        crate::ui::urlencode(&clean)
     );
     // mTLS (our client cert + CA) when this node has a federation identity; else `-sk`. The caller
     // passes the source's mTLS endpoint to match (see `distribute`).
@@ -673,20 +673,20 @@ fn panel_with(note: Option<Markup>) -> Markup {
                                     td.right.num { (sz) }
                                     td.right {
                                         button.btn.sm
-                                            hx-get=(format!("/images/push?name={}", urlencode(n)))
+                                            hx-get=(format!("/images/push?name={}", crate::ui::urlencode(n)))
                                             hx-target="#images" hx-swap="outerHTML"
                                             title="Reset stations across the fleet to a fresh copy of this image (each station's persistent data volume is kept)" { "Push…" }
                                         " "
                                         @if crate::federation::enabled() {
                                             button.btn.sm
-                                                hx-post=(format!("/images/distribute?name={}", urlencode(n)))
+                                                hx-post=(format!("/images/distribute?name={}", crate::ui::urlencode(n)))
                                                 hx-target="#images" hx-swap="outerHTML"
                                                 hx-confirm=(format!("Copy '{n}' to every fleet node's image store? (Nodes that already have it — e.g. via a shared store — are skipped. Large images transfer once per node.)"))
                                                 title="Copy this image to every node's store so it can be used fleet-wide" { "Distribute…" }
                                             " "
                                         }
                                         button.btn.sm.danger
-                                            hx-post=(format!("/images/delete?name={}", urlencode(n)))
+                                            hx-post=(format!("/images/delete?name={}", crate::ui::urlencode(n)))
                                             hx-target="#images" hx-swap="outerHTML"
                                             hx-confirm=(format!("Delete image '{n}'? Stations cloned from it (overlays) depend on it and will break.")) { "Delete" }
                                     }
@@ -708,14 +708,4 @@ fn panel_with(note: Option<Markup>) -> Markup {
             }
         }
     }
-}
-
-/// Minimal percent-encoding for an image name in a query string.
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }

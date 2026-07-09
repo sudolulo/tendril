@@ -296,7 +296,11 @@ pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
 /// The UUID of a station's attached mediated device (vGPU), if it has one, read from its domain XML.
 pub(crate) fn station_mdev_uuid(name: &str) -> Option<String> {
     let xml = ui::run_stdout("virsh", &["-c", "qemu:///system", "dumpxml", name])?;
-    // Find `<address uuid='...'/>` inside the mdev hostdev.
+    mdev_uuid_from_xml(&xml)
+}
+
+/// Find `<address uuid='...'/>` inside the mdev hostdev of an already-fetched domain XML.
+pub(crate) fn mdev_uuid_from_xml(xml: &str) -> Option<String> {
     let after = xml.split("type='mdev'").nth(1)?;
     let start = after.find("uuid='")? + "uuid='".len();
     let end = after[start..].find('\'')? + start;
@@ -653,8 +657,8 @@ fn create_form(error: Option<&str>) -> Markup {
     // Whole-GPU passthrough and vGPU on the same physical GPU are mutually exclusive at the driver
     // level, so don't offer a GPU both ways: hide whole-GPU for a card already handing out vGPU
     // slices, and hide vGPU profiles for a card already passed through whole.
-    let whole_used = crate::hardware::gpu_users();
-    let vgpu_used = crate::hardware::mdev_users();
+    let u = crate::hardware::usage();
+    let (whole_used, vgpu_used) = (u.gpu, u.mdev);
     ui::page(
         "stations",
         "New station",

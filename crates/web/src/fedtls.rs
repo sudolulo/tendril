@@ -81,39 +81,6 @@ pub struct Identity {
     pub key: String,
 }
 
-/// Hostnames/IPs for this node's cert SANs (so peers can verify it however they reach it).
-fn sans() -> Vec<String> {
-    let mut v = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    if let Some(h) = ui::run_stdout("hostname", &[]) {
-        let h = h.trim();
-        if !h.is_empty() {
-            v.push(h.to_string());
-        }
-    }
-    if let Some(ips) = ui::run_stdout("hostname", &["-I"]) {
-        for ip in ips.split_whitespace() {
-            v.push(ip.to_string());
-        }
-    }
-    v.sort();
-    v.dedup();
-    v
-}
-
-fn san_ext(sans: &[String]) -> String {
-    let parts: Vec<String> = sans
-        .iter()
-        .map(|s| {
-            if s.parse::<std::net::IpAddr>().is_ok() {
-                format!("IP:{s}")
-            } else {
-                format!("DNS:{s}")
-            }
-        })
-        .collect();
-    format!("subjectAltName={}", parts.join(","))
-}
-
 #[cfg(unix)]
 fn chmod_600(path: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -273,7 +240,7 @@ fn build_identity() -> Option<Identity> {
         // Extensions: SANs + both server/client EKU (this cert serves and calls).
         let extfile = format!(
             "{}\nextendedKeyUsage=serverAuth,clientAuth\n",
-            san_ext(&sans())
+            ui::san_ext(&ui::cert_sans())
         );
         std::fs::write(&ext, extfile).ok()?;
         // Sign with the CA.

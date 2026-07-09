@@ -33,7 +33,7 @@ guaranteed anti-cheat bypass, and enterprise HA.
 | D2 | VM engine | **Direct libvirt/QEMU (own orchestrator)** | Passthrough/vGPU/CPU-pinning/Secure-Boot/fingerprint overlays need low-level domain-XML control. Incus's abstraction ceiling caused TrueNAS to revert to libvirt (missing Secure Boot, VNC). Our needs are deeper than theirs. |
 | D3 | Splitting strategy | **Passthrough-first, vGPU later** | Consumer GPUs don't officially support vGPU. Ship the reliable path; add vGPU as a detected bonus. |
 | D4 | Display model | **Physical monitors first, streaming (Sunshine/Moonlight) later** | Lowest latency for local multi-seat now; streaming backend designed as a swappable module for later + for clustering. |
-| D5 | Multi-machine | **Clustering as a later phase, controller/agent model, self-owned** | Management + GPU-aware scheduling across boxes (NOT live migration). Build on our own control plane; reconsider borrowing only for cluster membership. |
+| D5 | Multi-machine | **Federation, not clustering** (superseded 2026-07-09; was: controller/agent clustering as a later phase) | Every node stays a fully self-managing control plane; peers aggregate over the token/mTLS JSON API (see docs/FEDERATION.md) — no consensus, no elected controller, no fencing. Placement is GPU-aware at create time; cold re-home covers node loss. NOT live migration. |
 | D6 | Guests | **Windows + SteamOS** | The two headline gaming targets. SteamOS via a VM-friendly image (HoloISO/Bazzite-style). |
 | D7 | Anti-cheat / "native hardware" | **Optional per-VM compatibility overlay, off by default, gated with warnings** | Generic VM-fingerprint reducer for picky software; honest ToS/ban warnings; not marketed as a bypass. |
 | D8 | Distribution | **Open source, for gamers** | Drives the reliability + reproducible-update priorities above. |
@@ -78,6 +78,11 @@ Two planes on disk:
 ---
 
 ## 4. Controller / agent architecture (the orchestrator)
+
+> **Superseded (2026-07-09):** multi-machine went the *federation* route instead (docs/FEDERATION.md)
+> — independent nodes aggregating over the web layer's JSON API, with GPU-aware placement and cold
+> re-home. No clustered controller/agent split is planned; the `tendrild`/`Role` scaffold has been
+> removed. The diagram below is kept for the record of what was considered.
 
 Single binary, two roles. Ship single-node now; the same design scales to a cluster with no rewrite.
 
@@ -197,7 +202,7 @@ auto-rollback on failure. VM data plane untouched throughout.
 |---|---|
 | Host OS | Fedora bootc (Containerfile-defined, CI-built images) |
 | Hypervisor | KVM + QEMU + libvirt + VFIO (mainline) |
-| Capability engine / provisioning / orchestrator | Rust (single binary, controller/agent roles) |
+| Capability engine / provisioning / orchestrator | Rust (per-node binaries; multi-node via web-layer federation) |
 | State store | SQLite (single-node) → raft/embedded consensus (cluster) |
 | API | REST/gRPC over mTLS |
 | Web UI | (TBD framework) served by controller |

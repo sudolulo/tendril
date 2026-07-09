@@ -11,10 +11,6 @@ license.workspace = true
 name = "tendril_orchestrator"
 path = "src/lib.rs"
 
-[[bin]]
-name = "tendrild"
-path = "src/main.rs"
-
 [dependencies]
 tendril-capability-engine = { workspace = true }
 tendril-provisioning = { workspace = true }

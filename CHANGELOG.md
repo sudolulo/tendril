@@ -65,6 +65,9 @@ and cleanups (not security), then a second pass over the fixes themselves. No fe
   responses instead of reporting success with unprotected branches.
 
 ### Removed
+- **The `tendrild`/`Role` clustering scaffold** — multi-machine is served by federation (decision
+  2026-07-09): independent self-managing nodes aggregating over the token/mTLS API, not an elected
+  controller with per-node agents. `docs/PLAN.md` D5/§4 updated to record the supersession.
 - **`tendril-domain`** — a strict subset of `tendril-vm`'s dry-run mode. `tendril-vm` (no flags)
   renders the same domain XML; its dry run also adopts `tendril-domain`'s graceful no-GPU handling
   (informational message, exit 0), while `--define` still fails loudly without a GPU.

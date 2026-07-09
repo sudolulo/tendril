@@ -180,6 +180,8 @@ async fn main() {
         .route("/system/logs", get(pages::logs))
         .route("/system/logs/download", get(pages::logs_download))
         .route("/system/password", post(auth::change_password))
+        .route("/system/viewer", post(auth::set_viewer))
+        .route("/system/audit/download", get(auth::audit_download))
         .route("/system/tls/upload", post(tls::upload))
         .route("/system/tls/regenerate", post(tls::regenerate))
         // auth

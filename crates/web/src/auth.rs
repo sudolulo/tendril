@@ -26,8 +26,25 @@ use serde::Deserialize;
 use crate::ui;
 
 const SESSION_TTL: Duration = Duration::from_secs(24 * 3600);
-static SESSIONS: LazyLock<Mutex<HashMap<String, Instant>>> =
+static SESSIONS: LazyLock<Mutex<HashMap<String, (Instant, Role)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// A signed-in principal's access level. Admin can do everything; Viewer is read-only (mutating
+/// requests are refused, like the public demo) — a way to hand out visibility without the admin secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Admin,
+    Viewer,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Viewer => "viewer",
+        }
+    }
+}
 
 // ── password store ──────────────────────────────────────────────────────────────────────────
 
@@ -100,6 +117,121 @@ fn verify_password(pw: &str) -> bool {
         .is_ok()
 }
 
+// ── viewer (read-only) credential ──────────────────────────────────────────────────────────────
+
+fn viewer_file() -> String {
+    format!("{}.viewer", auth_file())
+}
+
+/// Whether a read-only viewer password is set.
+pub fn viewer_configured() -> bool {
+    std::fs::read_to_string(viewer_file())
+        .ok()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Hash and store the read-only viewer password (file mode 0600).
+pub fn set_viewer_password(pw: &str) -> std::io::Result<()> {
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default()
+        .hash_password(pw.as_bytes(), &salt)
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .to_string();
+    let file = viewer_file();
+    if let Some(dir) = std::path::Path::new(&file).parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&file, hash)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Remove the viewer password (disables read-only sign-in).
+pub fn clear_viewer_password() {
+    let _ = std::fs::remove_file(viewer_file());
+}
+
+fn verify_viewer(pw: &str) -> bool {
+    let Ok(stored) = std::fs::read_to_string(viewer_file()) else {
+        return false;
+    };
+    let stored = stored.trim();
+    if stored.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = PasswordHash::new(stored) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(pw.as_bytes(), &parsed)
+        .is_ok()
+}
+
+// ── audit log ────────────────────────────────────────────────────────────────────────────────
+
+fn audit_path() -> String {
+    std::env::var("TENDRIL_AUDIT_FILE").unwrap_or_else(|_| "/var/lib/tendril/audit.log".to_string())
+}
+
+/// Append an audit record — `timestamp \t actor \t action \t status`. Best-effort (never fails a
+/// request).
+pub fn audit(actor: &str, action: &str, status: u16) {
+    use std::io::Write as _;
+    let line = format!("{}\t{}\t{}\t{}\n", now_utc_string(), actor, action, status);
+    let path = audit_path();
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// The most recent `n` audit lines, newest first.
+pub fn audit_tail(n: usize) -> Vec<String> {
+    let Ok(s) = std::fs::read_to_string(audit_path()) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<String> = s
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(String::from)
+        .collect();
+    lines.reverse();
+    lines.truncate(n);
+    lines
+}
+
+/// Format the current time as `YYYY-MM-DD HH:MM:SS UTC` without a date crate (civil-from-days).
+fn now_utc_string() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rem) = (secs / 86400, secs % 86400);
+    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02} UTC")
+}
+
 // ── sessions ────────────────────────────────────────────────────────────────────────────────
 
 fn new_token() -> String {
@@ -113,24 +245,25 @@ fn new_token() -> String {
     s
 }
 
-fn create_session() -> String {
+fn create_session(role: Role) -> String {
     let token = new_token();
     SESSIONS
         .lock()
         .unwrap()
-        .insert(token.clone(), Instant::now() + SESSION_TTL);
+        .insert(token.clone(), (Instant::now() + SESSION_TTL, role));
     token
 }
 
-fn valid_session(token: &str) -> bool {
+/// The role for a session token if it's valid + unexpired, else `None` (expired tokens are evicted).
+fn session_role(token: &str) -> Option<Role> {
     let mut s = SESSIONS.lock().unwrap();
     match s.get(token) {
-        Some(&exp) if exp > Instant::now() => true,
+        Some(&(exp, role)) if exp > Instant::now() => Some(role),
         Some(_) => {
             s.remove(token);
-            false
+            None
         }
-        None => false,
+        None => None,
     }
 }
 
@@ -146,20 +279,35 @@ fn cookie_token(req: &Request) -> Option<String> {
         .find_map(|c| c.strip_prefix("tendril_session=").map(str::to_string))
 }
 
-fn authenticated(req: &Request) -> bool {
-    // Reverse-proxy trust: a configured header, present and non-empty, means the proxy authenticated.
+/// The role a request authenticates as, or `None`. A trusted reverse-proxy header authenticates as
+/// Admin (the proxy owns access control); otherwise the session cookie carries the role.
+fn role_of(req: &Request) -> Option<Role> {
     if let Ok(name) = std::env::var("TENDRIL_TRUST_PROXY_HEADER") {
         if !name.is_empty() {
             if let Some(v) = req.headers().get(&name) {
                 if v.to_str().map(|s| !s.is_empty()).unwrap_or(false) {
-                    return true;
+                    return Some(Role::Admin);
                 }
             }
         }
     }
-    cookie_token(req)
-        .map(|t| valid_session(&t))
-        .unwrap_or(false)
+    cookie_token(req).and_then(|t| session_role(&t))
+}
+
+/// The actor label for the audit log (proxy-set user if present, else the role name).
+fn actor_of(req: &Request) -> String {
+    if let Ok(name) = std::env::var("TENDRIL_TRUST_PROXY_HEADER") {
+        if !name.is_empty() {
+            if let Some(u) = req.headers().get(&name).and_then(|v| v.to_str().ok()) {
+                if !u.is_empty() {
+                    return u.to_string();
+                }
+            }
+        }
+    }
+    role_of(req)
+        .map(|r| r.as_str().to_string())
+        .unwrap_or_else(|| "anon".to_string())
 }
 
 // ── middleware ──────────────────────────────────────────────────────────────────────────────
@@ -202,15 +350,34 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
             Redirect::to("/setup").into_response()
         };
     }
-    if open || authenticated(&req) {
-        return next.run(req).await;
+    let role = role_of(&req);
+    if !open && role.is_none() {
+        // Not authenticated: first run has no password → set one; otherwise sign in.
+        return if !is_configured() {
+            Redirect::to("/setup").into_response()
+        } else {
+            Redirect::to("/login").into_response()
+        };
     }
-    // Not authenticated: first run has no password → set one; otherwise sign in.
-    if !is_configured() {
-        Redirect::to("/setup").into_response()
-    } else {
-        Redirect::to("/login").into_response()
+    let is_post = req.method() == axum::http::Method::POST;
+    // Viewer is read-only: refuse mutations with a friendly banner (same shape as the demo's).
+    if !open && is_post && role == Some(Role::Viewer) {
+        let banner = r#"<div class="banner warn" style="margin:0">👁 Read-only access — sign in as an admin to make changes.</div>"#;
+        return (
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            banner,
+        )
+            .into_response();
     }
+    // Audit admin mutations (after they run, with the outcome).
+    if !open && is_post {
+        let actor = actor_of(&req);
+        let action = format!("POST {path}");
+        let resp = next.run(req).await;
+        audit(&actor, &action, resp.status().as_u16());
+        return resp;
+    }
+    next.run(req).await
 }
 
 // ── handlers ────────────────────────────────────────────────────────────────────────────────
@@ -240,8 +407,16 @@ pub async fn login_page() -> Markup {
 }
 
 pub async fn login(Form(f): Form<LoginForm>) -> Response {
-    if verify_password(&f.password) {
-        let token = create_session();
+    let role = if verify_password(&f.password) {
+        Some(Role::Admin)
+    } else if verify_viewer(&f.password) {
+        Some(Role::Viewer)
+    } else {
+        None
+    };
+    if let Some(role) = role {
+        let token = create_session(role);
+        audit(role.as_str(), "login", 200);
         (
             [(
                 SET_COOKIE,
@@ -296,7 +471,7 @@ pub async fn setup(Form(f): Form<SetupForm>) -> Response {
     }
     match set_password(&f.password) {
         Ok(()) => {
-            let token = create_session();
+            let token = create_session(Role::Admin);
             (
                 [(
                     SET_COOKIE,
@@ -380,6 +555,111 @@ pub fn password_panel() -> Markup {
                 div.field.wide { div.btnrow { button.btn.primary type="submit" { "Change password" } } }
             }
             div #pw-result style="margin-top:10px" {}
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ViewerForm {
+    #[serde(default)]
+    password: String,
+    /// "clear" to disable read-only login; anything else = set the password.
+    #[serde(default)]
+    action: String,
+}
+
+/// Set or clear the read-only viewer password (admin action; the middleware already blocks viewers).
+pub async fn set_viewer(Form(f): Form<ViewerForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn style="margin:0" { "Disabled in the live demo." } };
+    }
+    if f.action == "clear" {
+        clear_viewer_password();
+        audit("admin", "viewer-disable", 200);
+        return access_body(Some(
+            html! { div.banner.ok style="margin:0" { "Read-only access disabled." } },
+        ));
+    }
+    if f.password.chars().count() < 6 {
+        return access_body(Some(
+            html! { div.banner.error style="margin:0" { "Use at least 6 characters." } },
+        ));
+    }
+    match set_viewer_password(&f.password) {
+        Ok(()) => {
+            audit("admin", "viewer-set", 200);
+            access_body(Some(
+                html! { div.banner.ok style="margin:0" { "Read-only viewer password set." } },
+            ))
+        }
+        Err(e) => access_body(Some(
+            html! { div.banner.error style="margin:0" { "Couldn't save: " (e) } },
+        )),
+    }
+}
+
+/// Download the full audit log as text.
+pub async fn audit_download() -> Response {
+    let body = std::fs::read_to_string(audit_path()).unwrap_or_default();
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=tendril-audit.log",
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// The "Access & audit" panel for the System page: read-only viewer credential + a log of changes.
+pub fn access_panel() -> Markup {
+    crate::ui::panel(
+        "Access & audit",
+        Some("read-only viewer login + a log of changes"),
+        access_body(None),
+    )
+}
+
+fn access_body(banner: Option<Markup>) -> Markup {
+    let has_viewer = viewer_configured();
+    let lines = audit_tail(200);
+    html! {
+        div.pad #access-panel {
+            @if let Some(b) = banner { (b) }
+            div.sub style="font-weight:600; margin:0 0 4px" { "Read-only viewer" }
+            p.sub style="margin:0 0 8px" {
+                "An optional second password granting " b { "read-only" } " access — see everything, change "
+                "nothing. Hand it out instead of the admin password."
+            }
+            form hx-post="/system/viewer" hx-target="#access-panel" hx-swap="outerHTML"
+                style="display:flex; gap:8px; align-items:center; flex-wrap:wrap" {
+                input type="password" name="password"
+                    placeholder=(if has_viewer { "set a new viewer password" } else { "viewer password" })
+                    style="width:16em";
+                button.btn.primary type="submit" { (if has_viewer { "Update" } else { "Enable read-only login" }) }
+                @if has_viewer {
+                    button.btn.sm.danger type="submit" name="action" value="clear"
+                        hx-confirm="Disable read-only viewer login?" { "Disable" }
+                    span.pill.running { span.led {} "on" }
+                }
+            }
+            div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
+                div.sub style="font-weight:600; margin-bottom:6px" { "Audit log" }
+                @if lines.is_empty() {
+                    p.sub style="margin:0" { "No recorded actions yet." }
+                } @else {
+                    p.sub style="margin:0 0 6px" { "Recent changes, newest first. " a href="/system/audit/download" { "Download full log" } }
+                    pre.mono style="margin:0; max-height:280px; overflow:auto; font-size:12px; white-space:pre-wrap" {
+                        @for l in &lines { (l) "\n" }
+                    }
+                }
+            }
         }
     }
 }

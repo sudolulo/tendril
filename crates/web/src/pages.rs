@@ -466,6 +466,7 @@ pub async fn system() -> Markup {
                 }
             }))
             (ui::panel("Admin password", None, crate::auth::password_panel()))
+            (crate::auth::access_panel())
             @if let Some(s) = status {
                 (ui::panel("OS image", None, html! {
                     div.pad {

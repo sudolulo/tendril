@@ -1,8 +1,14 @@
 # Tendril — Design & Build Plan
 
 > An open-source, Fedora-bootc–based operating system that turns a
-> single multi-GPU machine (or a cluster of them) into multiple plug-and-play gaming stations,
-> each running Windows or SteamOS in a GPU-passthrough VM.
+> single multi-GPU machine (or a federated fleet of them) into multiple plug-and-play gaming
+> stations, each running Windows or SteamOS in a GPU-passthrough VM.
+
+> **This is the original design document** (2026-07-04), kept for the record of what was decided
+> and why. Most of it has shipped — see the [README](../README.md) for the current state — and a
+> few decisions were superseded along the way; those sections carry explicit supersession notes
+> (most notably D5/§4: multi-machine shipped as **federation**, not controller/agent clustering —
+> rationale in [FEDERATION.md](FEDERATION.md)).
 
 ---
 

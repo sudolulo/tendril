@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Documentation overhaul: the README now describes the product by capability instead of by release
+  number (and covers everything through 0.23); INSTALL is web-UI-first with the CLI path as the
+  alternative; FEDERATION is a feature doc with correct shipped statuses (placement/remote-provision
+  had shipped but was still marked "Next") plus the peer-control/cross-node-console/distribute/PXE
+  surface; VGPU reflects the fully automatic guest driver + on-box variant build and the panels'
+  move to the System page; PLAN carries an explicit historical-document banner.
 - Image-building CI jobs (release, publish-edge) fail fast with a clear message when the runner
   has under 10 GiB free, instead of dying 10+ minutes in with a cryptic xorrisofs/osbuild error
   (how the first 0.22.0/0.23.0 release runs failed).

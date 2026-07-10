@@ -1,10 +1,20 @@
-# Federation plan
+# Federation
 
-Status: **phases A–C shipped; further autonomy deferred.** Tendril's multi-machine story is
-**federation**: one web UI over a fleet of otherwise-independent nodes, with GPU-aware placement,
-human-confirmed recovery, and
-verified golden images shared between machines. There is deliberately **no distributed control plane** —
-no shared consensus, quorum, leader election, or fencing.
+Tendril's multi-machine story is **federation**: manage a fleet of otherwise-independent nodes from
+any one of them — GPU-aware placement, control of any node's stations from any UI (including the
+cross-node console), human-confirmed recovery, verified golden images shared between machines, and
+PXE provisioning for empty hardware. There is deliberately **no distributed control plane** — no
+shared consensus, quorum, leader election, or fencing.
+
+Status: **shipped end-to-end in code, 🧪 awaiting validation on a real multi-node rig**
+([HARDWARE-TESTING.md](HARDWARE-TESTING.md) T11–T12); further autonomy is deferred by design (see
+the end of this doc).
+
+**Quickest start:** on an existing node, **Fleet → Add a machine → Generate join code**; paste it
+into **Fleet → Join a fleet** on the new node. That's the whole flow — trust (mTLS CA), the shared
+token, and mutual membership ride the code. Nodes on the same LAN also show up automatically under
+**Nearby on the LAN** (mDNS), and nodes mounting the same NFS/SMB store auto-federate with no code
+at all.
 
 ## Why federation (and not a real cluster)
 
@@ -100,10 +110,16 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 
 ## Phased build order
 
+Beyond the phases below, federation now also covers: **peer station control** (start/stop/delete any
+node's stations from any node's Stations page), the **cross-node console** (a peer station's live
+noVNC proxied over the fleet's mTLS channel), **golden-image distribute** (push an image to every
+node's store, once per node), and **PXE room provisioning** (Fleet → Provision a room — netboot
+bare-metal machines into the unattended installer).
+
 | Phase | Delivers | Status |
 |---|---|---|
 | **A — Fleet view** | Aggregator management view over the per-node APIs (stations, GPUs, health), with reachable/unreachable per node. Read-only. | **✅ done** |
-| **B — Placement + remote provision** | Stateless GPU-aware placement: pick a compatible node and call its create endpoint. Station registry on the shared store. | Next |
+| **B — Placement + remote provision** | Stateless GPU-aware placement: pick a compatible node and call its create endpoint. Station registry on the shared store. | **✅ done** |
 | **C — Integrity + assisted re-home** | Golden-image SHA-256 record + verify (**✅ done**); node-down detection (**✅** via the fleet view); a shared **station registry** (a JSON record per station on the store, written on provision, dropped on delete) so a down node's stations are known; and **one-click human-confirmed cold re-home** of an image-backed station onto a healthy node. | **✅ done** |
 
 ### Configuration (Phase A)
@@ -177,12 +193,14 @@ health, or go all-in on **Nomad** (accepting its BSL license + a custom libvirt 
 
 ## Open questions / risks
 
-- **Shared store is a dependency** (already is, for images). Unreachable → management pauses; running
-  stations are unaffected.
-- **Registry writes** are low-contention config, but still need a stale-lock-safe write (bounded lease),
-  not a hand-rolled forever-lock.
-- **Auth across nodes** — the aggregator needs credentials/tokens to call each node's API.
+- **Shared store is a dependency** for auto-membership and the registry (already is, for images).
+  Unreachable → fleet management pauses; running stations are unaffected. Join-code fleets work
+  store-lessly.
 - **Shared-disk re-home** must enforce the power-off/confirm-dead step; local-disk stations (default)
   are unaffected.
+
+(Resolved since this was written: cross-node auth is the shared federation token + per-node mTLS
+certs, as described above; the registry is one small JSON file per station — last-writer-wins, no
+locking needed.)
 
 See the broader roadmap in [PLAN.md](PLAN.md) and the vGPU capability model in [VGPU.md](VGPU.md).

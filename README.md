@@ -14,81 +14,98 @@ on-screen console; it handles IOMMU, VFIO, driver binding, and VM setup so you d
 
 One powerful box with several GPUs → several independent gaming setups at once. Two people gaming on
 one tower, a handful of Steam Machines driven from a closet server, a Windows VM for the games that
-need it next to a SteamOS VM for everything else.
+need it next to a SteamOS VM for everything else — up to a room of machines imaging themselves over
+the network.
 
 - **Passthrough-first:** N GPUs → N independent stations (the reliable path on consumer hardware).
 - **Self-healing host:** atomic bootc images with greenboot auto-rollback — a bad update can't brick the box.
 - **Own libvirt orchestrator:** full control of passthrough, CPU pinning, and Secure Boot + TPM (for Windows 11).
-- **vGPU & federation:** split one GPU across several stations, and manage a fleet of boxes from one UI (new in 0.16, experimental — [vGPU](docs/VGPU.md), [federation](docs/FEDERATION.md)).
+- **One edition, AGPL:** every feature is open source on every [channel](docs/CHANNELS.md).
 
 ## What works today
 
-A **web control plane** (Axum + HTMX) and a TrueNAS-style **on-screen console**, both over one
-libvirt orchestrator. Create a station from the browser — pick the OS, GPU, and account — and Tendril
-builds the disk, the answer-file/kickstart seed, and the VM, then installs the guest **unattended**
-(Windows 11 past the virtio and Microsoft-account walls, or a SteamOS-style Bazzite image) and boots
-from disk.
+**Stations.** Create a station from the browser — pick the OS, GPU, and account — and Tendril builds
+the disk, the answer-file/kickstart seed, and the VM, then installs the guest **completely
+unattended** (Windows 11 past the virtio and Microsoft-account walls, or a SteamOS-style Bazzite
+image) and boots from disk. Install media is auto-fetched and checksum-verified; a live in-browser
+**noVNC console** and install progress come free. Low-latency mode pins vCPUs to dedicated host
+cores and uses hugepages so frame times don't jitter.
 
 ![The create-station wizard](docs/images/create-station.png)
 
-Along the way: **seats** (named USB device groups), **auto-fetched + checksum-verified** install
-media, **live install progress**, per-GPU `vfio-pci` binding, a live in-browser **noVNC console**,
-password auth, and **configurable networking** with a 60-second **test-and-revert** safety net.
+**Day-2.** **Snapshots** (restore points before risky updates), **golden images** (capture an
+installed station, clone it instantly copy-on-write, push it to stations fleet-wide), optional
+**persistent data volumes** that survive OS reinstalls and reimages, USB hot-plug and **seats**
+(named USB device groups), and **remote play** — stations run Sunshine, any device runs Moonlight.
 
-**New in 0.17 (experimental, pending real-hardware validation):**
-- **Easier fleet-building** — join a fleet by pasting a **join code** (no shared store needed; mutual
-  membership over mTLS), with **mDNS LAN discovery** surfacing nearby machines. Control a peer's
-  stations right from the Stations page ([docs/FEDERATION.md](docs/FEDERATION.md)).
-- **Touchless installer** (`--unattended`) for CI/test VMs and fleet provisioning — safe single-disk,
-  seeded must-change admin password (the shipping ISO stays guided).
-- **Gaming provisioning** — a **shared Steam library** over virtio-fs (install games once, read by
-  many — [docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)), **Moonlight** receiver on Windows *and* Bazzite,
-  and Windows stations auto-installing the vGPU guest driver + Steam/Sunshine/Discord.
+**The host.** HTTPS by default with cert management in the UI, admin + read-only **viewer** logins
+with an **audit log**, live logs, **configurable networking** with a 60-second test-and-revert
+safety net, NFS/SMB **shared storage**, and one-click **OS updates** (staged by bootc, applied on
+reboot, auto-rolled-back by greenboot if the new image doesn't boot healthy).
+
+**vGPU** *(🧪 needs real-hardware validation)*. Split one GPU across several stations (mdev or
+SR-IOV — see the [supported-card list](docs/VGPU.md)). Stage NVIDIA's licensed host `.run` in the
+UI and Tendril **builds the driver image variant on the box**; the matching **guest driver and
+licensing are then fully automatic** — new vGPU stations come up licensed with zero manual steps,
+and a data-preserving **re-split** changes a station's slice without touching its disk.
+
+**Fleet** *(🧪 needs real-hardware validation)*. Manage several boxes from any one of them:
+**join codes** (paste one string — trust, mTLS, and mutual membership included), **mDNS discovery**
+of nearby nodes, GPU-aware placement, control of any node's stations from any UI including the
+**cross-node console**, golden-image **distribute**, human-confirmed **cold re-home** of an
+image-backed station off a dead node, and **PXE room provisioning** — netboot a rack of bare-metal
+PCs straight into the unattended installer. ([docs/FEDERATION.md](docs/FEDERATION.md))
 
 ![The fleet view — each node's GPUs, health, and free-for-passthrough capacity](docs/images/fleet.png)
 
-**From 0.16:** split a single GPU across stations with **vGPU** (mdev / SR-IOV — see the
-[supported-card list](docs/VGPU.md)), and save installed stations as **golden images** to clone
-instantly (SHA-256 integrity-verified).
+**Games at scale.** Bake games into a golden image, or share one Steam library over virtio-fs —
+install once, play from many ([docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)).
 
-Drive it all from the web UI, the console, or the CLIs — see **[docs/CLI.md](docs/CLI.md)**.
+Drive it all from the web UI, the console on the attached display, or the CLIs
+([docs/CLI.md](docs/CLI.md)).
 
 ## Install
 
 **Easiest:** download the installer ISO from **https://dl.onetick.ninja/**, verify it against
-`SHA256SUMS`, flash it to a USB stick, boot the target, and install.
+`SHA256SUMS`, flash it to a USB stick, boot the target, and install. Then open **`https://<host-ip>`**
+(self-signed cert — the UI can install a real one), set an admin password, and create your first
+station.
 
-Or deploy the **published image** with [`bootc`](https://containers.github.io/bootc/) — pushed to
-Tendril's own registry (tags `latest` and the current version):
+Or deploy the **published image** with [`bootc`](https://containers.github.io/bootc/):
 
 ```bash
 sudo bootc switch git.onetick.ninja/flan/tendril:latest && sudo reboot
 ```
 
-Three channels are published — rolling `:dev`, per-release `:latest`, and validated `:stable`
-(promoted only after bake time + hardware checks) — see **[docs/CHANNELS.md](docs/CHANNELS.md)**.
+Three channels are published — rolling `:dev`, per-release `:latest`, and validated `:stable` —
+plus matching installer ISOs; releases are cosign-signed. See **[docs/CHANNELS.md](docs/CHANNELS.md)**.
 
-Once it's up, open the **web UI** at `http://<host-ip>/` and set an admin password, or use the
-`tendril` console on the attached display.
+**Prerequisite:** enable **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in your motherboard's firmware —
+no software can turn this on for you. Building the image yourself and the full walkthrough:
+**[docs/INSTALL.md](docs/INSTALL.md)**. Still pre-1.0; expect rough edges.
 
-**Prerequisite:** enable **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in your motherboard's BIOS — no
-software can turn this on for you. Building the image yourself, deploying, and creating your first
-station are covered in **[docs/INSTALL.md](docs/INSTALL.md)**. Still pre-1.0; expect rough edges.
+## Documentation
 
-## Roadmap
+| Doc | What's in it |
+|---|---|
+| [docs/INSTALL.md](docs/INSTALL.md) | Install from ISO, build the image yourself, first station (web + CLI) |
+| [docs/CHANNELS.md](docs/CHANNELS.md) | dev / latest / stable channels, what "stable" promises, signing |
+| [docs/FEDERATION.md](docs/FEDERATION.md) | Fleets: join codes, mTLS, placement, re-home, PXE — and the design rationale |
+| [docs/VGPU.md](docs/VGPU.md) | GPU splitting: supported cards, driver staging, automatic guest driver + licensing |
+| [docs/STEAM-GAMES.md](docs/STEAM-GAMES.md) | Getting large game libraries onto many stations |
+| [docs/CLI.md](docs/CLI.md) | The command-line tools behind the UI |
+| [docs/HARDWARE-TESTING.md](docs/HARDWARE-TESTING.md) | The real-hardware validation checklist (testers start here) |
+| [docs/VERSIONING.md](docs/VERSIONING.md) | SemVer policy and how versions are pinned |
+| [docs/PLAN.md](docs/PLAN.md) | The original design document (kept for the record, with supersessions noted) |
 
-Detection, VFIO plan/apply, the installer ISO, libvirt orchestration, unattended Windows/Bazzite
-installs, the console, and the web control plane (incl. networking) are **done** — that's the
-"What works today" above. Ahead:
+## Status
 
-| Area | Capability | Status |
-|---|---|---|
-| vGPU | >1 VM per GPU — mdev (official + `vgpu_unlock`) & SR-IOV — see **[docs/VGPU.md](docs/VGPU.md)** | 🧪 Experimental (needs hardware validation) |
-| Federation | Fleet from one UI; **join codes** + **mDNS discovery**, GPU-aware placement, peer-station control, assisted re-home — see **[docs/FEDERATION.md](docs/FEDERATION.md)** | 🧪 Experimental |
-| Streaming | Sunshine host + **Moonlight** receiver on stations (Windows & Bazzite) | 🧪 Experimental |
-| Games | Shared Steam library over virtio-fs + golden-image workflow — see **[docs/STEAM-GAMES.md](docs/STEAM-GAMES.md)** | 🧪 Experimental |
-
-Full architecture, decisions, and phase detail: **[docs/PLAN.md](docs/PLAN.md)**.
+Everything in "What works today" is implemented and continuously reviewed; the 🧪 items (vGPU,
+fleet/PXE, remote play) are **code-complete but awaiting validation on real multi-GPU hardware** —
+[docs/HARDWARE-TESTING.md](docs/HARDWARE-TESTING.md) is the checklist if you can help. Multi-machine
+is deliberately **federation, not clustering**: independent self-managing nodes, no consensus, no
+live migration (a station *is* its GPU) — the reasoning is in
+[docs/FEDERATION.md](docs/FEDERATION.md).
 
 ## Contributing
 

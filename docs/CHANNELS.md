@@ -47,7 +47,7 @@ Security fixes invert the flow: a patch release containing a security fix for st
 **out of band**, as soon as the hardware pass completes — bake time doesn't apply.
 
 Run the promotion from Gitea → Actions → `promote-stable` → *Run workflow*, entering the version
-(e.g. `0.18.0`). The job logs the promoted digest; record it in the release notes if you edit them.
+(e.g. `0.23.0`). The job logs the promoted digest; record it in the release notes if you edit them.
 
 ## Experimental features on stable
 

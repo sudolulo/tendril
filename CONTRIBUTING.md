@@ -128,7 +128,7 @@ reserved for something a user can actually get value from:
 
 - the **first installable** milestone — a bootc image that boots and detects hardware; this is the
   next version we cut;
-- subsequent roadmap-phase milestones (multi-seat, vGPU, clustering — see [docs/PLAN.md](docs/PLAN.md));
+- subsequent roadmap-phase milestones (multi-seat, vGPU, federation — see [docs/PLAN.md](docs/PLAN.md));
 - **`1.0.0`** = production / stable.
 
 Everything below the next milestone just accumulates under `[Unreleased]`. Pre-1.0 tags are

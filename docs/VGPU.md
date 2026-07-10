@@ -12,12 +12,18 @@ detected per-GPU straight from sysfs:
   own GPUs and are passed through with the normal whole-GPU path.
 
 **Getting the host driver on the box.** Because the host is an immutable bootc image, the vGPU driver is
-**baked into a derived image and booted into**, not installed live — see
-[image/vgpu/](../image/vgpu/README.md) for the build variants:
-- **AMD MxGPU/GIM** — fully automated (open source), `scripts/build-vgpu-variant.sh amd`.
-- **NVIDIA vGPU + `vgpu_unlock`** — you supply the licensed `.run` (from NVIDIA's free vGPU eval or
-  licensing portal — Tendril won't fetch it from mirrors); the build applies `vgpu_unlock-rs` and
-  enables the host services: `scripts/build-vgpu-variant.sh nvidia`.
+**baked into a derived image and booted into**, not installed live:
+
+- **NVIDIA (easiest — no repo checkout):** on the **System** page's **vGPU** panel, upload the
+  licensed `NVIDIA-…-vgpu-kvm.run` (or give a URL you're entitled to), click **Build vGPU image** —
+  the appliance builds the variant from its own running image — then
+  `sudo bootc switch localhost/tendril:vgpu-nvidia && sudo reboot`. Get the `.run` from NVIDIA's
+  free vGPU eval or your licensing portal; Tendril won't fetch it from mirrors.
+- **AMD MxGPU/GIM** — fully automated (open source): switch to the published
+  `git.onetick.ninja/flan/tendril:vgpu-amd` variant, or build it yourself.
+- **From a repo checkout** — `scripts/build-vgpu-variant.sh amd|nvidia` builds either variant with
+  podman; see [image/vgpu/](../image/vgpu/README.md). The NVIDIA build applies `vgpu_unlock-rs` and
+  enables the host services.
 
 Once the driver is in place (after reboot), whatever it exposes shows up automatically in the wizard's
 profile picker or the SR-IOV control. Whole-GPU passthrough is unchanged and remains the reliable
@@ -37,30 +43,36 @@ The host `.run` makes vGPU *work*; NVIDIA's licensing makes it run *un-throttled
 driver leases a license on boot — unlicensed, it runs degraded and drops sessions (~24 h). The official
 path is an NVIDIA DLS/CLS license server; the common self-hosted path is
 [FastAPI-DLS](https://git.collinwebdesigns.de/oscar.krause/fastapi-dls), a minimal DLS re-implementation
-guests lease from. Tendril can run it for you (opt-in) — see the **vGPU licensing** panel on the
-**Hardware** page. It's separate from the `.run`: you need the driver regardless; DLS only removes the
+guests lease from. Tendril can run it for you (opt-in) — see the licensing section of the
+**vGPU** panel on the **System** page (it auto-starts once the host driver is active). It's separate from the `.run`: you need the driver regardless; DLS only removes the
 throttle. Emulating NVIDIA's licensing is a gray area — enable it only with your own entitlement.
 
-### Automatic guest setup (Windows)
+### Automatic guest setup — fully invisible
 
 The guest also needs the **GRID guest driver installed inside it** — separate from the host `.run` and
-part of the same licensed package. Rather than RDP-ing in to install it by hand, stage it once on the
-**Hardware** page (**vGPU guest driver** panel — upload the Windows `.exe` or give a URL). Then, when a
-hands-off Windows station is bound to an NVIDIA vGPU (mdev) slice, Tendril bakes the driver onto the
-seed disc and its `autounattend.xml` installs it on first logon; if the FastAPI-DLS server is running,
-the station also fetches its licensing token automatically, so a fresh vGPU station comes up licensed
-and un-throttled with no manual steps. The **New station** wizard can additionally bake in **Steam**,
-**Sunshine** (game-stream host — a seatless station needs it), and **Discord**, fetched from their
-official URLs on first boot. Whole-GPU-passthrough stations are unaffected (they get their driver from
-Windows Update / the vendor).
+part of the same licensed package. In Tendril this is **completely automatic**: staging the host
+`.run` pins the vGPU release, and Tendril fetches BOTH matching guest installers (Windows `.exe` and
+Linux `.run`) from **NVIDIA's own public distribution bucket** (`nvidia-drivers-us-public` — the same
+source GCP pulls from). You never pick, upload, or see a guest driver.
 
-Sourcing differs by guest OS. The **Windows** guest driver isn't published on NVIDIA's public bucket, so
-you supply it (upload/URL). The **Linux** guest `.run` *is* on NVIDIA's **official** public bucket
-(`nvidia-drivers-us-public` — the same source GCP uses), so the panel can **auto-fetch** it — pick the
-release matching your host driver branch and tick the entitlement box. Fetching from NVIDIA's own public
-URL is retrieval-from-source, not redistribution, but the vGPU EULA still gates *use*, so the attestation
-is required. SteamOS install is a first-boot oneshot; because Bazzite is atomic, it's best-effort
-scaffolding (the durable path is layering the driver into the image) and **unvalidated on real hardware**.
+When a hands-off station is bound to an NVIDIA vGPU (mdev) slice, the driver rides the seed disc and
+installs on first logon/boot; if the built-in license server is running, the station also fetches its
+licensing token automatically — a fresh vGPU station comes up **licensed and un-throttled with zero
+manual steps**. The cache is keyed to the host driver branch, so upgrading the host driver
+automatically re-fetches the matching guest drivers. Whole-GPU-passthrough stations are unaffected
+(they get their driver from Windows Update / the vendor). An unlisted host branch or an air-gapped
+box can point at a reachable copy via `TENDRIL_VGPU_GUEST_EXE_URL` / `TENDRIL_VGPU_GUEST_RUN_URL`.
+
+Fetching from NVIDIA's own public URL is retrieval-from-source, not redistribution, but the vGPU
+EULA still gates *use* — the same entitlement that got you the host `.run` covers the guests. The
+SteamOS guest install is a first-boot oneshot; because Bazzite is atomic it's best-effort (the
+durable path is layering the driver into the image) and **unvalidated on real hardware**.
+
+The **New station** wizard can additionally bake in **Steam**, **Sunshine** (game-stream host — a
+seatless station needs it), **Discord**, and a **Moonlight** receiver, fetched from their official
+URLs on first boot. A vGPU station's slice can later be changed **without touching its disk** — the
+station page's **GPU split** panel re-slices and the station boots into the new profile with
+Windows, games, and saves intact.
 
 > **Status:** implemented, but **not yet validated on real vGPU hardware** — the dev box has no
 > mdev-capable driver. The sysfs paths, `mdevctl` calls, and mdev domain XML follow standard

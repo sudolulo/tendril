@@ -374,10 +374,10 @@ const AUTO_TIMER: &str = "bootc-fetch-apply-updates.timer";
 /// bootc system, so the control is previewable on test builds.
 const DUMMY_BOOTC_STATUS: &str = "\
 Current booted image: git.onetick.ninja/flan/tendril:latest
-        Digest: sha256:9f3c…a1b2  (version 0.23.0, 2026-07-09)
+        Digest: sha256:9f3c…a1b2  (version 0.24.0, 2026-07-09)
 Current staged image: none
     Available update: none — you're on the latest image
-Rollback image: git.onetick.ninja/flan/tendril:0.22.0  (bootable fallback)";
+Rollback image: git.onetick.ninja/flan/tendril:0.23.0  (bootable fallback)";
 
 pub async fn system(headers: axum::http::HeaderMap) -> Markup {
     let is_admin = crate::auth::is_admin(&headers);

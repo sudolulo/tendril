@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-09
+
+A day-2 operations release: everything you reach for after the first station is installed —
+editing, kiosk mode, schedules, disk compaction, notifications, backup/restore, API tokens, metrics,
+named users, and staggered fleet updates. The new code was swept by three security-review rounds
+before landing (see *Security*). No breaking changes.
+
 ### Security
 - The new day-2 features were built and then swept by three security-review rounds before landing:
   settings-restore re-tightens every 0600 secret it can reach (incl. the TLS key, user hashes, and
@@ -759,7 +766,8 @@ Inaugural release: project foundation, development workflow, and the Rust worksp
 - **Branch-protection tooling** (`scripts/setup-branch-protection.sh`).
 - **Design & build plan** (`docs/PLAN.md`), project `README.md`, and AI-disclosure `NOTICE`.
 
-[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.23.0...HEAD
+[Unreleased]: https://git.onetick.ninja/flan/tendril/compare/v0.24.0...HEAD
+[0.24.0]: https://git.onetick.ninja/flan/tendril/compare/v0.23.0...v0.24.0
 [0.23.0]: https://git.onetick.ninja/flan/tendril/compare/v0.22.0...v0.23.0
 [0.22.0]: https://git.onetick.ninja/flan/tendril/compare/v0.21.0...v0.22.0
 [0.21.0]: https://git.onetick.ninja/flan/tendril/compare/v0.20.0...v0.21.0

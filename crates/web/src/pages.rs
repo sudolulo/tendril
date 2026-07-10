@@ -379,7 +379,8 @@ Current staged image: none
     Available update: none — you're on the latest image
 Rollback image: git.onetick.ninja/flan/tendril:0.22.0  (bootable fallback)";
 
-pub async fn system() -> Markup {
+pub async fn system(headers: axum::http::HeaderMap) -> Markup {
+    let is_admin = crate::auth::is_admin(&headers);
     let status = ui::run_stdout("bootc", &["status"]);
     ui::page(
         "system",
@@ -398,7 +399,7 @@ pub async fn system() -> Markup {
             }))
             (ui::panel("Admin password", None, crate::auth::password_panel()))
             (crate::auth::access_panel())
-            (crate::notify::panel())
+            (crate::notify::panel(is_admin))
             (crate::apitokens::panel())
             (crate::backup::panel())
             @if let Some(s) = status {

@@ -111,22 +111,31 @@ pub struct NotifyForm {
 /// whole conf is rewritten 0600 via `ui::write_secret` — the auth value is a secret.
 pub async fn save(axum::Form(f): axum::Form<NotifyForm>) -> Markup {
     if ui::is_demo() {
-        return body_with(Some(
-            html! { div.banner.warn style="margin:0 0 10px" { "Disabled in the live demo." } },
-        ));
+        return body_with(
+            true,
+            Some(
+                html! { div.banner.warn style="margin:0 0 10px" { "Disabled in the live demo." } },
+            ),
+        );
     }
     let url = f.url.trim().to_string();
     let auth = f.auth.trim().to_string();
     if !url.is_empty() && !ui::is_http_url(&url) {
-        return body_with(Some(
-            html! { div.banner.error style="margin:0 0 10px" { "The URL must be http(s):// with no spaces or shell characters." } },
-        ));
+        return body_with(
+            true,
+            Some(
+                html! { div.banner.error style="margin:0 0 10px" { "The URL must be http(s):// with no spaces or shell characters." } },
+            ),
+        );
     }
     // The auth value becomes a conf line and a header value — a newline would inject either.
     if !auth.is_empty() && !ui::safe_field(&auth) {
-        return body_with(Some(
-            html! { div.banner.error style="margin:0 0 10px" { "The authorization value can't contain control characters." } },
-        ));
+        return body_with(
+            true,
+            Some(
+                html! { div.banner.error style="margin:0 0 10px" { "The authorization value can't contain control characters." } },
+            ),
+        );
     }
     let mut content = format!("url={url}\n");
     if !auth.is_empty() {
@@ -147,21 +156,27 @@ pub async fn save(axum::Form(f): axum::Form<NotifyForm>) -> Markup {
             html! { div.banner.error style="margin:0 0 10px" { "Couldn't save: " (e) } }
         }
     };
-    body_with(Some(banner))
+    body_with(true, Some(banner))
 }
 
 /// Send a test notification (POST /system/notify/test) — synchronously, so a failure is shown here
 /// instead of being swallowed like the fire-and-forget path.
 pub async fn test() -> Markup {
     if ui::is_demo() {
-        return body_with(Some(
-            html! { div.banner.warn style="margin:0 0 10px" { "Disabled in the live demo." } },
-        ));
+        return body_with(
+            true,
+            Some(
+                html! { div.banner.warn style="margin:0 0 10px" { "Disabled in the live demo." } },
+            ),
+        );
     }
     let Some(url) = configured_url() else {
-        return body_with(Some(
-            html! { div.banner.error style="margin:0 0 10px" { "Set a notification URL first." } },
-        ));
+        return body_with(
+            true,
+            Some(
+                html! { div.banner.error style="margin:0 0 10px" { "Set a notification URL first." } },
+            ),
+        );
     };
     let auth = conf().1;
     let res = tokio::task::spawn_blocking(move || {
@@ -180,21 +195,36 @@ pub async fn test() -> Markup {
         }
         Err(e) => html! { div.banner.error style="margin:0 0 10px" { "Test failed: " (e) } },
     };
-    body_with(Some(banner))
+    body_with(true, Some(banner))
 }
 
-/// The "Notifications" panel for the System page.
-pub fn panel() -> Markup {
+/// The "Notifications" panel for the System page. `is_admin` gates the target details: the URL and
+/// auth header are effectively secrets (an ntfy topic is a publish capability; the auth value is a
+/// bearer token), so a read-only viewer sees only whether notifications are on, never the target.
+pub fn panel(is_admin: bool) -> Markup {
     ui::panel(
         "Notifications",
         Some("push background events to ntfy or a webhook"),
-        body_with(None),
+        body_with(is_admin, None),
     )
 }
 
-fn body_with(banner: Option<Markup>) -> Markup {
+fn body_with(is_admin: bool, banner: Option<Markup>) -> Markup {
     let (url, auth) = conf();
     let on = enabled();
+    // Viewers can't POST (the form is inert for them) and must not read the target/token, so show
+    // them only the on/off state.
+    if !is_admin {
+        return html! {
+            div.pad #notify-panel {
+                @if let Some(b) = banner { (b) }
+                div style="display:flex; align-items:center; gap:10px" {
+                    @if on { span.pill.running { span.led {} "on" } } @else { span.pill.off { span.led {} "off" } }
+                    span.sub { "Notification settings are managed by an admin." }
+                }
+            }
+        };
+    }
     html! {
         div.pad #notify-panel {
             @if let Some(b) = banner { (b) }

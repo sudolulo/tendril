@@ -1048,6 +1048,12 @@ fn storage_fragment(lv: &Libvirt, name: &str, banner: Option<Markup>) -> Markup 
 
 /// GET handler so the Storage panel can poll itself while a compact runs.
 pub async fn storage_route(Path(name): Path<String>) -> Markup {
+    // Demo: this GET shells to real virsh/qemu-img and lists the real store's backups — the middleware
+    // only blocks POSTs, so guard it here like every other real-data GET (a co-located demo must stay
+    // synthetic-only).
+    if ui::is_demo() {
+        return html! { div.pad { p.muted { "Storage details are hidden in the demo." } } };
+    }
     storage_fragment(&Libvirt::system(), &name, None)
 }
 

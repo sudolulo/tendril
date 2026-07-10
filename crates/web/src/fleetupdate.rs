@@ -192,25 +192,40 @@ fn update_peer(p: &Peer, i: usize, n: usize) -> Result<(), String> {
         &p.name,
         "reboot failed",
     )?;
-    // Poll until the peer answers its node API again. The first probe waits a full interval so we
-    // don't mistake the pre-reboot instance (still up for a moment) for "back".
+    // Require a **down-then-up** transition, not just "reachable": the pre-reboot instance can keep
+    // answering for a few seconds after the reboot call, so accepting the first reachable probe would
+    // advance to the next node while this one is still going down — defeating the one-at-a-time
+    // promise. Wait until it's actually seen unreachable, then wait for it to answer again.
     let deadline = Instant::now() + Duration::from_secs(REBOOT_WAIT_MAX_SECS);
+    let mut went_down = false;
     loop {
         write_state(&format!(
-            "waiting for {} to come back ({}/{})",
+            "waiting for {} to {} ({}/{})",
             p.name,
+            if went_down { "come back" } else { "go down" },
             i + 1,
             n
         ));
         std::thread::sleep(Duration::from_secs(REBOOT_POLL_SECS));
-        if federation::fetch_peer(p).reachable {
+        let reachable = federation::fetch_peer(p).reachable;
+        if !reachable {
+            went_down = true;
+        } else if went_down {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(format!(
-                "did not come back within {} minutes of the reboot",
-                REBOOT_WAIT_MAX_SECS / 60
-            ));
+            return Err(if went_down {
+                format!(
+                    "did not come back within {} minutes of the reboot",
+                    REBOOT_WAIT_MAX_SECS / 60
+                )
+            } else {
+                // Never observed going down — the reboot may not have taken. Don't claim success.
+                format!(
+                    "never went down within {} minutes — reboot may not have taken",
+                    REBOOT_WAIT_MAX_SECS / 60
+                )
+            });
         }
     }
 }
@@ -297,6 +312,10 @@ pub async fn update_all(headers: axum::http::HeaderMap) -> Markup {
 
 /// GET /fleet/update-status — the self-polling progress fragment.
 pub async fn update_status(headers: axum::http::HeaderMap) -> Markup {
+    // Demo: reads the real fleet-update state file; the middleware only blocks POSTs, so guard here.
+    if ui::is_demo() {
+        return html! {};
+    }
     status_body(crate::auth::is_admin(&headers), None)
 }
 

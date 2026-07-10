@@ -17,6 +17,7 @@ mod network;
 mod pages;
 mod pxe;
 mod seats;
+mod stationmeta;
 mod stations;
 mod storage;
 mod tls;
@@ -132,6 +133,24 @@ async fn main() {
         .route("/stations/:name/progress", get(stations::progress))
         .route("/stations/:name/save-image", post(images::save))
         .route("/stations/:name/resplit", post(stations::resplit_action))
+        .route(
+            "/stations/:name/resources",
+            post(stations::resources_action),
+        )
+        .route("/stations/:name/gpu", post(stations::gpu_action))
+        .route("/stations/:name/kiosk", post(stations::kiosk_action))
+        .route("/stations/:name/schedule", post(stations::schedule_action))
+        // The Storage panel polls this GET while a disk compact runs.
+        .route("/stations/:name/storage", get(stations::storage_route))
+        .route("/stations/:name/compact", post(stations::compact_action))
+        .route(
+            "/stations/:name/databackup",
+            post(stations::databackup_action),
+        )
+        .route(
+            "/stations/:name/datarestore",
+            post(stations::datarestore_action),
+        )
         .route("/stations/:name/snapshot", post(stations::snapshot_create))
         .route(
             "/stations/:name/snapshot/revert",
@@ -206,6 +225,17 @@ async fn main() {
     std::thread::spawn(|| loop {
         federation::heartbeat();
         std::thread::sleep(std::time::Duration::from_secs(30));
+    });
+
+    // Daily station schedules: start/stop stations whose saved times match the host's local
+    // wall clock. Two ticks per minute so clock drift can't skip a whole minute; the tick itself
+    // only acts when the minute changes, so a match never fires twice. No-op in demo mode.
+    std::thread::spawn(|| {
+        let mut last = String::new();
+        loop {
+            stationmeta::scheduler_tick(&mut last);
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
     });
 
     // Advertise this node + browse for peers over mDNS so nearby machines appear in Fleet setup for

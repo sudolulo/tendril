@@ -238,25 +238,39 @@ pub async fn fragment_route() -> Markup {
 // ── lifecycle actions (return the refreshed fragment) ───────────────────────────────────────
 
 pub async fn start(Path(n): Path<String>) -> Markup {
-    act(|lv| lv.start(&n))
+    lifecycle_act(n, "start").await
 }
 pub async fn stop(Path(n): Path<String>) -> Markup {
-    act(|lv| lv.shutdown(&n))
+    lifecycle_act(n, "stop").await
 }
 pub async fn forceoff(Path(n): Path<String>) -> Markup {
-    act(|lv| lv.destroy(&n))
+    lifecycle_act(n, "forceoff").await
 }
 pub async fn delete(Path(n): Path<String>) -> Markup {
-    let err = lifecycle(&n, "delete").err();
+    lifecycle_act(n, "delete").await
+}
+
+/// Run a lifecycle action off-thread and re-render the stations fragment with any error. All four UI
+/// buttons go through [`lifecycle`] — not `virsh` directly — so cross-cutting behavior (kiosk's
+/// reset-on-start, the delete teardown) can't be bypassed by one entry point.
+async fn lifecycle_act(name: String, action: &'static str) -> Markup {
+    let n = name.clone();
+    let err = tokio::task::spawn_blocking(move || lifecycle(&n, action))
+        .await
+        .unwrap_or_else(|_| Err(format!("{action} task panicked")))
+        .err();
     html! {
         @if let Some(e) = err { div.banner.error { (e) } }
         (fragment(&Libvirt::system()))
     }
 }
 
-/// Perform a lifecycle action on a **local** station by name — the shared core behind both the local
-/// UI handlers and the federation API (so a peer can drive it from its Stations page). `delete` runs
-/// the full teardown (force off, undefine, release any vGPU mdev, forget it in the shared registry).
+/// Perform a lifecycle action on a **local** station by name — the shared core behind the local UI
+/// handlers, the federation API (so a peer can drive it from its Stations page), and the daily
+/// scheduler. `start` is where kiosk mode is enforced (the one choke point every start routes
+/// through, so no path can boot a kiosk station on a stale disk). `delete` runs the full teardown
+/// (force off, undefine, release any vGPU mdev, drop saved settings, forget it in the shared
+/// registry).
 pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
     // The name becomes a bare `virsh <sub> <name>` argv token; reject a leading-dash / out-of-charset
     // name so it can't be parsed as an option (this path is reachable from a token-authed peer via
@@ -267,7 +281,28 @@ pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
     let lv = Libvirt::system();
     let e = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
     match action {
-        "start" => e(lv.start(name)),
+        "start" => {
+            // Kiosk mode: reset the OS disk to the golden image before every boot. Only a station
+            // that's actually off is reset — "start" on a running domain keeps its normal virsh
+            // error instead of force-cycling the disk out from under a live guest.
+            let meta = crate::stationmeta::load(name);
+            if meta.kiosk && !matches!(lv.state(name), DomainState::Running | DomainState::Paused) {
+                let base = crate::federation::station_base_image(
+                    &crate::federation::node_name(),
+                    name,
+                )
+                .and_then(|img| crate::images::path_of(&img))
+                .ok_or(
+                    "kiosk mode: this station's base image is missing — restore the image or \
+                     disable kiosk mode (refusing to start from a stale disk)",
+                )?;
+                // Replaces only the OS overlay (vda); a persistent data volume (vdb) survives. The
+                // station is off, so reimage_station recreates the overlay without starting it —
+                // the lv.start below is the single start.
+                crate::images::reimage_station(name, &base)?;
+            }
+            e(lv.start(name))
+        }
         "stop" => e(lv.shutdown(name)),
         "forceoff" => e(lv.destroy(name)),
         "delete" => {
@@ -278,6 +313,7 @@ pub(crate) fn lifecycle(name: &str, action: &str) -> Result<(), String> {
             if let Some(uuid) = mdev {
                 crate::vgpu::remove_mdev(&uuid);
             }
+            crate::stationmeta::remove(name);
             crate::federation::forget_station(&crate::federation::node_name(), name);
             r
         }
@@ -361,6 +397,905 @@ pub async fn resplit_action(
         } },
         Err(e) => html! { div.banner.error { (e) } },
     }
+}
+
+// ── resources (vCPUs / memory) & GPU swap — persistent-XML edits ────────────────────────────────
+
+/// The first real `<{tag} …>content</{tag}>` element in `xml`: `(open_tag_attrs, content_start,
+/// content_end)`, where `open_tag_attrs` is the text between `<{tag}` and its `>`. The prefix must be
+/// followed by whitespace or `>` so `<vcpu` never matches `<vcpupin`.
+fn element_parts<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, usize, usize)> {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut from = 0;
+    loop {
+        let i = xml[from..].find(&open)? + from;
+        let after = i + open.len();
+        let next = xml[after..].chars().next()?;
+        if next == '>' || next.is_whitespace() {
+            let gt = xml[after..].find('>')? + after;
+            let end = xml[gt + 1..].find(&close)? + gt + 1;
+            return Some((&xml[after..gt], gt + 1, end));
+        }
+        from = after;
+    }
+}
+
+/// Replace the first `<{tag} …>…</{tag}>`'s text content, keeping the element's attributes as-is.
+fn set_element_content(xml: &str, tag: &str, value: &str) -> Option<String> {
+    let (_, a, b) = element_parts(xml, tag)?;
+    Some(format!("{}{}{}", &xml[..a], value, &xml[b..]))
+}
+
+/// The `unit='…'` attribute from an element's open tag, defaulting to KiB (libvirt's default, and
+/// what `dumpxml` normalizes to).
+fn unit_of(open_attrs: &str) -> &str {
+    open_attrs
+        .split_once("unit='")
+        .and_then(|(_, r)| r.split('\'').next())
+        .unwrap_or("KiB")
+}
+
+/// A domain's vCPU count from its persistent XML (`<vcpu …>N</vcpu>`).
+fn parse_vcpus(xml: &str) -> Option<u32> {
+    let (_, a, b) = element_parts(xml, "vcpu")?;
+    xml[a..b].trim().parse().ok()
+}
+
+/// A domain's `<memory>` (or `<currentMemory>`) in MiB, honoring the element's declared unit.
+fn parse_memory_mib(xml: &str) -> Option<u64> {
+    let (attrs, a, b) = element_parts(xml, "memory")?;
+    let v: u64 = xml[a..b].trim().parse().ok()?;
+    match unit_of(attrs) {
+        "KiB" => Some(v / 1024),
+        "MiB" => Some(v),
+        "GiB" => v.checked_mul(1024),
+        _ => None,
+    }
+}
+
+/// Rewrite `<{tag} …>` to hold `mib` MiB expressed in the element's **existing** unit (KiB or MiB —
+/// the only units libvirt emits or our render writes), keeping every attribute as-is. `None` when
+/// the element is absent or carries a unit we won't silently convert to.
+fn set_memory_mib(xml: &str, tag: &str, mib: u64) -> Option<String> {
+    let (attrs, a, b) = element_parts(xml, tag)?;
+    let value = match unit_of(attrs) {
+        "KiB" => mib.checked_mul(1024)?,
+        "MiB" => mib,
+        _ => return None,
+    };
+    Some(format!("{}{}{}", &xml[..a], value, &xml[b..]))
+}
+
+/// Change a stopped station's vCPU count and memory by editing its persistent XML and re-defining it
+/// (same all-or-nothing pattern as [`resplit`]: on a define error nothing changed). Rejects a vCPU
+/// change on a pinned (`<cputune>`) station — pinning maps vCPUs 1:1 to host cores, and silently
+/// breaking that map is worse than asking for a recreate.
+pub(crate) fn set_resources(name: &str, vcpus: u32, memory_mib: u64) -> Result<(), String> {
+    if !valid_station_name(name) {
+        return Err("invalid station name".into());
+    }
+    let lv = Libvirt::system();
+    if matches!(lv.state(name), DomainState::Running | DomainState::Paused) {
+        return Err("Shut the station down before changing its resources.".into());
+    }
+    let xml = lv
+        .domain_xml(name)
+        .ok_or("couldn't read the station's definition")?;
+    let current = parse_vcpus(&xml).ok_or("couldn't find <vcpu> in the station's definition")?;
+    if vcpus != current && xml.contains("<cputune>") {
+        return Err(
+            "This station's vCPUs are pinned 1:1 to host cores (low-latency mode) — \
+                    recreate the station to change the pinned vCPU count."
+                .into(),
+        );
+    }
+    let xml = set_element_content(&xml, "vcpu", &vcpus.to_string())
+        .ok_or("couldn't find <vcpu> in the station's definition")?;
+    let xml = set_memory_mib(&xml, "memory", memory_mib)
+        .ok_or("couldn't rewrite <memory> (unexpected unit)")?;
+    // libvirt adds <currentMemory> on define (our own render omits it) — keep it in step with
+    // <memory> when present so the guest actually gets the new size, not a stale balloon target.
+    let xml = set_memory_mib(&xml, "currentMemory", memory_mib).unwrap_or(xml);
+    lv.define(name, &xml)
+        .map_err(|e| format!("couldn't update the station definition: {e}"))
+}
+
+/// Remove every whole-GPU/PCI `<hostdev mode='subsystem' type='pci' …>…</hostdev>` block from a
+/// domain XML, leaving mdev (vGPU) and USB hostdevs untouched. The type is read from the hostdev's
+/// **own open tag** — an mdev hostdev also contains `type='pci'` deeper in (its guest-side
+/// `<address type='pci' …/>`), which must not count.
+fn strip_pci_hostdevs(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(i) = rest.find("<hostdev") {
+        let (before, tail) = rest.split_at(i);
+        out.push_str(before);
+        let (Some(open_end), Some(close)) = (tail.find('>'), tail.find("</hostdev>")) else {
+            out.push_str(tail);
+            return out;
+        };
+        let close_end = close + "</hostdev>".len();
+        if tail[..open_end].contains("type='pci'") {
+            // Drop the block, plus the indentation it sat on (cosmetic — keeps the XML tidy).
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            let mut after = &tail[close_end..];
+            if out.ends_with('\n') {
+                after = after.strip_prefix('\n').unwrap_or(after);
+            }
+            rest = after;
+        } else {
+            out.push_str(&tail[..close_end]);
+            rest = &tail[close_end..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Insert rendered `<hostdev>` blocks just before `</devices>` (at its indentation, so the edited
+/// XML stays tidy). `None` when the XML has no `</devices>`.
+fn insert_hostdevs(xml: &str, hostdevs: &str) -> Option<String> {
+    let anchor = xml.rfind("</devices>")?;
+    // Back over the closing tag's indentation so the inserted blocks land on their own lines.
+    let mut i = anchor;
+    while i > 0 && xml.as_bytes()[i - 1] == b' ' {
+        i -= 1;
+    }
+    Some(format!("{}{}{}", &xml[..i], hostdevs, &xml[i..]))
+}
+
+/// Rewire a stopped station's whole-GPU passthrough: strip every PCI hostdev from its persistent XML
+/// and append the new selection's passthrough plan (the GPU's whole IOMMU group), then re-define —
+/// on a define error nothing changed. An empty selection detaches the GPU. mdev (vGPU) hostdevs are
+/// never touched: a vGPU station keeps its slice and changes it via re-split instead.
+pub(crate) fn swap_gpu(name: &str, sel: &str) -> Result<(), String> {
+    if !valid_station_name(name) {
+        return Err("invalid station name".into());
+    }
+    let lv = Libvirt::system();
+    if matches!(lv.state(name), DomainState::Running | DomainState::Paused) {
+        return Err("Shut the station down before changing its GPU.".into());
+    }
+    if station_mdev_uuid(name).is_some() {
+        return Err(
+            "This station uses a vGPU slice — change it with the GPU split panel instead.".into(),
+        );
+    }
+    let sel = sel.trim();
+    if !sel.is_empty() {
+        if !crate::vgpu::is_pci_address(sel) {
+            return Err("Pick a GPU from the list.".into());
+        }
+        // The select only offers free GPUs, but re-check against a stale form: two stations defined
+        // over the same hostdev both define fine — only the second *start* fails, much later.
+        if let Some(user) = crate::hardware::usage().gpu.get(sel) {
+            if user != name {
+                return Err(format!("{sel} is already passed through to “{user}”."));
+            }
+        }
+    }
+    let xml = lv
+        .domain_xml(name)
+        .ok_or("couldn't read the station's definition")?;
+    let mut new_xml = strip_pci_hostdevs(&xml);
+    if !sel.is_empty() {
+        let mut hostdevs = String::new();
+        for addr in passthrough_for(sel) {
+            hostdevs.push_str(
+                &tendril_orchestrator::pci_hostdev_xml(&addr)
+                    .ok_or_else(|| format!("bad PCI address in the passthrough plan: {addr}"))?,
+            );
+        }
+        new_xml = insert_hostdevs(&new_xml, &hostdevs)
+            .ok_or("couldn't find <devices> in the station's definition")?;
+    }
+    lv.define(name, &new_xml)
+        .map_err(|e| format!("couldn't update the station definition: {e}"))
+}
+
+/// Whole GPUs currently free to pass through, as `(address, label)` — passthrough-capable, not held
+/// by any station, and not already handing out vGPU slices (same exclusions as the create wizard).
+fn free_whole_gpus() -> Vec<(String, String)> {
+    let matrix = detect();
+    let u = crate::hardware::usage();
+    matrix
+        .passthrough_capable()
+        .filter(|g| !u.gpu.contains_key(&g.gpu.address) && !u.mdev.contains_key(&g.gpu.address))
+        .map(|g| {
+            (
+                g.gpu.address.clone(),
+                format!(
+                    "{} {} [{}]",
+                    ui::vendor(g.gpu.vendor),
+                    g.gpu.model.as_deref().unwrap_or("GPU"),
+                    g.gpu.address
+                ),
+            )
+        })
+        .collect()
+}
+
+/// The "Resources" fragment: current vCPUs/memory/GPU with edit forms — actionable only while the
+/// station is stopped (libvirt applies persistent-XML changes on the next start anyway, and editing
+/// a live domain's definition invites confusion about which values are in effect).
+fn resources_fragment(lv: &Libvirt, name: &str, banner: Option<Markup>) -> Markup {
+    let stopped = !matches!(lv.state(name), DomainState::Running | DomainState::Paused);
+    let xml = lv.domain_xml(name).unwrap_or_default();
+    let vcpus = parse_vcpus(&xml);
+    let mem = parse_memory_mib(&xml);
+    let pinned = xml.contains("<cputune>");
+    let has_mdev = mdev_uuid_from_xml(&xml).is_some();
+    let gpus = tendril_orchestrator::parse_pci_hostdevs(&xml);
+    html! {
+        div #resources {
+            @if let Some(b) = banner { (b) }
+            div.pad {
+                table { tbody {
+                    tr {
+                        td.sub style="white-space:nowrap" { "vCPUs" }
+                        td {
+                            (vcpus.map(|v| v.to_string()).unwrap_or_else(|| "—".into()))
+                            @if pinned {
+                                " " span.badge title="Pinned 1:1 to dedicated host cores (low-latency mode)" { "pinned" }
+                            }
+                        }
+                    }
+                    tr {
+                        td.sub { "Memory" }
+                        td { (mem.map(|m| format!("{m} MiB")).unwrap_or_else(|| "—".into())) }
+                    }
+                    tr {
+                        td.sub { "GPU" }
+                        td {
+                            @if has_mdev { "vGPU slice (see GPU split)" }
+                            @else if gpus.is_empty() { span.sub { "none" } }
+                            @else { @for a in &gpus { span.mono { (a) } " " } }
+                        }
+                    }
+                } }
+                @if !stopped {
+                    p.muted style="margin:12px 0 0" { "Shut the station down to change its resources or GPU." }
+                } @else {
+                    form hx-post=(format!("/stations/{name}/resources")) hx-target="#resources" hx-swap="outerHTML"
+                        style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-top:12px" {
+                        div.field { label { "vCPUs" }
+                            input name="vcpus" inputmode="numeric" style="width:7em"
+                                value=(vcpus.map(|v| v.to_string()).unwrap_or_default());
+                        }
+                        div.field { label { "Memory (MiB)" }
+                            input name="memory_mib" inputmode="numeric" style="width:9em"
+                                value=(mem.map(|m| m.to_string()).unwrap_or_default());
+                        }
+                        button.btn.primary type="submit" { "Apply" }
+                    }
+                    @if pinned {
+                        p.sub style="margin:8px 0 0" { "vCPUs are pinned 1:1 to host cores — recreate the station to change the count. Memory can still be changed." }
+                    }
+                    @if !has_mdev {
+                        @let free = free_whole_gpus();
+                        form hx-post=(format!("/stations/{name}/gpu")) hx-target="#resources" hx-swap="outerHTML"
+                            style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-top:12px" {
+                            div.field { label { "GPU" }
+                                select name="gpu" {
+                                    option value="" { "None — detach GPU" }
+                                    @for (addr, label) in &free { option value=(addr) { (label) " — whole GPU" } }
+                                }
+                            }
+                            button.btn type="submit"
+                                hx-confirm=(format!("Change {name}'s GPU passthrough? The disk and its data are untouched; the new wiring applies on the next start.")) { "Change GPU" }
+                        }
+                        p.sub style="margin:8px 0 0" { "Only currently-free whole GPUs are listed (the whole IOMMU group moves with the GPU)." }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ResourcesForm {
+    #[serde(default)]
+    vcpus: String,
+    #[serde(default)]
+    memory_mib: String,
+}
+
+/// POST handler: apply a new vCPU count + memory size to a stopped station.
+pub async fn resources_action(Path(name): Path<String>, Form(f): Form<ResourcesForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let lv = Libvirt::system();
+    let vcpus: Option<u32> = f
+        .vcpus
+        .trim()
+        .parse()
+        .ok()
+        .filter(|v| (1..=256).contains(v));
+    let mem: Option<u64> = f
+        .memory_mib
+        .trim()
+        .parse()
+        .ok()
+        .filter(|m| (512..=1_048_576).contains(m));
+    let (Some(vcpus), Some(mem)) = (vcpus, mem) else {
+        return resources_fragment(
+            &lv,
+            &name,
+            Some(
+                html! { div.banner.error { "vCPUs must be 1–256 and memory 512–1,048,576 MiB." } },
+            ),
+        );
+    };
+    let n = name.clone();
+    let res = tokio::task::spawn_blocking(move || set_resources(&n, vcpus, mem))
+        .await
+        .unwrap_or_else(|_| Err("resources task panicked".into()));
+    let banner = match res {
+        Ok(()) => {
+            html! { div.banner.ok { "Resources updated — they take effect on the next start." } }
+        }
+        Err(e) => html! { div.banner.error { (e) } },
+    };
+    resources_fragment(&lv, &name, Some(banner))
+}
+
+/// POST handler: swap (or detach) a stopped station's passthrough GPU.
+pub async fn gpu_action(
+    Path(name): Path<String>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let sel = form.get("gpu").cloned().unwrap_or_default();
+    let n = name.clone();
+    let res = tokio::task::spawn_blocking(move || swap_gpu(&n, &sel))
+        .await
+        .unwrap_or_else(|_| Err("GPU swap task panicked".into()));
+    let banner = match res {
+        Ok(()) => {
+            html! { div.banner.ok { "GPU updated — the new wiring applies on the next start." } }
+        }
+        Err(e) => html! { div.banner.error { (e) } },
+    };
+    resources_fragment(&Libvirt::system(), &name, Some(banner))
+}
+
+// ── kiosk mode (reset to the golden image on every start) ───────────────────────────────────────
+
+/// The "Kiosk mode" fragment: toggle reset-to-golden-image-on-every-start. Only offered for an
+/// image-backed station (its registry record names a base image) — anything else has no known-good
+/// state to reset to. Enforcement lives in [`lifecycle`]'s `start` arm, the shared choke point.
+fn kiosk_fragment(name: &str, banner: Option<Markup>) -> Markup {
+    let meta = crate::stationmeta::load(name);
+    let base = crate::federation::station_base_image(&crate::federation::node_name(), name);
+    html! {
+        div #kiosk {
+            @if let Some(b) = banner { (b) }
+            div.pad {
+                @if let Some(img) = &base {
+                    @if meta.kiosk {
+                        p style="margin-top:0" {
+                            span.pill.running { span.led {} "kiosk on" }
+                            " Every start resets the OS disk to " span.mono { (img) } "."
+                        }
+                    } @else {
+                        p.sub style="margin-top:0" {
+                            "Reset this station to its golden image (" span.mono { (img) } ") on "
+                            "every start — a walk-up station always boots clean, no matter what the "
+                            "last player did."
+                        }
+                    }
+                    form hx-post=(format!("/stations/{name}/kiosk")) hx-target="#kiosk" hx-swap="outerHTML" {
+                        input type="hidden" name="kiosk" value=(if meta.kiosk { "off" } else { "on" });
+                        @if meta.kiosk {
+                            button.btn type="submit" { "Disable kiosk mode" }
+                        } @else {
+                            button.btn.primary type="submit"
+                                hx-confirm="Every start will DISCARD all changes on the OS disk and boot a fresh clone of the golden image. Continue?" {
+                                "Enable kiosk mode"
+                            }
+                        }
+                    }
+                    p.sub style="margin:8px 0 0" {
+                        "Only the OS disk (vda) is reset — a persistent data volume (vdb) survives "
+                        "kiosk resets, so games and saves kept there are safe."
+                    }
+                } @else {
+                    p.sub style="margin:0" { "Save this station's disk as an image and recreate from it to enable kiosk mode." }
+                }
+            }
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct KioskForm {
+    #[serde(default)]
+    kiosk: String,
+}
+
+/// POST handler: enable/disable kiosk mode. Enabling re-checks that the base image actually exists
+/// on disk (not just in the registry), so the very next start can't fail on a missing image.
+pub async fn kiosk_action(Path(name): Path<String>, Form(f): Form<KioskForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let enable = f.kiosk == "on";
+    if enable
+        && crate::federation::station_base_image(&crate::federation::node_name(), &name)
+            .and_then(|img| crate::images::path_of(&img))
+            .is_none()
+    {
+        return kiosk_fragment(
+            &name,
+            Some(
+                html! { div.banner.error { "This station's base image no longer exists — kiosk mode needs it to reset to." } },
+            ),
+        );
+    }
+    let mut meta = crate::stationmeta::load(&name);
+    meta.kiosk = enable;
+    let banner = match crate::stationmeta::save(&name, &meta) {
+        Ok(()) if enable => {
+            html! { div.banner.ok { "Kiosk mode on — every start now boots a fresh clone of the golden image." } }
+        }
+        Ok(()) => {
+            html! { div.banner.ok { "Kiosk mode off — the OS disk persists across starts again." } }
+        }
+        Err(e) => html! { div.banner.error { (e) } },
+    };
+    kiosk_fragment(&name, Some(banner))
+}
+
+// ── storage: disk usage, compaction, data-volume backups ────────────────────────────────────────
+
+/// What `qemu-img info` reports about one disk.
+struct DiskInfo {
+    virtual_size: u64,
+    actual_size: u64,
+    /// The qcow2 has a backing file — it's an image-backed overlay, already thin.
+    backing: bool,
+}
+
+/// `qemu-img info --output=json` for a disk; `None` when the tool or the file is unavailable.
+fn disk_info(path: &str) -> Option<DiskInfo> {
+    let out = ui::run_result("qemu-img", &["info", "--output=json", path]).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+    Some(DiskInfo {
+        virtual_size: v.get("virtual-size")?.as_u64()?,
+        actual_size: v.get("actual-size")?.as_u64()?,
+        backing: v
+            .get("backing-filename")
+            .and_then(|b| b.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+    })
+}
+
+/// The temp a compact writes to next to the disk — also the "compacting…" marker the panel polls.
+fn compact_tmp(disk: &str) -> String {
+    format!("{disk}.compact.tmp")
+}
+
+/// Whether a compact is running on `disk`: its temp exists and is still being written (fresh mtime —
+/// `qemu-img convert` writes continuously). An orphaned temp (service restart killed the worker) is
+/// reaped rather than showing a phantom "compacting…" forever — same pattern as `images::in_progress`.
+fn compacting(disk: &str) -> bool {
+    crate::images::fresh_or_reap(&compact_tmp(disk))
+}
+
+/// Compact a disk: `qemu-img convert` rewrites the qcow2 dropping unallocated/zeroed clusters, then
+/// the copy replaces the original via a rename dance (original parked at `.pre-compact.bak` until the
+/// swap lands) — any failure leaves the original untouched. The caller has already refused
+/// image-backed overlays: converting one flattens its backing chain into a full standalone copy,
+/// silently detaching it from its golden image (and possibly exploding its size).
+fn compact_disk(disk: &str) -> Result<(), String> {
+    let tmp = compact_tmp(disk);
+    let bak = format!("{disk}.pre-compact.bak");
+    if let Err(e) = ui::run_result("qemu-img", &["convert", "-O", "qcow2", disk, &tmp]) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("compact failed: {e}"));
+    }
+    if let Err(e) = std::fs::rename(disk, &bak) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("couldn't stage the original for replacement: {e}"));
+    }
+    if let Err(e) = std::fs::rename(&tmp, disk) {
+        let _ = std::fs::rename(&bak, disk); // put the original back — nothing changed
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("couldn't swap the compacted disk in: {e}"));
+    }
+    let _ = std::fs::remove_file(&bak);
+    Ok(())
+}
+
+/// Existing data-volume backups for `name` on the shared store, as `(file name, human size)`,
+/// newest first (the `YYYYMMDD-HHMMSS` stamp sorts lexically).
+fn list_backups(store: &str, name: &str) -> Vec<(String, String)> {
+    let prefix = format!("{name}-data-");
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(format!("{store}/backups")) {
+        for e in rd.flatten() {
+            let f = e.file_name().to_string_lossy().into_owned();
+            if f.starts_with(&prefix) && f.ends_with(".qcow2") {
+                let sz = e
+                    .metadata()
+                    .map(|m| ui::human_size(m.len()))
+                    .unwrap_or_default();
+                out.push((f, sz));
+            }
+        }
+    }
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out
+}
+
+/// True for a backup file name this station owns: `<name>-data-….qcow2`, a single path component in
+/// the images charset (it's joined into the store path, so this is also the traversal guard).
+fn valid_backup_name(station: &str, file: &str) -> bool {
+    file.starts_with(&format!("{station}-data-"))
+        && file.ends_with(".qcow2")
+        && !file.contains("..")
+        && file
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// The "Storage" fragment: virtual vs allocated size for the OS disk and data volume, a compact
+/// action for the OS disk, and data-volume backups on the shared store. Polls itself while a
+/// compact runs (marker-file driven, so it survives page reloads and other viewers see it too).
+fn storage_fragment(lv: &Libvirt, name: &str, banner: Option<Markup>) -> Markup {
+    let stopped = matches!(lv.state(name), DomainState::ShutOff);
+    let os_disk = domblk_source(name, Some("vda"));
+    let data_disk = domblk_source(name, Some("vdb"));
+    let os_info = os_disk.as_deref().and_then(disk_info);
+    let data_info = data_disk.as_deref().and_then(disk_info);
+    let busy = os_disk.as_deref().map(compacting).unwrap_or(false);
+    let store = crate::storage::store_root();
+    let backups = store
+        .as_deref()
+        .map(|s| list_backups(s, name))
+        .unwrap_or_default();
+    html! {
+        div #storage-panel hx-get=[busy.then(|| format!("/stations/{name}/storage"))]
+            hx-trigger=[busy.then_some("every 4s")] hx-swap="outerHTML" {
+            @if let Some(b) = banner { (b) }
+            div.pad {
+                table {
+                    thead { tr { th { "Disk" } th { "Virtual" } th { "Allocated" } } }
+                    tbody {
+                        tr {
+                            td { "OS disk " span.sub.mono { "(vda)" } }
+                            td.num { (os_info.as_ref().map(|i| ui::human_size(i.virtual_size)).unwrap_or_else(|| "—".into())) }
+                            td.num { (os_info.as_ref().map(|i| ui::human_size(i.actual_size)).unwrap_or_else(|| "—".into())) }
+                        }
+                        @if data_disk.is_some() {
+                            tr {
+                                td { "Data volume " span.sub.mono { "(vdb)" } }
+                                td.num { (data_info.as_ref().map(|i| ui::human_size(i.virtual_size)).unwrap_or_else(|| "—".into())) }
+                                td.num { (data_info.as_ref().map(|i| ui::human_size(i.actual_size)).unwrap_or_else(|| "—".into())) }
+                            }
+                        }
+                    }
+                }
+                div style="margin-top:12px" {
+                    @if busy {
+                        span.sub { "compacting… (the panel refreshes when it's done)" }
+                    } @else if os_info.as_ref().map(|i| i.backing).unwrap_or(false) {
+                        p.sub style="margin:0" { "Image-backed disks can't be compacted (they're already thin overlays over their golden image)." }
+                    } @else if stopped {
+                        button.btn hx-post=(format!("/stations/{name}/compact"))
+                            hx-target="#storage-panel" hx-swap="outerHTML"
+                            hx-confirm=(format!("Compact {name}'s OS disk? The disk is rewritten to reclaim freed space — this can take a while on a large disk.")) {
+                            "Compact OS disk"
+                        }
+                    } @else {
+                        p.sub style="margin:0" { "Shut the station down to compact its OS disk." }
+                    }
+                }
+                @if data_disk.is_some() && store.is_some() {
+                    div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
+                        div.sub style="font-weight:600; margin-bottom:6px" { "Data-volume backups" }
+                        @if stopped {
+                            form hx-post=(format!("/stations/{name}/databackup"))
+                                hx-target="#storage-panel" hx-swap="outerHTML" style="margin-bottom:8px" {
+                                button.btn.primary type="submit" { "Back up data volume" }
+                            }
+                        } @else {
+                            p.sub style="margin:0 0 8px" { "Shut the station down to back up or restore the data volume (a consistent copy needs a quiesced disk)." }
+                        }
+                        @if backups.is_empty() {
+                            p.sub style="margin:0" { "No backups yet. Backups land in the shared store's " span.mono { "backups/" } " folder." }
+                        } @else {
+                            table.list { tbody {
+                                @for (f, sz) in &backups {
+                                    tr {
+                                        td.mono { (f) }
+                                        td.sub.num { (sz) }
+                                        td style="text-align:right; white-space:nowrap" {
+                                            @if stopped {
+                                                form.inline style="display:inline"
+                                                    hx-post=(format!("/stations/{name}/datarestore"))
+                                                    hx-target="#storage-panel" hx-swap="outerHTML"
+                                                    hx-confirm=(format!("Restore “{f}”? This overwrites the current data volume.")) {
+                                                    input type="hidden" name="file" value=(f);
+                                                    button.btn.sm type="submit" { "Restore" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// GET handler so the Storage panel can poll itself while a compact runs.
+pub async fn storage_route(Path(name): Path<String>) -> Markup {
+    storage_fragment(&Libvirt::system(), &name, None)
+}
+
+/// POST handler: compact a stopped station's OS disk. The convert runs detached (it can take
+/// minutes); the response returns immediately and the panel polls the marker until the swap lands.
+pub async fn compact_action(Path(name): Path<String>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let lv = Libvirt::system();
+    if !valid_station_name(&name) {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(html! { div.banner.error { "invalid station name" } }),
+        );
+    }
+    let err = |m: &str| html! { div.banner.error { (m) } };
+    if !matches!(lv.state(&name), DomainState::ShutOff) {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err("Shut the station down before compacting its disk.")),
+        );
+    }
+    let Some(disk) = domblk_source(&name, Some("vda")) else {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err("Couldn't find the station's OS disk.")),
+        );
+    };
+    let Some(info) = disk_info(&disk) else {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err("Couldn't inspect the station's OS disk.")),
+        );
+    };
+    if info.backing {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err(
+                "Image-backed disks can't be compacted (they're already thin overlays).",
+            )),
+        );
+    }
+    if compacting(&disk) {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(html! { div.banner.warn { "A compact is already in progress." } }),
+        );
+    }
+    // Touch the marker before the worker spawns so the returned fragment already polls (no race
+    // where the first poll lands before qemu-img creates the temp).
+    let _ = std::fs::write(compact_tmp(&disk), "");
+    let n = name.clone();
+    // A dedicated thread, not spawn_blocking: a multi-GB rewrite runs for minutes, and the response
+    // must return now so the panel can poll the marker (same worker pattern as images::save).
+    std::thread::spawn(move || {
+        if let Err(e) = compact_disk(&disk) {
+            eprintln!("station {n}: compact failed: {e}");
+        }
+    });
+    storage_fragment(
+        &lv,
+        &name,
+        Some(
+            html! { div.banner.ok { "Compacting the OS disk… the panel refreshes when it's done." } },
+        ),
+    )
+}
+
+/// POST handler: copy a stopped station's data volume to the shared store as a timestamped qcow2.
+pub async fn databackup_action(Path(name): Path<String>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let lv = Libvirt::system();
+    let err = |m: &str| html! { div.banner.error { (m) } };
+    if !valid_station_name(&name) {
+        return storage_fragment(&lv, &name, Some(err("invalid station name")));
+    }
+    if !matches!(lv.state(&name), DomainState::ShutOff) {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err(
+                "Shut the station down first — a consistent backup needs a quiesced volume.",
+            )),
+        );
+    }
+    let Some(vol) = domblk_source(&name, Some("vdb")) else {
+        return storage_fragment(&lv, &name, Some(err("This station has no data volume.")));
+    };
+    let Some(store) = crate::storage::store_root() else {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err(
+                "No shared store is connected — backups need one to land on.",
+            )),
+        );
+    };
+    let n = name.clone();
+    let res = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let dir = format!("{store}/backups");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let file = format!("{n}-data-{}.qcow2", ui::now_utc_compact());
+        let dest = format!("{dir}/{file}");
+        // A straight qcow2 copy (no -c): restore speed matters more than store bytes here.
+        ui::run_result("qemu-img", &["convert", "-O", "qcow2", &vol, &dest]).map_err(|e| {
+            let _ = std::fs::remove_file(&dest);
+            format!("backup failed: {e}")
+        })?;
+        Ok(file)
+    })
+    .await
+    .unwrap_or_else(|_| Err("backup task panicked".into()));
+    let banner = match res {
+        Ok(f) => html! { div.banner.ok { "Backed up the data volume to " span.mono { (f) } "." } },
+        Err(e) => html! { div.banner.error { (e) } },
+    };
+    storage_fragment(&lv, &name, Some(banner))
+}
+
+/// Restore `src` over a data volume: convert to a temp beside it, then atomically rename into
+/// place — a failure anywhere leaves the current volume untouched.
+fn restore_data_volume(src: &str, vol: &str) -> Result<(), String> {
+    let tmp = format!("{vol}.restore.tmp");
+    if let Err(e) = ui::run_result("qemu-img", &["convert", "-O", "qcow2", src, &tmp]) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("restore failed: {e}"));
+    }
+    std::fs::rename(&tmp, vol).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("couldn't swap the restored volume in: {e}")
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct RestoreForm {
+    #[serde(default)]
+    file: String,
+}
+
+/// POST handler: overwrite a stopped station's data volume with one of its backups.
+pub async fn datarestore_action(Path(name): Path<String>, Form(f): Form<RestoreForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let lv = Libvirt::system();
+    let err = |m: &str| html! { div.banner.error { (m) } };
+    if !valid_station_name(&name) {
+        return storage_fragment(&lv, &name, Some(err("invalid station name")));
+    }
+    if !matches!(lv.state(&name), DomainState::ShutOff) {
+        return storage_fragment(
+            &lv,
+            &name,
+            Some(err(
+                "Shut the station down before restoring its data volume.",
+            )),
+        );
+    }
+    let Some(vol) = domblk_source(&name, Some("vdb")) else {
+        return storage_fragment(&lv, &name, Some(err("This station has no data volume.")));
+    };
+    let Some(store) = crate::storage::store_root() else {
+        return storage_fragment(&lv, &name, Some(err("No shared store is connected.")));
+    };
+    if !valid_backup_name(&name, &f.file) {
+        return storage_fragment(&lv, &name, Some(err("Pick a backup from the list.")));
+    }
+    let src = format!("{store}/backups/{}", f.file);
+    if !FsPath::new(&src).exists() {
+        return storage_fragment(&lv, &name, Some(err("That backup no longer exists.")));
+    }
+    let res = tokio::task::spawn_blocking(move || restore_data_volume(&src, &vol))
+        .await
+        .unwrap_or_else(|_| Err("restore task panicked".into()));
+    let banner = match res {
+        Ok(()) => {
+            html! { div.banner.ok { "Data volume restored from " span.mono { (f.file) } "." } }
+        }
+        Err(e) => html! { div.banner.error { (e) } },
+    };
+    storage_fragment(&lv, &name, Some(banner))
+}
+
+// ── daily schedule ───────────────────────────────────────────────────────────────────────────────
+
+/// The "Schedule" fragment: daily start/stop times (host-local), saved to the station's settings and
+/// acted on by the scheduler loop in `stationmeta` (which routes through [`lifecycle`], so a kiosk
+/// station's scheduled start resets it like any other).
+fn schedule_fragment(name: &str, banner: Option<Markup>) -> Markup {
+    let meta = crate::stationmeta::load(name);
+    html! {
+        div #schedule {
+            @if let Some(b) = banner { (b) }
+            div.pad {
+                p.sub style="margin-top:0" {
+                    "Start and stop this station automatically every day (host-local time). The stop "
+                    "is a graceful shutdown — nothing is forced off. Clear a field to drop that side."
+                }
+                form hx-post=(format!("/stations/{name}/schedule")) hx-target="#schedule" hx-swap="outerHTML"
+                    style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap" {
+                    div.field { label { "Start at" } input type="time" name="sched_start" value=(meta.sched_start); }
+                    div.field { label { "Stop at" } input type="time" name="sched_stop" value=(meta.sched_stop); }
+                    button.btn.primary type="submit" { "Save schedule" }
+                }
+            }
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ScheduleForm {
+    #[serde(default)]
+    sched_start: String,
+    #[serde(default)]
+    sched_stop: String,
+}
+
+/// POST handler: save (or clear) a station's daily start/stop times.
+pub async fn schedule_action(Path(name): Path<String>, Form(f): Form<ScheduleForm>) -> Markup {
+    if ui::is_demo() {
+        return html! { div.banner.warn { "Actions are disabled in the live demo." } };
+    }
+    let (start, stop) = (
+        f.sched_start.trim().to_string(),
+        f.sched_stop.trim().to_string(),
+    );
+    if !crate::stationmeta::valid_hhmm(&start) || !crate::stationmeta::valid_hhmm(&stop) {
+        return schedule_fragment(
+            &name,
+            Some(
+                html! { div.banner.error { "Times must be 24-hour HH:MM (or empty for no schedule)." } },
+            ),
+        );
+    }
+    let mut meta = crate::stationmeta::load(&name);
+    meta.sched_start = start;
+    meta.sched_stop = stop;
+    let cleared = meta.sched_start.is_empty() && meta.sched_stop.is_empty();
+    let banner = match crate::stationmeta::save(&name, &meta) {
+        Ok(()) if cleared => html! { div.banner.ok { "Schedule cleared." } },
+        Ok(()) => {
+            html! { div.banner.ok { "Schedule saved — it fires on the host's local clock, checked every minute." } }
+        }
+        Err(e) => html! { div.banner.error { (e) } },
+    };
+    schedule_fragment(&name, Some(banner))
 }
 
 // ── in-guest agent status ───────────────────────────────────────────────────────────────────────
@@ -608,15 +1543,6 @@ fn resplit_panel(name: &str, running: bool) -> Option<Markup> {
             }
         },
     ))
-}
-
-fn act(f: impl FnOnce(&Libvirt) -> std::io::Result<()>) -> Markup {
-    let lv = Libvirt::system();
-    let err = f(&lv).err().map(|e| e.to_string());
-    html! {
-        @if let Some(e) = err { div.banner.error { (e) } }
-        (fragment(&lv))
-    }
 }
 
 // ── create wizard ───────────────────────────────────────────────────────────────────────────
@@ -1678,6 +2604,10 @@ pub async fn detail(Path(name): Path<String>) -> Response {
         (ui::panel("USB devices", None, usb_fragment(&lv, &name)))
         (snapshots_panel(&lv, &name))
         @if let Some(p) = resplit_panel(&name, running) { (p) }
+        (ui::panel("Resources", Some("vCPUs, memory, GPU — editable while stopped"), resources_fragment(&lv, &name, None)))
+        (ui::panel("Storage", Some("disk usage, compaction, data-volume backups"), storage_fragment(&lv, &name, None)))
+        (ui::panel("Schedule", Some("daily automatic start & stop"), schedule_fragment(&name, None)))
+        (ui::panel("Kiosk mode", Some("reset to the golden image on every start"), kiosk_fragment(&name, None)))
         (ui::panel("Save as image", Some("capture this station's disk as a reusable golden image"), html! {
             div.pad {
                 @if running {
@@ -1896,7 +2826,104 @@ async fn relay(mut socket: WebSocket, port: u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{disk_target_ok, valid_station_name};
+    use super::{
+        disk_target_ok, insert_hostdevs, parse_memory_mib, parse_vcpus, set_element_content,
+        set_memory_mib, strip_pci_hostdevs, valid_backup_name, valid_station_name,
+    };
+
+    #[test]
+    fn parses_and_edits_vcpus_and_memory() {
+        let xml = "<domain>\n  <name>s1</name>\n  <memory unit='KiB'>16777216</memory>\n  \
+                   <currentMemory unit='KiB'>16777216</currentMemory>\n  \
+                   <vcpu placement='static'>8</vcpu>\n  <cputune>\n    \
+                   <vcpupin vcpu='0' cpuset='4'/>\n  </cputune>\n</domain>";
+        assert_eq!(parse_vcpus(xml), Some(8));
+        assert_eq!(parse_memory_mib(xml), Some(16384));
+        let edited = set_element_content(xml, "vcpu", "4").unwrap();
+        assert!(edited.contains("<vcpu placement='static'>4</vcpu>"));
+        // <vcpupin> untouched — the `<vcpu` prefix must not match it.
+        assert!(edited.contains("<vcpupin vcpu='0' cpuset='4'/>"));
+        // Memory rewrites preserve the element's existing unit — KiB stays KiB…
+        let edited = set_memory_mib(xml, "memory", 8192).unwrap();
+        assert!(edited.contains("<memory unit='KiB'>8388608</memory>"));
+        let edited = set_memory_mib(&edited, "currentMemory", 8192).unwrap();
+        assert!(edited.contains("<currentMemory unit='KiB'>8388608</currentMemory>"));
+        // …and MiB (our own render) stays MiB.
+        let mib = "<domain><memory unit='MiB'>4096</memory><vcpu>2</vcpu></domain>";
+        assert_eq!(parse_memory_mib(mib), Some(4096));
+        assert_eq!(parse_vcpus(mib), Some(2));
+        assert!(set_memory_mib(mib, "memory", 2048)
+            .unwrap()
+            .contains("<memory unit='MiB'>2048</memory>"));
+        // Absent elements and unknown units refuse rather than guess.
+        assert!(set_memory_mib(mib, "currentMemory", 2048).is_none());
+        assert!(set_memory_mib("<memory unit='bytes'>1</memory>", "memory", 1).is_none());
+        assert_eq!(parse_vcpus("<domain/>"), None);
+    }
+
+    #[test]
+    fn strips_only_pci_hostdevs() {
+        let xml = "<domain>\n  <devices>\n    <disk type='file' device='disk'/>\n    \
+                   <hostdev mode='subsystem' type='pci' managed='yes'>\n      <source>\n        \
+                   <address domain='0x0000' bus='0x07' slot='0x00' function='0x0'/>\n      \
+                   </source>\n    </hostdev>\n    \
+                   <hostdev mode='subsystem' type='mdev' model='vfio-pci'>\n      <source>\n        \
+                   <address uuid='f2c0d6a4-1111-2222-3333-444455556666'/>\n      </source>\n      \
+                   <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>\n    \
+                   </hostdev>\n    \
+                   <hostdev mode='subsystem' type='usb' managed='yes'>\n      <source>\n        \
+                   <vendor id='0x046d'/>\n        <product id='0xc52b'/>\n      </source>\n    \
+                   </hostdev>\n  </devices>\n</domain>";
+        let stripped = strip_pci_hostdevs(xml);
+        // The whole-GPU hostdev is gone; libvirt's parser agrees nothing PCI remains.
+        assert!(!stripped.contains("managed='yes'>\n      <source>\n        <address domain="));
+        assert!(tendril_orchestrator::parse_pci_hostdevs(&stripped).is_empty());
+        // The mdev keeps its slice — including its guest-side <address type='pci'…/> — and USB stays.
+        assert!(stripped.contains("type='mdev'"));
+        assert!(stripped.contains("uuid='f2c0d6a4-1111-2222-3333-444455556666'"));
+        assert!(stripped.contains("<address type='pci' domain='0x0000' bus='0x05'"));
+        assert_eq!(
+            tendril_orchestrator::parse_usb_hostdevs(&stripped),
+            vec![(0x046d, 0xc52b)]
+        );
+    }
+
+    #[test]
+    fn inserts_hostdevs_inside_devices() {
+        let xml =
+            "<domain>\n  <devices>\n    <disk type='file' device='disk'/>\n  </devices>\n</domain>";
+        let dev = tendril_orchestrator::pci_hostdev_xml("0000:07:00.0").unwrap();
+        let out = insert_hostdevs(xml, &dev).unwrap();
+        assert_eq!(
+            tendril_orchestrator::parse_pci_hostdevs(&out),
+            vec!["0000:07:00.0"]
+        );
+        // Inserted before </devices>, which keeps its own line + indentation.
+        assert!(out.rfind("</hostdev>").unwrap() < out.rfind("</devices>").unwrap());
+        assert!(out.contains("\n  </devices>"));
+        assert!(insert_hostdevs("<domain/>", &dev).is_none());
+    }
+
+    #[test]
+    fn backup_names_are_station_scoped_and_traversal_safe() {
+        assert!(valid_backup_name(
+            "station1",
+            "station1-data-20260710-120000.qcow2"
+        ));
+        assert!(!valid_backup_name(
+            "station1",
+            "station2-data-20260710-120000.qcow2" // someone else's backup
+        ));
+        assert!(!valid_backup_name("station1", "station1-data-x.raw")); // wrong extension
+        assert!(!valid_backup_name(
+            "station1",
+            "station1-data-../../etc/shadow.qcow2" // traversal
+        ));
+        assert!(!valid_backup_name(
+            "station1",
+            "station1-data-a/b.qcow2" // separator
+        ));
+    }
 
     #[test]
     fn station_names_reject_path_escapes() {

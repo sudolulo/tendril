@@ -255,10 +255,8 @@ pub fn render(spec: &DomainSpec) -> String {
     xml.push_str("    <video>\n      <model type='virtio'/>\n    </video>\n");
     // GPU passthrough: the whole IOMMU group as one unit (also an SR-IOV VF, which is a plain PCI fn).
     for addr in &spec.passthrough_addresses {
-        if let Some(src) = pci_address_xml(addr) {
-            xml.push_str("    <hostdev mode='subsystem' type='pci' managed='yes'>\n");
-            let _ = writeln!(xml, "      <source>\n        {src}\n      </source>");
-            xml.push_str("    </hostdev>\n");
+        if let Some(dev) = pci_hostdev_xml(addr) {
+            xml.push_str(&dev);
         }
     }
     // vGPU: a mediated device, attached by UUID (created on the host before the domain starts).
@@ -309,6 +307,17 @@ fn fingerprint_serial(name: &str) -> String {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{:012X}", h & 0xFFFF_FFFF_FFFF)
+}
+
+/// Render the whole-GPU/PCI passthrough `<hostdev>` element for one address — the exact shape
+/// [`render`] emits. Public so the web layer's GPU-swap edit appends hostdevs byte-identical to a
+/// freshly rendered domain (libvirt normalizes either way, but identical input keeps diffs sane).
+/// `None` for a malformed address (see [`pci_address_xml`]'s injection guard).
+pub fn pci_hostdev_xml(address: &str) -> Option<String> {
+    let src = pci_address_xml(address)?;
+    Some(format!(
+        "    <hostdev mode='subsystem' type='pci' managed='yes'>\n      <source>\n        {src}\n      </source>\n    </hostdev>\n"
+    ))
 }
 
 /// Convert a PCI address like `0000:83:00.0` into a libvirt `<address .../>` element.

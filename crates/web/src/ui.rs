@@ -338,6 +338,35 @@ pub fn human_size(bytes: u64) -> String {
     format!("{v:.1} {u}")
 }
 
+/// The current UTC time as civil fields `(year, month, day, hour, minute, second)`, computed without
+/// a date crate (Howard Hinnant's civil-from-days). Shared by the audit log's timestamp and the
+/// compact backup-file stamp below.
+pub fn utc_now_civil() -> (i64, i64, i64, u64, u64, u64) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rem) = (secs / 86400, secs % 86400);
+    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d, h, mi, s)
+}
+
+/// The current UTC time as a compact `YYYYMMDD-HHMMSS` — sortable, filename-safe (backup stamps).
+pub fn now_utc_compact() -> String {
+    let (y, m, d, h, mi, s) = utc_now_civil();
+    format!("{y:04}{m:02}{d:02}-{h:02}{mi:02}{s:02}")
+}
+
 /// Host uptime, pretty-printed (`uptime -p`, trimmed).
 pub fn uptime() -> String {
     run_stdout("uptime", &["-p"])

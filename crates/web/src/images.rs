@@ -229,8 +229,9 @@ enum Integrity {
 const STALE_MARKER_SECS: u64 = 30 * 60;
 
 /// True when `p` exists and was modified within [`STALE_MARKER_SECS`]. A stale file is removed —
-/// self-healing, and safe on a shared store where a *peer's* live marker stays fresh.
-fn fresh_or_reap(p: &str) -> bool {
+/// self-healing, and safe on a shared store where a *peer's* live marker stays fresh. Shared with
+/// the station disk-compact flow, whose `.compact.tmp` marker ages the same way.
+pub(crate) fn fresh_or_reap(p: &str) -> bool {
     let Ok(md) = std::fs::metadata(p) else {
         return false;
     };

@@ -1597,6 +1597,15 @@ pub fn forget_station(node: &str, name: &str) {
     let _ = std::fs::remove_file(record_file(node, name));
 }
 
+/// The golden image a station's registry record says it was cloned from, if any — the definition of
+/// "image-backed". Kiosk mode keys off this: only a station with a recorded base image has a known
+/// good state to reset to.
+pub(crate) fn station_base_image(node: &str, name: &str) -> Option<String> {
+    let txt = std::fs::read_to_string(record_file(node, name)).ok()?;
+    let rec: StationRecord = serde_json::from_str(&txt).ok()?;
+    rec.base_image.filter(|b| !b.is_empty())
+}
+
 fn all_records() -> Vec<StationRecord> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(crate::storage::registry_dir()) {

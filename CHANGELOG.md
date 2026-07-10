@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Edit a station after creation** — a Resources panel changes vCPUs/memory (refused on
+  CPU-pinned stations rather than silently breaking the core map) and swaps or detaches the
+  passthrough GPU; vGPU stations keep using the data-preserving re-split.
+- **Kiosk mode** — a per-station toggle that resets the OS disk to its golden image on every
+  start (UI, fleet API, and schedules all inherit it); persistent data volumes survive.
+- **Storage panel** — virtual vs allocated disk sizes, one-click compact (image-backed overlays
+  are refused: they're already thin), and **data-volume backup/restore** to the shared store.
+- **Daily schedules** — per-station start/stop times; scheduled starts honor kiosk mode.
+- **Notifications** — ntfy-compatible webhook for the events that matter: installs finishing or
+  failing, image-push failures, OS updates staged, installer-ISO fetches, fleet nodes going
+  unreachable/coming back. Configured on the System page with a send-test button.
+- **Settings backup/restore** — download /etc/tendril as a tarball (admin-only); restore uploads
+  through a traversal-safe staging step and re-tightens secret permissions.
+- **API tokens** — named `tnd_` bearer tokens (admin or read-only viewer role, shown once,
+  sha256 at rest) for scripting against the node; audit log shows `token:<name>`.
+- **Prometheus metrics** — GET /metrics (stations + states, GPU totals/free, host mem/load/disk).
+- **Named users** — optional per-person admin/viewer logins on top of the main password, so the
+  audit log names who did what; removing a user kills their sessions immediately.
+- **Fleet OS updates** — update every reachable peer one node at a time (update → reboot → wait
+  healthy), continuing past failures, with per-node notifications. The driving node updates last,
+  by hand, from its own System page.
+
 ### Changed
 - Documentation overhaul: the README now describes the product by capability instead of by release
   number (and covers everything through 0.23); INSTALL is web-UI-first with the CLI path as the

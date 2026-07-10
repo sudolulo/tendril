@@ -35,11 +35,16 @@ cores and uses hugepages so frame times don't jitter.
 
 **Day-2.** **Snapshots** (restore points before risky updates), **golden images** (capture an
 installed station, clone it instantly copy-on-write, push it to stations fleet-wide), optional
-**persistent data volumes** that survive OS reinstalls and reimages, USB hot-plug and **seats**
-(named USB device groups), and **remote play** — stations run Sunshine, any device runs Moonlight.
+**persistent data volumes** that survive OS reinstalls and reimages (with backup/restore to the
+shared store), USB hot-plug and **seats** (named USB device groups), and **remote play** — stations
+run Sunshine, any device runs Moonlight. Stations stay editable after creation (vCPUs, memory, GPU),
+show their real disk usage with one-click **compact**, run on **daily schedules**, and a **kiosk
+mode** resets a station to its golden image on every start — walk-up-and-play for venues.
 
 **The host.** HTTPS by default with cert management in the UI, admin + read-only **viewer** logins
-with an **audit log**, live logs, **configurable networking** with a 60-second test-and-revert
+plus optional **named users** and **API tokens** — all feeding an **audit log** that names who did
+what — live logs, **webhook/ntfy notifications** for the events that matter, **Prometheus metrics**,
+one-click **settings backup/restore**, **configurable networking** with a 60-second test-and-revert
 safety net, NFS/SMB **shared storage**, and one-click **OS updates** (staged by bootc, applied on
 reboot, auto-rolled-back by greenboot if the new image doesn't boot healthy).
 
@@ -53,8 +58,9 @@ and a data-preserving **re-split** changes a station's slice without touching it
 **join codes** (paste one string — trust, mTLS, and mutual membership included), **mDNS discovery**
 of nearby nodes, GPU-aware placement, control of any node's stations from any UI including the
 **cross-node console**, golden-image **distribute**, human-confirmed **cold re-home** of an
-image-backed station off a dead node, and **PXE room provisioning** — netboot a rack of bare-metal
-PCs straight into the unattended installer. ([docs/FEDERATION.md](docs/FEDERATION.md))
+image-backed station off a dead node, **staggered fleet OS updates** (one node at a time, waiting
+for each to come back healthy), and **PXE room provisioning** — netboot a rack of bare-metal PCs
+straight into the unattended installer. ([docs/FEDERATION.md](docs/FEDERATION.md))
 
 ![The fleet view — each node's GPUs, health, and free-for-passthrough capacity](docs/images/fleet.png)
 

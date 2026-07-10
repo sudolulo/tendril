@@ -113,8 +113,11 @@ store is briefly unreachable; only fleet management/placement/re-home pause.
 Beyond the phases below, federation now also covers: **peer station control** (start/stop/delete any
 node's stations from any node's Stations page), the **cross-node console** (a peer station's live
 noVNC proxied over the fleet's mTLS channel), **golden-image distribute** (push an image to every
-node's store, once per node), and **PXE room provisioning** (Fleet → Provision a room — netboot
-bare-metal machines into the unattended installer).
+node's store, once per node), **staggered fleet OS updates** (Fleet → Fleet OS updates — each
+reachable peer is updated and rebooted one at a time, waiting for it to come back healthy;
+failures are recorded and skipped past, and the node driving the UI is deliberately left for a
+manual update last), and **PXE room provisioning** (Fleet → Provision a room — netboot bare-metal
+machines into the unattended installer).
 
 | Phase | Delivers | Status |
 |---|---|---|

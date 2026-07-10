@@ -569,6 +569,30 @@ fn fetch_peer(p: &Peer) -> NodeInfo {
     }
 }
 
+/// Reachability sweep for notifications: fetch each peer once and notify on **transitions** only —
+/// a peer that was up going dark, and back. `prev` is the caller-held last-known state (name → up);
+/// a peer's first sighting just records its state, so a service restart never replays old alerts.
+/// Skips entirely when there are no peers. Blocking (one short `curl` per peer) — called from the
+/// heartbeat thread, never a request path.
+pub fn check_peers_notify(prev: &mut std::collections::HashMap<String, bool>) {
+    let peers = peers();
+    if peers.is_empty() {
+        return;
+    }
+    for p in peers {
+        let up = fetch_peer(&p).reachable;
+        match prev.insert(p.name.clone(), up) {
+            Some(true) if !up => {
+                crate::notify::notify("Fleet", &format!("Fleet node {} unreachable", p.name))
+            }
+            Some(false) if up => {
+                crate::notify::notify("Fleet", &format!("Fleet node {} reachable again", p.name))
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The whole fleet: this node first, then each peer (fetched concurrently).
 pub fn fleet() -> Vec<NodeInfo> {
     let mut out = vec![local_node_info()];

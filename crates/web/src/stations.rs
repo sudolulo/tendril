@@ -1976,6 +1976,8 @@ pub async fn create(Form(form): Form<Vec<(String, String)>>) -> Response {
         }
         Err(e) => {
             assign.cleanup();
+            // Failure only — success is the redirect the user is already watching.
+            crate::notify::notify(&format!("Station {name} failed"), &e.to_string());
             create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
         }
     }
@@ -2066,6 +2068,8 @@ fn create_from_image(
             // we're about to delete — an unbootable ghost station.
             let _ = lv.undefine(name);
             let _ = std::fs::remove_file(disk);
+            // Failure only — success is the redirect the user is already watching.
+            crate::notify::notify(&format!("Station {name} failed"), &e.to_string());
             create_form(Some(&format!("Provisioning failed: {e}"))).into_response()
         }
     }
@@ -2118,6 +2122,10 @@ fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
                 "station {}: install media {p} missing or failed verification — not provisioning",
                 req.name
             );
+            crate::notify::notify(
+                &format!("Station {} not created", req.name),
+                &format!("Install media {p} is missing or failed checksum verification."),
+            );
             // Don't strand a vGPU mdev we created for this station.
             if let Some(u) = &req.mdev_uuid {
                 crate::vgpu::remove_mdev(u);
@@ -2129,12 +2137,17 @@ fn fetch_then_provision(script: String, req: StationRequest, guest: GuestOs) {
     match provision(&req, &lv) {
         Ok(report) => {
             record_local(&req.name, guest, None);
+            crate::notify::notify(
+                &format!("Station {} installed", req.name),
+                "The install media downloaded and verified, and the station is provisioned.",
+            );
             if report.started && req.needs_boot_prompt_clear() {
                 Libvirt::system().clear_boot_prompt(&req.name);
             }
         }
         Err(e) => {
             eprintln!("station {}: provisioning failed: {e}", req.name);
+            crate::notify::notify(&format!("Station {} failed", req.name), &e.to_string());
             if let Some(u) = &req.mdev_uuid {
                 crate::vgpu::remove_mdev(u);
             }
@@ -2327,7 +2340,18 @@ fn disk_target_ok(disk: &str) -> bool {
 /// and the fleet create flow). Supports cloning a golden image (the federation-primary path — images
 /// live on the shared store) or a fresh install (optionally unattended). Seats/USB and vGPU are left
 /// to the node's own wizard for now.
+///
+/// Failures notify (only failures — the fleet UI shows successes, and a remote caller may not be
+/// watching this node at all).
 pub(crate) fn provision_spec(s: &crate::federation::ProvisionSpec) -> Result<(), String> {
+    let r = provision_spec_inner(s);
+    if let Err(e) = &r {
+        crate::notify::notify(&format!("Station {} failed", s.name), e);
+    }
+    r
+}
+
+fn provision_spec_inner(s: &crate::federation::ProvisionSpec) -> Result<(), String> {
     if !valid_station_name(&s.name) {
         return Err("invalid station name (letters, numbers, - _ . only)".into());
     }

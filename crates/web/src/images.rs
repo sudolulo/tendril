@@ -570,6 +570,13 @@ pub async fn push(Query(q): Query<PushQuery>, Form(form): Form<Vec<(String, Stri
         .iter()
         .filter_map(|(n, s, r)| r.as_ref().err().map(|e| format!("{n}/{s}: {e}")))
         .collect();
+    // Failures only — an all-green push is confirmed by the banner the user is already watching.
+    if !errs.is_empty() {
+        crate::notify::notify(
+            "Image push",
+            &format!("Image push: {ok} ok, {} failed", errs.len()),
+        );
+    }
     let note = html! {
         @if errs.is_empty() {
             div.banner.ok { "Pushed " (image) " to " (ok) " station(s)." }

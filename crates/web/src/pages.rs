@@ -398,6 +398,9 @@ pub async fn system() -> Markup {
             }))
             (ui::panel("Admin password", None, crate::auth::password_panel()))
             (crate::auth::access_panel())
+            (crate::notify::panel())
+            (crate::apitokens::panel())
+            (crate::backup::panel())
             @if let Some(s) = status {
                 (ui::panel("OS image", None, html! {
                     div.pad {
@@ -584,9 +587,12 @@ pub async fn system_update() -> Markup {
         return html! { div.banner.ok { span.badge { "demo" } " On a real bootc host this stages the latest image and applies it on reboot. Nothing to update on this non-bootc host." } };
     }
     match Command::new("bootc").arg("upgrade").output() {
-        Ok(o) if o.status.success() => html! {
-            div.banner.ok { "Update staged. Reboot to apply it (System stays on the current image until you do)." }
-        },
+        Ok(o) if o.status.success() => {
+            crate::notify::notify("Tendril OS update", "OS update staged — reboot to apply.");
+            html! {
+                div.banner.ok { "Update staged. Reboot to apply it (System stays on the current image until you do)." }
+            }
+        }
         Ok(o) => {
             let msg = String::from_utf8_lossy(&o.stderr).trim().to_string();
             html! { div.banner.error { "Update failed: " (msg) } }
@@ -626,6 +632,104 @@ fn auto_enabled() -> bool {
         .unwrap_or(false)
 }
 
+// ── Prometheus metrics ────────────────────────────────────────────────────────────────────────
+
+/// Escape a Prometheus label value: `\` → `\\`, `"` → `\"`, newline → `\n`. Station names are
+/// already charset-constrained, but escape anyway — the exposition format is easy to corrupt.
+fn escape_label(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+/// Parse `df -B1 --output=used,size <mount>` output into `(used, total)` bytes.
+fn parse_df_bytes(out: &str) -> Option<(u64, u64)> {
+    let mut it = out.lines().nth(1)?.split_whitespace();
+    Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+}
+
+/// GET /metrics — Prometheus text exposition (version 0.0.4). Lives inside the auth-gated router,
+/// so a session or a bearer API token both work; viewers are allowed (it's read-only).
+pub async fn metrics() -> impl IntoResponse {
+    // Gathering shells out (virsh, df) — off the async worker.
+    let body = tokio::task::spawn_blocking(metrics_text)
+        .await
+        .unwrap_or_default();
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+}
+
+fn metrics_text() -> String {
+    use std::fmt::Write as _;
+    let mut m = String::new();
+    let _ = writeln!(m, "# TYPE tendril_build_info gauge");
+    let _ = writeln!(
+        m,
+        "tendril_build_info{{version=\"{}\"}} 1",
+        escape_label(env!("CARGO_PKG_VERSION"))
+    );
+    // The demo stops at build_info: its stations/GPUs are synthetic (scraping them as real would be
+    // misleading), and the host stats would leak the real machine the demo is co-located on.
+    if ui::is_demo() {
+        return m;
+    }
+    let lv = Libvirt::system();
+    let names = lv.list();
+    let _ = writeln!(m, "# TYPE tendril_stations_total gauge");
+    let _ = writeln!(m, "tendril_stations_total {}", names.len());
+    let _ = writeln!(m, "# TYPE tendril_station_state gauge");
+    for n in &names {
+        let state = format!("{:?}", lv.state(n)).to_lowercase();
+        let _ = writeln!(
+            m,
+            "tendril_station_state{{name=\"{}\",state=\"{}\"}} 1",
+            escape_label(n),
+            escape_label(&state)
+        );
+    }
+    let matrix = detect();
+    let usage = crate::hardware::usage();
+    let free = matrix
+        .passthrough_capable()
+        .filter(|g| {
+            !usage.gpu.contains_key(&g.gpu.address) && !usage.mdev.contains_key(&g.gpu.address)
+        })
+        .count();
+    let _ = writeln!(m, "# TYPE tendril_gpus_total gauge");
+    let _ = writeln!(m, "tendril_gpus_total {}", matrix.gpus.len());
+    let _ = writeln!(m, "# TYPE tendril_gpus_passthrough_free gauge");
+    let _ = writeln!(m, "tendril_gpus_passthrough_free {free}");
+    if let Some((used, total)) = ui::mem_used_total_gb() {
+        let _ = writeln!(m, "# TYPE tendril_host_mem_used_gb gauge");
+        let _ = writeln!(m, "tendril_host_mem_used_gb {used:.2}");
+        let _ = writeln!(m, "# TYPE tendril_host_mem_total_gb gauge");
+        let _ = writeln!(m, "tendril_host_mem_total_gb {total:.2}");
+    }
+    if let Some(load1) = ui::loadavg(" ")
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<f64>().ok())
+    {
+        let _ = writeln!(m, "# TYPE tendril_host_load1 gauge");
+        let _ = writeln!(m, "tendril_host_load1 {load1}");
+    }
+    if let Some((used, total)) = ui::run_stdout("df", &["-B1", "--output=used,size", "/"])
+        .as_deref()
+        .and_then(parse_df_bytes)
+    {
+        let _ = writeln!(m, "# TYPE tendril_host_disk_used_bytes gauge");
+        let _ = writeln!(m, "tendril_host_disk_used_bytes {used}");
+        let _ = writeln!(m, "# TYPE tendril_host_disk_total_bytes gauge");
+        let _ = writeln!(m, "tendril_host_disk_total_bytes {total}");
+    }
+    m
+}
+
 fn auto_fragment() -> Markup {
     let bootc = is_bootc();
     let on = if bootc {
@@ -651,5 +755,28 @@ fn auto_fragment() -> Markup {
                 @if !bootc { " — preview only on this non-bootc host." }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn label_escaping() {
+        assert_eq!(escape_label("plain-name_1.2"), "plain-name_1.2");
+        assert_eq!(escape_label(r#"a\b"#), r#"a\\b"#);
+        assert_eq!(escape_label(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(escape_label("two\nlines"), r"two\nlines");
+    }
+
+    #[test]
+    fn df_bytes_parsing() {
+        let out = "    Used  1B-blocks\n42949672960 107374182400\n";
+        assert_eq!(parse_df_bytes(out), Some((42_949_672_960, 107_374_182_400)));
+        // Header only / garbage → None, so the disk metrics are simply omitted.
+        assert_eq!(parse_df_bytes("Used 1B-blocks\n"), None);
+        assert_eq!(parse_df_bytes(""), None);
+        assert_eq!(parse_df_bytes("x\nnot numbers here\n"), None);
     }
 }

@@ -5,7 +5,9 @@
 //! swaps, and a WebSocket↔VNC proxy driving an embedded noVNC console. All assets — htmx and noVNC —
 //! are baked into the binary, so the appliance serves everything offline.
 
+mod apitokens;
 mod auth;
+mod backup;
 mod demo;
 mod federation;
 mod fedtls;
@@ -14,6 +16,7 @@ mod images;
 mod licensing;
 mod mdns;
 mod network;
+mod notify;
 mod pages;
 mod pxe;
 mod seats;
@@ -208,6 +211,18 @@ async fn main() {
         .route("/system/password", post(auth::change_password))
         .route("/system/viewer", post(auth::set_viewer))
         .route("/system/audit/download", get(auth::audit_download))
+        // notifications (ntfy-compatible webhook)
+        .route("/system/notify", post(notify::save))
+        .route("/system/notify/test", post(notify::test))
+        // settings backup/restore (/system/backup is on auth's sensitive_get list — it carries
+        // every secret in /etc/tendril)
+        .route("/system/backup", get(backup::download))
+        .route("/system/restore", post(backup::restore))
+        // API tokens (bearer auth for scripts/monitoring)
+        .route("/system/tokens", post(apitokens::create_action))
+        .route("/system/tokens/revoke", post(apitokens::revoke_action))
+        // Prometheus metrics — auth-gated (session or bearer token; viewers allowed, it's read-only).
+        .route("/metrics", get(pages::metrics))
         .route("/system/tls/upload", post(tls::upload))
         .route("/system/tls/regenerate", post(tls::regenerate))
         // auth
@@ -222,9 +237,19 @@ async fn main() {
 
     // Fleet heartbeat: publish this node's presence to the shared store every 30s so peers
     // auto-discover it. No-op without a shared store (federation then uses manual peers).
-    std::thread::spawn(|| loop {
-        federation::heartbeat();
-        std::thread::sleep(std::time::Duration::from_secs(30));
+    // Every 5th tick (~2.5 min) it also sweeps peer reachability and notifies on up/down
+    // transitions (no-op with no peers or with notifications off).
+    std::thread::spawn(|| {
+        let mut tick: u64 = 0;
+        let mut peer_up = std::collections::HashMap::new();
+        loop {
+            federation::heartbeat();
+            tick += 1;
+            if tick % 5 == 0 {
+                federation::check_peers_notify(&mut peer_up);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
     });
 
     // Daily station schedules: start/stop stations whose saved times match the host's local

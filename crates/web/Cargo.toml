@@ -26,6 +26,10 @@ base64 = "0.22"  # compact single-line encoding for fleet join codes
 mdns-sd = "0.11" # LAN discovery of fleet peers (_tendril._tcp) for easier fleet-building
 include_dir = "0.7"
 argon2 = "0.5"
+# API-token hashing: tokens are stored as hex SHA-256 (not in the tree via argon2, which brings only
+# blake2). Pure-Rust and tiny; hashing per request beats argon2's deliberate slowness for bearer auth
+# of high-entropy random tokens.
+sha2 = "0.10"
 # HTTPS for the web UI (and, later, federation mTLS): a rustls TLS server. Self-signed certs are
 # generated with the `openssl` CLI (avoids the rcgen→time dependency tree; matches our shell-out style).
 axum-server = { version = "0.7", features = ["tls-rustls"] }

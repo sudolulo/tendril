@@ -288,6 +288,17 @@ pub fn is_admin(headers: &axum::http::HeaderMap) -> bool {
     role_from_headers(headers) == Some(Role::Admin)
 }
 
+/// The `Authorization: Bearer tnd_…` API token on a request, if any. Only our `tnd_` prefix is
+/// consumed — other Authorization schemes fall through to the normal session/proxy auth untouched.
+fn bearer_api_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    let v = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let tok = v.strip_prefix("Bearer ")?.trim();
+    tok.starts_with("tnd_").then(|| tok.to_string())
+}
+
 /// The actor label for the audit log (proxy-set user if present, else the role name).
 fn actor_of(req: &Request) -> String {
     if let Ok(name) = std::env::var("TENDRIL_TRUST_PROXY_HEADER") {
@@ -348,7 +359,15 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
             Redirect::to("/setup").into_response()
         };
     }
-    let role = role_of(&req);
+    // API tokens: a valid `Authorization: Bearer tnd_…` header authenticates as the token's stored
+    // role — admin, or viewer with the same read-only restrictions as an interactive viewer. An
+    // invalid/unknown bearer falls through to the normal session auth (401/redirect), not a hard
+    // reject.
+    let token_auth = bearer_api_token(req.headers()).and_then(|t| crate::apitokens::role_for(&t));
+    let role = token_auth
+        .as_ref()
+        .map(|&(_, r)| r)
+        .or_else(|| role_of(&req));
     if !open && role.is_none() {
         // Not authenticated: first run has no password → set one; otherwise sign in.
         return if !is_configured() {
@@ -363,9 +382,11 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
     // to the guest, so a read-only viewer must not open one.
     // The full-log downloads dump the entire audit trail / systemd journal (actor names, request
     // paths, and anything services logged) — admin-only, unlike the truncated inline views.
+    // `/system/backup` is the settings tarball: it contains every secret in /etc/tendril.
     let sensitive_get = path == "/fleet/join-code"
         || path == "/system/audit/download"
         || path == "/system/logs/download"
+        || path == "/system/backup"
         || path.ends_with("/vnc");
     // Viewer is read-only: refuse mutations (and secret-returning GETs) with a friendly banner.
     if !open && role == Some(Role::Viewer) && (is_post || sensitive_get) {
@@ -376,9 +397,13 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
         )
             .into_response();
     }
-    // Audit admin mutations (after they run, with the outcome).
+    // Audit admin mutations (after they run, with the outcome). Token-authed requests are attributed
+    // to the token by name — "who changed this" survives even when several scripts share the box.
     if !open && is_post {
-        let actor = actor_of(&req);
+        let actor = match &token_auth {
+            Some((n, _)) => format!("token:{n}"),
+            None => actor_of(&req),
+        };
         let action = format!("POST {path}");
         let resp = next.run(req).await;
         audit(&actor, &action, resp.status().as_u16());

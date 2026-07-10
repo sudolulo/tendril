@@ -220,15 +220,21 @@ pub async fn fetch() -> Markup {
             // Pid-suffixed temp: a leftover curl from a dead previous process can't interleave
             // writes with this one, and each cleanup only ever removes its own temp.
             let tmp = format!("{dir}/{LATEST_ISO}.part.{}", std::process::id());
-            if ui::run_result(
+            match ui::run_result(
                 "curl",
                 &["-fL", "--max-time", "3600", "-o", &tmp, LATEST_URL],
-            )
-            .is_ok()
-            {
-                let _ = std::fs::rename(&tmp, format!("{dir}/{LATEST_ISO}"));
-            } else {
-                let _ = std::fs::remove_file(&tmp);
+            ) {
+                Ok(_) => {
+                    let _ = std::fs::rename(&tmp, format!("{dir}/{LATEST_ISO}"));
+                    crate::notify::notify(
+                        "Installer ISO downloaded",
+                        &format!("{LATEST_ISO} is ready — you can start the PXE server."),
+                    );
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    crate::notify::notify("Installer ISO download failed", &e);
+                }
             }
             FETCH_RUNNING.store(false, Ordering::SeqCst);
         });

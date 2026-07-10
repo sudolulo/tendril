@@ -45,14 +45,27 @@ fn save(recs: &[UserRec]) -> Result<(), String> {
     ui::write_secret(&p, json.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// A real Argon2 PHC hash (of a random throwaway secret) verified against when the username doesn't
+/// exist, so a miss costs the same Argon2 time as a hit — no username-enumeration timing signal.
+static DECOY_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    crate::auth::hash_str("tendril-decoy-not-a-real-password").unwrap_or_default()
+});
+
 /// Verify a named user's password: `Some(role)` when the name exists and the password matches its
 /// stored hash. Called by the login handler when the username field is filled in.
+///
+/// Runs one Argon2 verification whether or not the name exists (a decoy hash on the miss path), so
+/// the response time doesn't reveal which usernames are registered.
 pub(crate) fn verify(name: &str, pw: &str) -> Option<Role> {
-    load()
-        .into_iter()
-        .find(|u| u.name == name)
-        .filter(|u| crate::auth::verify_str(&u.hash, pw))
-        .and_then(|u| Role::parse(&u.role))
+    match load().into_iter().find(|u| u.name == name) {
+        Some(u) => crate::auth::verify_str(&u.hash, pw)
+            .then(|| Role::parse(&u.role))
+            .flatten(),
+        None => {
+            let _ = crate::auth::verify_str(&DECOY_HASH, pw);
+            None
+        }
+    }
 }
 
 /// The built-in login labels — a named user with one of these would make the audit trail ambiguous
@@ -70,7 +83,7 @@ fn validate_new(name: &str, pw: &str, role: &str) -> Result<Role, String> {
     if !valid_name(name) {
         return Err("Username may only contain letters, numbers, - _ . (max 64).".into());
     }
-    if RESERVED.contains(&name) {
+    if RESERVED.contains(&name.to_ascii_lowercase().as_str()) {
         return Err(format!(
             "“{name}” is reserved for the built-in logins — pick another name."
         ));
@@ -248,9 +261,13 @@ mod tests {
 
     #[test]
     fn add_validation() {
-        // Reserved names collide with the built-in logins.
+        // Reserved names collide with the built-in logins — case-insensitively (else `Admin`
+        // would shadow the legacy `admin` actor in the audit log).
         assert!(validate_new("admin", "longenough", "admin").is_err());
         assert!(validate_new("viewer", "longenough", "viewer").is_err());
+        assert!(validate_new("Admin", "longenough", "admin").is_err());
+        assert!(validate_new("VIEWER", "longenough", "viewer").is_err());
+        assert!(validate_new("aDmIn", "longenough", "admin").is_err());
         // Charset: same rule as station names; length capped.
         assert!(validate_new("has space", "longenough", "admin").is_err());
         assert!(validate_new("tab\tname", "longenough", "admin").is_err());

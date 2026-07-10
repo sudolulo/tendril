@@ -19,11 +19,17 @@ use serde::Serialize;
 use crate::federation::{self, NodeInfo, Peer, ProvisionResult};
 use crate::ui;
 
-/// A state line older than this with no progress is a dead run. Matches the longest single blocking
-/// step (the peer's `bootc upgrade`, capped at 30 min below) — every other step re-touches the file.
-const STALE_AFTER_SECS: u64 = 30 * 60;
+/// A state line older than this with no progress is a dead run. Must exceed the longest single
+/// blocking step (the peer's `bootc upgrade`, capped at 30 min) with margin — during that one call
+/// nothing re-touches the file, so an equal window would read a still-running upgrade as dead.
+const STALE_AFTER_SECS: u64 = 40 * 60;
 /// How long the peer's `bootc upgrade` may run (curl `--max-time`, seconds).
 const UPDATE_MAX_TIME: &str = "1800";
+
+/// In-process guard: exactly one orchestration per tendril-web process. The state file's mtime
+/// covers cross-restart liveness; this closes the read-then-write race two simultaneous admin clicks
+/// (or a double-submit) would otherwise slip through.
+static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Reboot polling: probe the peer's `/api/node` every 20s, for up to 10 minutes.
 const REBOOT_POLL_SECS: u64 = 20;
 const REBOOT_WAIT_MAX_SECS: u64 = 10 * 60;
@@ -213,6 +219,14 @@ fn update_peer(p: &Peer, i: usize, n: usize) -> Result<(), String> {
 /// and **skipped past** — it must not block the rest of the fleet. Runs on a plain thread (it's all
 /// blocking curl + sleeps) and leaves a `done:` summary for the panel.
 fn run_fleet_update() {
+    // Release the in-process claim however this thread exits (including an unexpected panic).
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _guard = Guard;
     let peers = federation::peers();
     // Reachability snapshot up front: only nodes answering /api/node now get updated; the rest are
     // counted as skipped (they may be powered off — a reboot command to them would go nowhere).
@@ -254,7 +268,15 @@ pub async fn update_all(headers: axum::http::HeaderMap) -> Markup {
             ),
         );
     }
-    if running() {
+    // Atomic claim: CAS false→true refuses a second concurrent starter before any state is written,
+    // closing the read-then-write race two simultaneous clicks would slip through `running()` alone.
+    // The stale-state-file check still covers a run orphaned by a restart (RUNNING resets to false).
+    use std::sync::atomic::Ordering;
+    if running()
+        || RUNNING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+    {
         return status_body(
             is_admin,
             Some(
@@ -262,7 +284,7 @@ pub async fn update_all(headers: axum::http::HeaderMap) -> Markup {
             ),
         );
     }
-    // Mark the run live before answering so a double-click (or a second admin) is refused.
+    // Mark the run live before answering so the panel (and a cross-restart guard) sees it immediately.
     write_state("starting…");
     std::thread::spawn(run_fleet_update);
     status_body(

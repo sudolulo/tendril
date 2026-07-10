@@ -894,12 +894,19 @@ fn compacting(disk: &str) -> bool {
 /// swap lands) — any failure leaves the original untouched. The caller has already refused
 /// image-backed overlays: converting one flattens its backing chain into a full standalone copy,
 /// silently detaching it from its golden image (and possibly exploding its size).
-fn compact_disk(disk: &str) -> Result<(), String> {
+fn compact_disk(name: &str, disk: &str) -> Result<(), String> {
     let tmp = compact_tmp(disk);
     let bak = format!("{disk}.pre-compact.bak");
     if let Err(e) = ui::run_result("qemu-img", &["convert", "-O", "qcow2", disk, &tmp]) {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("compact failed: {e}"));
+    }
+    // Re-assert the station is still off right before the destructive swap. If it was started while
+    // the (minutes-long) convert ran, the temp is a torn copy AND swapping it in would discard every
+    // write the running guest has made — abort and leave the live disk untouched.
+    if !matches!(Libvirt::system().state(name), DomainState::ShutOff) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err("the station was started during the compact — aborted, disk untouched".into());
     }
     if let Err(e) = std::fs::rename(disk, &bak) {
         let _ = std::fs::remove_file(&tmp);
@@ -1103,7 +1110,7 @@ pub async fn compact_action(Path(name): Path<String>) -> Markup {
     // A dedicated thread, not spawn_blocking: a multi-GB rewrite runs for minutes, and the response
     // must return now so the panel can poll the marker (same worker pattern as images::save).
     std::thread::spawn(move || {
-        if let Err(e) = compact_disk(&disk) {
+        if let Err(e) = compact_disk(&n, &disk) {
             eprintln!("station {n}: compact failed: {e}");
         }
     });

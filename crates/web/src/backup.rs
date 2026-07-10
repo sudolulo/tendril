@@ -17,7 +17,7 @@ const ETC_DIR: &str = "/etc/tendril";
 
 /// Files under `/etc/tendril` that must stay 0600 (secrets). `std::fs::copy` preserves the source
 /// permissions — which are whatever the uploader's tar/umask produced — so these are re-tightened
-/// explicitly after a restore.
+/// explicitly after a restore. Paths are relative to `ETC_DIR` (subdir entries allowed).
 const SECRET_FILES: &[&str] = &[
     "webauth",
     "webauth.viewer",
@@ -25,6 +25,9 @@ const SECRET_FILES: &[&str] = &[
     "notify.conf",
     "smb-creds",
     "api-tokens.json",
+    "users.json",    // named-user Argon2 hashes
+    "tls/key.pem",   // web console TLS private key (subdir — the flat loop must name it explicitly)
+    "fedtls/ca.key", // federation CA private key, when a store-less fleet founded one locally
 ];
 
 /// Stream `/etc/tendril` as a tar.gz (GET /system/backup). The tarball is binary — this reads
@@ -122,9 +125,15 @@ fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String>
         let e = e.map_err(|e| e.to_string())?;
         let from = e.path();
         let to = dst.join(e.file_name());
-        // `metadata()` follows symlinks — after `verify_staging`, any link resolves inside staging,
-        // so copying what it points at is safe (and simpler than recreating links under /etc).
-        let meta = std::fs::metadata(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+        // `symlink_metadata` (lstat) so a symlink is never dereferenced: a legitimate settings
+        // backup has none, and following one lets a crafted self-referential link (`self -> .`)
+        // recurse forever. Symlinks passed `verify_staging` (they can't escape) but we still don't
+        // reproduce or chase them.
+        let meta =
+            std::fs::symlink_metadata(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
         if meta.is_dir() {
             copy_tree(&from, &to)?;
         } else {
@@ -134,85 +143,107 @@ fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String>
     Ok(())
 }
 
-/// Extract an uploaded settings archive safely and copy it over `/etc/tendril`, then re-tighten the
-/// known secret files to 0600. Blocking (tar + fs walk) — called via `spawn_blocking`.
-fn restore_archive(tmp: &std::path::Path) -> Result<(), String> {
-    let staging = std::env::temp_dir().join(format!(
-        "tendril-restore-{}-{}",
-        std::process::id(),
-        ui::now_utc_compact()
-    ));
-    std::fs::create_dir_all(&staging).map_err(|e| format!("create staging dir: {e}"))?;
-    let cleanup = || {
-        let _ = std::fs::remove_dir_all(&staging);
-    };
-    let res = (|| {
-        ui::run_result(
-            "tar",
-            &[
-                "-xzf",
-                &tmp.to_string_lossy(),
-                "-C",
-                &staging.to_string_lossy(),
-            ],
-        )
-        .map_err(|e| format!("that doesn't look like a settings backup: {e}"))?;
-        verify_staging(&staging)?;
-        copy_tree(&staging, std::path::Path::new(ETC_DIR))?;
-        for f in SECRET_FILES {
-            let p = format!("{ETC_DIR}/{f}");
-            if std::path::Path::new(&p).exists() {
-                ui::chmod_600(&p);
-            }
+/// A fresh, private working directory under the temp dir, created with `create_dir` so a pre-planted
+/// symlink/dir at the (randomized) name is refused (`mkdir` returns `EEXIST`) rather than followed —
+/// tendril-web runs as root and the temp dir is world-writable. Returns the created path.
+fn make_work_dir() -> Result<std::path::PathBuf, String> {
+    // 128 bits from the kernel CSPRNG (dashes stripped) — unpredictable, so the name can't be
+    // pre-created to race the mkdir.
+    let rand = std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .map_err(|e| format!("rng: {e}"))?
+        .trim()
+        .replace('-', "");
+    let dir = std::env::temp_dir().join(format!("tendril-restore-{rand}"));
+    std::fs::create_dir(&dir).map_err(|e| format!("create work dir: {e}"))?;
+    Ok(dir)
+}
+
+/// Extract the uploaded archive (at `work/upload.tar.gz`) safely and copy it over `/etc/tendril`,
+/// then re-tighten the known secret files to 0600. Blocking (tar + fs walk) — via `spawn_blocking`.
+/// `work` is the caller-owned private dir from `make_work_dir`.
+fn restore_archive(work: &std::path::Path) -> Result<(), String> {
+    let upload = work.join("upload.tar.gz");
+    let staging = work.join("staging");
+    std::fs::create_dir(&staging).map_err(|e| format!("create staging dir: {e}"))?;
+    ui::run_result(
+        "tar",
+        &[
+            "-xzf",
+            &upload.to_string_lossy(),
+            "-C",
+            &staging.to_string_lossy(),
+        ],
+    )
+    .map_err(|e| format!("that doesn't look like a settings backup: {e}"))?;
+    verify_staging(&staging)?;
+    copy_tree(&staging, std::path::Path::new(ETC_DIR))?;
+    for f in SECRET_FILES {
+        let p = format!("{ETC_DIR}/{f}");
+        if std::path::Path::new(&p).exists() {
+            ui::chmod_600(&p);
         }
-        Ok(())
-    })();
-    cleanup();
-    res
+    }
+    Ok(())
 }
 
 /// Restore a settings backup (POST /system/restore, multipart field `archive`). The upload is
-/// streamed to a temp file, extracted to staging, verified, then copied over `/etc/tendril`.
+/// streamed into a fresh private working dir, extracted to staging, verified, then copied over
+/// `/etc/tendril`.
 pub async fn restore(mut mp: Multipart) -> Markup {
     if ui::is_demo() {
         return html! { div.banner.warn style="margin:0" { "Disabled in the live demo." } };
     }
-    let tmp = std::env::temp_dir().join(format!("tendril-restore-{}.tar.gz", std::process::id()));
+    let work = match make_work_dir() {
+        Ok(w) => w,
+        Err(e) => {
+            return html! { div.banner.error style="margin:0" { "Couldn't open a working dir: " (e) } }
+        }
+    };
+    let cleanup = |w: &std::path::Path| {
+        let _ = std::fs::remove_dir_all(w);
+    };
+    let upload = work.join("upload.tar.gz");
     let mut wrote = 0u64;
     while let Ok(Some(mut field)) = mp.next_field().await {
         if field.name().unwrap_or("") != "archive" {
             continue;
         }
         use std::io::Write as _;
-        let Ok(mut f) = std::fs::File::create(&tmp) else {
+        // create_new: refuse a pre-planted path even inside our fresh dir (belt-and-braces).
+        let Ok(mut f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&upload)
+        else {
+            cleanup(&work);
             return html! { div.banner.error style="margin:0" { "Couldn't open a temp file for the upload." } };
         };
         loop {
             match field.chunk().await {
                 Ok(Some(bytes)) => {
                     if f.write_all(&bytes).is_err() {
-                        let _ = std::fs::remove_file(&tmp);
+                        cleanup(&work);
                         return html! { div.banner.error style="margin:0" { "Write failed while saving the upload." } };
                     }
                     wrote += bytes.len() as u64;
                 }
                 Ok(None) => break,
                 Err(_) => {
-                    let _ = std::fs::remove_file(&tmp);
+                    cleanup(&work);
                     return html! { div.banner.error style="margin:0" { "Upload was interrupted." } };
                 }
             }
         }
     }
     if wrote == 0 {
-        let _ = std::fs::remove_file(&tmp);
+        cleanup(&work);
         return html! { div.banner.error style="margin:0" { "Choose a settings backup (.tar.gz) to restore." } };
     }
-    let tmp2 = tmp.clone();
-    let res = tokio::task::spawn_blocking(move || restore_archive(&tmp2))
+    let work2 = work.clone();
+    let res = tokio::task::spawn_blocking(move || restore_archive(&work2))
         .await
         .unwrap_or_else(|_| Err("restore task panicked".into()));
-    let _ = std::fs::remove_file(&tmp);
+    cleanup(&work);
     match res {
         Ok(()) => html! { div.banner.ok style="margin:0" {
             "Settings restored over " span.mono { (ETC_DIR) } ". Restart " span.mono { "tendril-web" }

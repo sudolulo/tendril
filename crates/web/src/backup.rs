@@ -1,9 +1,11 @@
 //! Settings backup & restore: download `/etc/tendril` as a tar.gz, and restore one over it.
 //!
-//! The archive contains **every secret** (password hashes, the federation token + CA key, API-token
-//! hashes, notify auth) — the download route is on `auth.rs`'s `sensitive_get` list so a read-only
-//! viewer can't fetch it. Restore extracts to a staging dir first and verifies nothing escapes it
-//! (symlink/`..` traversal) before copying over `/etc/tendril`.
+//! The archive contains the secrets under `/etc/tendril` — password + API-token hashes, the
+//! federation token, TLS private key, SMB creds, notify auth (the federation mTLS/CA keys and the
+//! DLS key live under `/var/lib/tendril` and are *not* included). The download route is on
+//! `auth.rs`'s `sensitive_get` list so a read-only viewer can't fetch it. Restore extracts to a
+//! staging dir first and verifies nothing escapes it (symlink/`..` traversal) before copying over
+//! `/etc/tendril`.
 
 use axum::extract::Multipart;
 use axum::http::header;
@@ -25,10 +27,12 @@ const SECRET_FILES: &[&str] = &[
     "notify.conf",
     "smb-creds",
     "api-tokens.json",
-    "users.json",    // named-user Argon2 hashes
-    "tls/key.pem",   // web console TLS private key (subdir — the flat loop must name it explicitly)
-    "fedtls/ca.key", // federation CA private key, when a store-less fleet founded one locally
+    "users.json",      // named-user Argon2 hashes
+    "federation.conf", // may carry a store-less fleet's `token=` line
+    "tls/key.pem", // web console TLS private key (subdir — the flat loop must name it explicitly)
 ];
+// Note: the federation mTLS keys (node.key, CA key) and the DLS webserver key live under
+// /var/lib/tendril, not /etc/tendril, so they're outside this settings backup entirely.
 
 /// Stream `/etc/tendril` as a tar.gz (GET /system/backup). The tarball is binary — this reads
 /// `Command::output()`'s raw stdout bytes directly (`ui::run_result` returns a lossy `String`,

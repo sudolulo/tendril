@@ -275,7 +275,9 @@ fn upsert_conf(keep: impl Fn(&str) -> bool, line: String) -> Result<(), String> 
     if let Some(d) = std::path::Path::new(&p).parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| e.to_string())
+    // 0600: a store-less founder's `token=` line lives here (see `set_conf_token`), so the file can
+    // carry the fleet's shared secret — don't leave it world-readable.
+    ui::write_secret(&p, (lines.join("\n") + "\n").as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Persist a federation token to `federation.conf` (replacing any existing `token=` line). Used when

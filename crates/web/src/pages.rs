@@ -332,7 +332,7 @@ pub async fn verify(axum::extract::Path(iso): axum::extract::Path<String>) -> Ma
 
 /// Reap a detached background child off-thread — a dropped `std::process::Child` is never waited
 /// on, so each finished job would otherwise linger as a zombie until the service restarts.
-fn reap(mut child: std::process::Child) {
+pub(crate) fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });

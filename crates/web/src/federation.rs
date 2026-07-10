@@ -217,7 +217,7 @@ fn new_random_token() -> Option<String> {
 /// The shared token peers present to each other. Precedence: env → conf → **auto-managed on the shared
 /// store** (`<store>/fleet-token`, generated once, 0600) → legacy token file. Auto-generation on the
 /// store is what makes membership zero-config: every node that mounts the store reads the same token.
-fn federation_token() -> String {
+pub(crate) fn federation_token() -> String {
     if let Ok(t) = std::env::var("TENDRIL_FEDERATION_TOKEN") {
         let t = t.trim();
         if !t.is_empty() {
@@ -549,7 +549,7 @@ pub fn local_node_info() -> NodeInfo {
 }
 
 /// Fetch a peer's info over its API (via `curl`, short timeout), or a down stub if unreachable.
-fn fetch_peer(p: &Peer) -> NodeInfo {
+pub(crate) fn fetch_peer(p: &Peer) -> NodeInfo {
     // mTLS to the peer's federation endpoint when both sides support it (verifies the peer via our
     // shared CA); else plain TLS (`-k`) + the shared token — still encrypted.
     let (base, sec) = crate::fedtls::transport(&p.url, p.fed.as_deref());
@@ -751,7 +751,11 @@ fn fleet_page(nodes: Vec<NodeInfo>, note: Option<Markup>, is_admin: bool) -> Mar
                 }
             }
             @for n in &nodes { (node_card(n)) }
-            @if !ui::is_demo() { (setup_panel(is_admin)) (crate::pxe::panel()) }
+            @if !ui::is_demo() {
+                (setup_panel(is_admin))
+                (crate::fleetupdate::panel(&nodes, is_admin))
+                (crate::pxe::panel())
+            }
         },
     )
 }
@@ -1120,13 +1124,13 @@ pub struct ProvisionResult {
 }
 
 impl ProvisionResult {
-    fn ok() -> Self {
+    pub(crate) fn ok() -> Self {
         Self {
             ok: true,
             error: None,
         }
     }
-    fn err(e: impl Into<String>) -> Self {
+    pub(crate) fn err(e: impl Into<String>) -> Self {
         Self {
             ok: false,
             error: Some(e.into()),
@@ -1147,7 +1151,7 @@ impl From<Result<(), String>> for ProvisionResult {
 /// and parse the standard [`ProvisionResult`] envelope: `Ok(())` when the far side reports success,
 /// else its error — or `default_err` if it sent none. `who` names the far side in parse errors.
 #[allow(clippy::too_many_arguments)] // a flat curl invocation; the parameters are all distinct scalars
-fn post_fed(
+pub(crate) fn post_fed(
     base: &str,
     sec: &[String],
     path: &str,

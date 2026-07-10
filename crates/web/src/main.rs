@@ -11,6 +11,7 @@ mod backup;
 mod demo;
 mod federation;
 mod fedtls;
+mod fleetupdate;
 mod hardware;
 mod images;
 mod licensing;
@@ -25,6 +26,7 @@ mod stations;
 mod storage;
 mod tls;
 mod ui;
+mod users;
 mod vgpu;
 mod vgpudrv;
 mod vgpuguest;
@@ -121,6 +123,14 @@ async fn main() {
         .route("/api/reimage", post(federation::api_reimage))
         .route("/api/image/:name", get(federation::api_image))
         .route("/api/image-pull", post(federation::api_image_pull))
+        // Fleet-staggered OS updates: per-node fed API (update = blocking `bootc upgrade`; reboot
+        // returns before the machine drops; version = cheap post-reboot identity check) plus the
+        // orchestration this node drives across its peers.
+        .route("/api/system/update", post(fleetupdate::api_update))
+        .route("/api/system/reboot", post(fleetupdate::api_reboot))
+        .route("/api/system/version", get(fleetupdate::api_version))
+        .route("/fleet/update-all", post(fleetupdate::update_all))
+        .route("/fleet/update-status", get(fleetupdate::update_status))
         // stations
         .route("/stations", get(stations::list_page).post(stations::create))
         .route("/stations/fragment", get(stations::fragment_route))
@@ -210,6 +220,9 @@ async fn main() {
         .route("/system/logs/download", get(pages::logs_download))
         .route("/system/password", post(auth::change_password))
         .route("/system/viewer", post(auth::set_viewer))
+        // Named admin/viewer accounts (additive to the two shared passwords above).
+        .route("/system/users", post(users::add_action))
+        .route("/system/users/remove", post(users::remove_action))
         .route("/system/audit/download", get(auth::audit_download))
         // notifications (ntfy-compatible webhook)
         .route("/system/notify", post(notify::save))

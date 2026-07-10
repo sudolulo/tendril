@@ -26,7 +26,10 @@ use serde::Deserialize;
 use crate::ui;
 
 const SESSION_TTL: Duration = Duration::from_secs(24 * 3600);
-static SESSIONS: LazyLock<Mutex<HashMap<String, (Instant, Role)>>> =
+/// One live session: (expiry, role, actor). The actor is what the audit log records —
+/// `"admin"`/`"viewer"` for the legacy shared passwords, the username for named-user sign-ins.
+type SessionRec = (Instant, Role, String);
+static SESSIONS: LazyLock<Mutex<HashMap<String, SessionRec>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A signed-in principal's access level. Admin can do everything; Viewer is read-only (mutating
@@ -38,10 +41,19 @@ pub enum Role {
 }
 
 impl Role {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Role::Admin => "admin",
             Role::Viewer => "viewer",
+        }
+    }
+
+    /// Parse a stored role string (the inverse of [`Role::as_str`]); anything unknown is `None`.
+    pub(crate) fn parse(s: &str) -> Option<Role> {
+        match s {
+            "admin" => Some(Role::Admin),
+            "viewer" => Some(Role::Viewer),
+            _ => None,
         }
     }
 }
@@ -83,13 +95,34 @@ pub fn mark_password_default() {
     );
 }
 
+/// Argon2-hash `pw` into a PHC string — the pure core shared by the file-based stores and the
+/// named-user store (`users.rs`).
+pub(crate) fn hash_str(pw: &str) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(pw.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Verify `pw` against an Argon2 PHC string (false on an empty/garbled hash) — pure counterpart of
+/// [`hash_str`], shared with the named-user store.
+pub(crate) fn verify_str(stored: &str, pw: &str) -> bool {
+    let stored = stored.trim();
+    if stored.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = PasswordHash::new(stored) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(pw.as_bytes(), &parsed)
+        .is_ok()
+}
+
 /// Argon2-hash `pw` and store it in `file`, 0600 from the first byte (creating the parent dir).
 fn store_hash(file: &str, pw: &str) -> std::io::Result<()> {
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(pw.as_bytes(), &salt)
-        .map_err(|e| std::io::Error::other(e.to_string()))?
-        .to_string();
+    let hash = hash_str(pw).map_err(std::io::Error::other)?;
     if let Some(dir) = std::path::Path::new(file).parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -101,16 +134,7 @@ fn verify_hash_file(file: &str, pw: &str) -> bool {
     let Ok(stored) = std::fs::read_to_string(file) else {
         return false;
     };
-    let stored = stored.trim();
-    if stored.is_empty() {
-        return false;
-    }
-    let Ok(parsed) = PasswordHash::new(stored) else {
-        return false;
-    };
-    Argon2::default()
-        .verify_password(pw.as_bytes(), &parsed)
-        .is_ok()
+    verify_str(&stored, pw)
 }
 
 /// Hash and store a new admin password (file mode 0600).
@@ -216,27 +240,34 @@ fn new_token() -> String {
     s
 }
 
-fn create_session(role: Role) -> String {
+fn create_session(role: Role, actor: &str) -> String {
     let token = new_token();
     let mut s = SESSIONS.lock().unwrap();
     // Sweep expired sessions so the map can't grow unbounded across many logins.
     let now = Instant::now();
-    s.retain(|_, (exp, _)| *exp > now);
-    s.insert(token.clone(), (now + SESSION_TTL, role));
+    s.retain(|_, (exp, _, _)| *exp > now);
+    s.insert(token.clone(), (now + SESSION_TTL, role, actor.to_string()));
     token
 }
 
-/// The role for a session token if it's valid + unexpired, else `None` (expired tokens are evicted).
-fn session_role(token: &str) -> Option<Role> {
+/// The `(role, actor)` for a session token if it's valid + unexpired, else `None` (expired tokens
+/// are evicted).
+fn session_info(token: &str) -> Option<(Role, String)> {
     let mut s = SESSIONS.lock().unwrap();
     match s.get(token) {
-        Some(&(exp, role)) if exp > Instant::now() => Some(role),
+        Some((exp, role, actor)) if *exp > Instant::now() => Some((*role, actor.clone())),
         Some(_) => {
             s.remove(token);
             None
         }
         None => None,
     }
+}
+
+/// Drop every live session belonging to `actor` — called when a named user is removed, so the
+/// removal takes effect immediately instead of at session expiry.
+pub(crate) fn revoke_sessions_for(actor: &str) {
+    SESSIONS.lock().unwrap().retain(|_, (_, _, a)| a != actor);
 }
 
 fn session_cookie(token: &str, max_age: i64) -> String {
@@ -275,7 +306,7 @@ pub fn role_from_headers(headers: &axum::http::HeaderMap) -> Option<Role> {
             }
         }
     }
-    session_role(&session_token(headers)?)
+    session_info(&session_token(headers)?).map(|(role, _)| role)
 }
 
 fn role_of(req: &Request) -> Option<Role> {
@@ -299,7 +330,8 @@ fn bearer_api_token(headers: &axum::http::HeaderMap) -> Option<String> {
     tok.starts_with("tnd_").then(|| tok.to_string())
 }
 
-/// The actor label for the audit log (proxy-set user if present, else the role name).
+/// The actor label for the audit log: the proxy-set user if present, else the session's stored
+/// actor ("admin"/"viewer" for the legacy logins, the username for named users).
 fn actor_of(req: &Request) -> String {
     if let Ok(name) = std::env::var("TENDRIL_TRUST_PROXY_HEADER") {
         if !name.is_empty() {
@@ -312,8 +344,9 @@ fn actor_of(req: &Request) -> String {
             }
         }
     }
-    role_of(req)
-        .map(|r| r.as_str().to_string())
+    session_token(req.headers())
+        .and_then(|t| session_info(&t))
+        .map(|(_, actor)| actor)
         .unwrap_or_else(|| "anon".to_string())
 }
 
@@ -416,6 +449,9 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
 
 #[derive(Deserialize)]
 pub struct LoginForm {
+    /// Optional named-user account; empty means the legacy admin/viewer password login.
+    #[serde(default)]
+    username: String,
     password: String,
 }
 
@@ -429,7 +465,9 @@ pub struct SetupForm {
 fn login_form() -> Markup {
     html! {
         form method="post" action="/login" {
-            div.field { label { "Admin password" } input type="password" name="password" autofocus required; }
+            div.field { label { "Username" } input type="text" name="username" autocomplete="username"
+                placeholder="leave empty for the main admin login"; }
+            div.field { label { "Password" } input type="password" name="password" autofocus required; }
             button.btn.primary type="submit" style="width:100%; margin-top:6px" { "Sign in" }
         }
     }
@@ -440,16 +478,23 @@ pub async fn login_page() -> Markup {
 }
 
 pub async fn login(Form(f): Form<LoginForm>) -> Response {
-    let role = if verify_password(&f.password) {
-        Some(Role::Admin)
-    } else if verify_viewer(&f.password) {
-        Some(Role::Viewer)
+    let username = f.username.trim();
+    // No username → exactly the legacy flow: admin password → Admin, viewer password → Viewer.
+    // A username → that named user's own hash and stored role (`users.json`).
+    let auth = if username.is_empty() {
+        if verify_password(&f.password) {
+            Some((Role::Admin, "admin".to_string()))
+        } else if verify_viewer(&f.password) {
+            Some((Role::Viewer, "viewer".to_string()))
+        } else {
+            None
+        }
     } else {
-        None
+        crate::users::verify(username, &f.password).map(|role| (role, username.to_string()))
     };
-    if let Some(role) = role {
-        let token = create_session(role);
-        audit(role.as_str(), "login", 200);
+    if let Some((role, actor)) = auth {
+        let token = create_session(role, &actor);
+        audit(&actor, "login", 200);
         (
             [(
                 SET_COOKIE,
@@ -463,7 +508,12 @@ pub async fn login(Form(f): Form<LoginForm>) -> Response {
         // second (Argon2's cost is the only other brake).
         audit("anon", "login-fail", 401);
         tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-        render("Sign in", Some("Incorrect password."), login_form()).into_response()
+        let msg = if username.is_empty() {
+            "Incorrect password."
+        } else {
+            "Incorrect username or password."
+        };
+        render("Sign in", Some(msg), login_form()).into_response()
     }
 }
 
@@ -498,7 +548,7 @@ pub async fn setup(Form(f): Form<SetupForm>) -> Response {
     }
     match set_password(&f.password) {
         Ok(()) => {
-            let token = create_session(Role::Admin);
+            let token = create_session(Role::Admin, "admin");
             (
                 [(
                     SET_COOKIE,
@@ -650,11 +700,12 @@ pub async fn audit_download() -> Response {
         .into_response()
 }
 
-/// The "Access & audit" panel for the System page: read-only viewer credential + a log of changes.
+/// The "Access & audit" panel for the System page: read-only viewer credential, named user
+/// accounts, and a log of changes.
 pub fn access_panel() -> Markup {
     crate::ui::panel(
         "Access & audit",
-        Some("read-only viewer login + a log of changes"),
+        Some("viewer login · named users · a log of changes"),
         access_body(None),
     )
 }
@@ -682,6 +733,7 @@ fn access_body(banner: Option<Markup>) -> Markup {
                     span.pill.running { span.led {} "on" }
                 }
             }
+            (crate::users::section())
             div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line)" {
                 div.sub style="font-weight:600; margin-bottom:6px" { "Audit log" }
                 @if lines.is_empty() {
@@ -730,5 +782,40 @@ fn render(title: &str, error: Option<&str>, body: Markup) -> Markup {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_verify_round_trip() {
+        let h = hash_str("hunter42").unwrap();
+        assert!(h.starts_with("$argon2"));
+        assert!(verify_str(&h, "hunter42"));
+        assert!(verify_str(&format!("  {h}\n"), "hunter42")); // stored hashes are trimmed
+        assert!(!verify_str(&h, "wrong"));
+        assert!(!verify_str("", "hunter42"));
+        assert!(!verify_str("not-a-phc-string", "hunter42"));
+    }
+
+    #[test]
+    fn sessions_carry_actor_and_sweep_on_user_removal() {
+        let alice = create_session(Role::Admin, "alice");
+        let viewer = create_session(Role::Viewer, "viewer");
+        assert_eq!(
+            session_info(&alice),
+            Some((Role::Admin, "alice".to_string()))
+        );
+        assert_eq!(
+            session_info(&viewer),
+            Some((Role::Viewer, "viewer".to_string()))
+        );
+        // Removing the named user kills their live sessions immediately — no one else's.
+        revoke_sessions_for("alice");
+        assert_eq!(session_info(&alice), None);
+        assert!(session_info(&viewer).is_some());
+        SESSIONS.lock().unwrap().remove(&viewer);
     }
 }

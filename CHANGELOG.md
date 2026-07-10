@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- The new day-2 features were built and then swept by three security-review rounds before landing:
+  settings-restore re-tightens every 0600 secret it can reach (incl. the TLS key, user hashes, and
+  `federation.conf`) and extracts through a randomized private staging dir that refuses pre-planted
+  symlinks; `federation.conf` (which can hold the fleet token) is now written 0600; named-user login
+  runs a decoy Argon2 hash on unknown usernames (no enumeration timing); the Notifications panel
+  hides the webhook URL + auth token from read-only viewers; and the new real-data GET endpoints are
+  demo-guarded like every other host-touching read.
+
 ### Added
 - **Edit a station after creation** — a Resources panel changes vCPUs/memory (refused on
   CPU-pinned stations rather than silently breaking the core map) and swaps or detaches the

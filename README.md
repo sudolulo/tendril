@@ -10,6 +10,11 @@ on-screen console; it handles IOMMU, VFIO, driver binding, and VM setup so you d
 
 ![The Tendril web control plane — every station across the fleet, grouped by node](docs/images/stations.png)
 
+<sub>Development happens on a self-hosted Gitea instance; **github.com/sudolulo/tendril** is the
+public mirror, and issues and discussion are welcome here. That's also why the `bootc` commands
+below pull from `git.onetick.ninja` — that's the project's container registry, and it is
+anonymously pullable, so the commands work as written with no account.</sub>
+
 ## What is it for?
 
 One powerful box with several GPUs → several independent gaming setups at once. Two people gaming on

@@ -218,7 +218,7 @@ fn vgpu_driver_panel() -> Markup {
                 }
                 p.sub style="margin-top:14px" {
                     "Supported cards and the full walkthrough: "
-                    a href="https://git.onetick.ninja/flan/tendril/src/branch/dev/docs/VGPU.md" { "docs/VGPU.md" }
+                    a href="https://github.com/sudolulo/tendril/blob/main/docs/VGPU.md" { "docs/VGPU.md" }
                     " · "
                     a href="https://git.onetick.ninja/flan/tendril/wiki/vGPU-Supported-GPUs" { "supported-GPU list" }
                     "."

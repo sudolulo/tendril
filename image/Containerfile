@@ -102,7 +102,7 @@ COPY image/console/tendril-firstboot.service /usr/lib/systemd/system/tendril-fir
 RUN chmod +x /usr/libexec/tendril/tendril-firstboot.sh \
     && systemctl enable tendril-firstboot.service
 
-LABEL org.opencontainers.image.source="https://git.onetick.ninja/flan/tendril"
+LABEL org.opencontainers.image.source="https://github.com/sudolulo/tendril"
 LABEL org.opencontainers.image.description="Tendril — Fedora bootc host for GPU-passthrough gaming VMs"
 
 # Sanity-check the bootc image at build time.

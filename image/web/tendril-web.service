@@ -1,6 +1,6 @@
 [Unit]
 Description=Tendril web control plane
-Documentation=https://git.onetick.ninja/flan/tendril
+Documentation=https://github.com/sudolulo/tendril
 After=network-online.target libvirtd.service
 Wants=network-online.target
 

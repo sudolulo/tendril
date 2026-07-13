@@ -362,7 +362,7 @@ pub async fn require_auth(req: Request, next: Next) -> Response {
         // A public demo is read-only: block every mutating POST, and also the VNC console socket —
         // it hands live keyboard/mouse control of a guest to anyone, which is not "read-only".
         if req.method() == axum::http::Method::POST || path.ends_with("/vnc") {
-            let banner = r#"<div class="banner warn" style="margin:0">🎭 This is a live demo — actions are disabled. <a href="https://git.onetick.ninja/flan/tendril">Run Tendril</a> to use it for real.</div>"#;
+            let banner = r#"<div class="banner warn" style="margin:0">🎭 This is a live demo — actions are disabled. <a href="https://github.com/sudolulo/tendril">Run Tendril</a> to use it for real.</div>"#;
             return (
                 [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
                 banner,

@@ -10,7 +10,7 @@ members = [
 [workspace.package]
 edition = "2021"
 version = "0.24.0"
-repository = "https://git.onetick.ninja/flan/tendril"
+repository = "https://github.com/sudolulo/tendril"
 authors = ["Tendril contributors"]
 license = "AGPL-3.0-only"
 
